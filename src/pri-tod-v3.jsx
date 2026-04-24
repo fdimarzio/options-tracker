@@ -852,7 +852,7 @@ export default function App() {
           console.warn("[etrade] option chains unavailable in sandbox:", chainErr.message);
         }
       }
-      evaluateAndNotify(freshChains, updatedContracts).catch(console.warn);
+
       const now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       setEtradeLastFetch(now);
       setEtradeStatus("ok");
@@ -878,39 +878,6 @@ export default function App() {
   const getLiveOption = useCallback((contract) => {
     return findOptionForContract(etradeChains, contract);
   }, [etradeChains]);
-
-  // Signal evaluation + Pushover notifications
-  const evaluateAndNotify = useCallback(async (freshChains, freshContracts) => {
-    const signals = [];
-    for (const c of freshContracts) {
-      if (c.status !== "Open" || !c.stock) continue;
-      const bd  = getContractBand(c);
-      if (!bd) continue;
-      const lo   = findOptionForContract(freshChains, c);
-      const last = lo?.last ?? lo?.bid ?? null;
-      if (last == null || !c.premium) continue;
-      const mv      = (c.qty||1) * last * 100;
-      const prem    = Math.abs(c.premium);
-      const gain    = c.optType==="BTO" ? mv - prem : prem - mv;
-      const gainPct = prem > 0 ? (gain/prem)*100 : 0;
-      const target  = bd.targetClose;
-      if (gain >= target) {
-        signals.push({ contract:`${c.stock} ${c.expires} $${c.strike} ${c.type}`, type:"TARGET_HIT", gainPct, gainDollar:gain, targetClose:target, mktValue:mv, qty:c.qty });
-      } else if (gainPct >= 90 && c.qty > 1) {
-        const perC = prem/(c.qty||1), gainPerU = gain/(c.qty||1);
-        const pq   = gainPerU > 0 ? Math.ceil(perC/gainPerU) : null;
-        if (pq && pq < c.qty) signals.push({ contract:`${c.stock} ${c.expires} $${c.strike} ${c.type}`, type:"PARTIAL_CLOSE", gainPct, gainDollar:gain, targetClose:target, mktValue:mv, qty:c.qty, partialQty:pq });
-      } else if (gain >= target * 0.75) {
-        signals.push({ contract:`${c.stock} ${c.expires} $${c.strike} ${c.type}`, type:"APPROACHING_TARGET", gainPct, gainDollar:gain, targetClose:target, mktValue:mv, qty:c.qty });
-      }
-    }
-    if (!signals.length) return;
-    try {
-      const res  = await fetch("/api/notify", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({signals}) });
-      const data = await res.json();
-      if (data.sent > 0) console.log("[notify] sent", data.sent, "signal(s):", data.contracts);
-    } catch (err) { console.warn("[notify] failed:", err.message); }
-  }, [getContractBand]);
 
 
   // Chart data builder

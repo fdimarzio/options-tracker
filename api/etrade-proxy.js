@@ -20,7 +20,6 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  // Extract path — everything else in query is a param to forward to E*TRADE
   const { path, ...queryParams } = req.query;
   if (!path) return res.status(400).json({ error: "Missing ?path= parameter" });
 
@@ -31,34 +30,11 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: "E*TRADE credentials not configured" });
 
     const { accessToken, accessTokenSecret } = await loadTokens();
-
-    // Build the target URL — path only, no /api/etrade-proxy prefix
     const targetUrl = `${ETRADE_BASE}${path}`;
-
-    // Sign with ONLY the E*TRADE query params (not the 'path' routing param)
-    const authHeader = buildOAuth1Header({
-      method: "GET",
-      url: targetUrl,
-      queryParams,   // these are the actual E*TRADE params e.g. symbol, expiryYear etc
-      consumerKey,
-      consumerSecret,
-      accessToken,
-      accessTokenSecret,
-    });
-
-    // Build final URL with query params
-    const qs      = Object.keys(queryParams).length ? "?" + new URLSearchParams(queryParams).toString() : "";
-    const fullUrl = `${targetUrl}${qs}`;
-
-    console.log("[etrade-proxy] ->", fullUrl);
-
-    const eRes = await fetch(fullUrl, {
-      headers: { Authorization: authHeader, Accept: "application/json" },
-    });
+    const authHeader = buildOAuth1Header({ method: "GET", url: targetUrl, queryParams, consumerKey, consumerSecret, accessToken, accessTokenSecret });
+    const qs = Object.keys(queryParams).length ? "?" + Object.entries(queryParams).map(([k,v]) => `${k}=${v}`).join("&") : "";
+    const eRes = await fetch(`${targetUrl}${qs}`, { headers: { Authorization: authHeader, Accept: "application/json" } });
     const body = await eRes.text();
-
-    console.log("[etrade-proxy] <-", eRes.status, eRes.statusText);
-
     res.status(eRes.status).setHeader("Content-Type", "application/json").end(body);
   } catch (err) {
     console.error("[etrade-proxy] error:", err.message);
@@ -71,29 +47,12 @@ function pct(str) {
 }
 
 function buildOAuth1Header({ method, url, queryParams = {}, consumerKey, consumerSecret, accessToken, accessTokenSecret }) {
-  const op = {
-    oauth_consumer_key:     consumerKey,
-    oauth_token:            accessToken,
-    oauth_signature_method: "HMAC-SHA1",
-    oauth_timestamp:        Math.floor(Date.now() / 1000).toString(),
-    oauth_nonce:            crypto.randomBytes(16).toString("hex"),
-    oauth_version:          "1.0",
-  };
-
-  // Signature base = sorted merge of OAuth params + request query params
-  const allParams = { ...queryParams, ...op };
-  const paramStr  = Object.entries(allParams)
-    .map(([k, v]) => [pct(k), pct(String(v))])
-    .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
-    .map(([k, v]) => `${k}=${v}`)
-    .join("&");
-
-  const signatureBase = [method.toUpperCase(), pct(url), pct(paramStr)].join("&");
+  const nonce     = crypto.randomBytes(16).toString("hex");
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const sigParams = { oauth_consumer_key:consumerKey, oauth_nonce:nonce, oauth_signature_method:"HMAC-SHA1", oauth_timestamp:timestamp, oauth_token:accessToken, oauth_version:"1.0", ...queryParams };
+  const paramString = Object.entries(sigParams).map(([k,v]) => [pct(k),pct(String(v))]).sort(([a],[b]) => a<b?-1:a>b?1:0).map(([k,v]) => `${k}=${v}`).join("&");
+  const signatureBase = [method.toUpperCase(), pct(url), pct(paramString)].join("&");
   const signingKey    = `${pct(consumerSecret)}&${pct(accessTokenSecret)}`;
-
-  op.oauth_signature = crypto.createHmac("sha1", signingKey).update(signatureBase).digest("base64");
-
-  return "OAuth " + Object.entries(op)
-    .map(([k, v]) => `${pct(k)}="${pct(String(v))}"`)
-    .join(", ");
+  const signature     = crypto.createHmac("sha1", signingKey).update(signatureBase).digest("base64");
+  return `OAuth realm="",oauth_consumer_key="${pct(consumerKey)}",oauth_nonce="${pct(nonce)}",oauth_signature="${pct(signature)}",oauth_signature_method="HMAC-SHA1",oauth_timestamp="${pct(timestamp)}",oauth_token="${pct(accessToken)}",oauth_version="1.0"`;
 }
