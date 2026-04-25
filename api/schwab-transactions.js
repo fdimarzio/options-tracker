@@ -57,45 +57,53 @@ async function schwabFetch(path, params = {}, token) {
 }
 
 // ── Parse a Schwab transaction into our contract shape ───────────────────────
+// Schwab structure: tx.transferItems[] — find the OPTION item among them
 function parseTransaction(tx) {
-  const item = tx.transactionItem;
-  const inst = item?.instrument;
+  // Find the option leg in transferItems (ignore CURRENCY fee items)
+  const items = tx.transferItems ?? [];
+  const optItem = items.find(i => i.instrument?.assetType === "OPTION");
+  if (!optItem) return null;
 
-  // Only process options
-  if (inst?.assetType !== "OPTION") return null;
+  const inst           = optItem.instrument;
+  const positionEffect = optItem.positionEffect?.toUpperCase(); // "OPENING" | "CLOSING"
 
-  // Derive opt_type from instruction + positionEffect
-  const instruction    = item.instruction?.toUpperCase();   // BUY | SELL
-  const positionEffect = item.positionEffect?.toUpperCase(); // OPENING | CLOSING
+  // amount on the option transferItem: negative = SELL, positive = BUY
+  // This is the most reliable signal — netAmount is unreliable on rolls/spreads
+  const itemAmount = optItem.amount ?? 0;
+  const isBuy      = itemAmount > 0;
+  const isSell     = itemAmount < 0;
+
   let optType = null;
-  if      (instruction === "BUY"  && positionEffect === "OPENING") optType = "BTO";
-  else if (instruction === "SELL" && positionEffect === "OPENING") optType = "STO";
-  else if (instruction === "BUY"  && positionEffect === "CLOSING") optType = "BTC";
-  else if (instruction === "SELL" && positionEffect === "CLOSING") optType = "STC";
-  if (!optType) return null; // skip assignments, expirations etc.
+  if      (isBuy  && positionEffect === "OPENING") optType = "BTO";
+  else if (isSell && positionEffect === "OPENING") optType = "STO";
+  else if (isBuy  && positionEffect === "CLOSING") optType = "BTC";
+  else if (isSell && positionEffect === "CLOSING") optType = "STC";
 
-  const isOpen   = optType === "BTO" || optType === "STO";
-  const callOrPut = inst.putCall; // "CALL" | "PUT"
+  if (!optType) return null; // skip assignments, expirations, etc.
 
-  // Premium: Schwab gives netAmount (negative = paid, positive = received)
-  // Normalize: STO/STC = positive (credit received), BTO/BTC = negative (debit paid)
-  const rawAmount = tx.netAmount ?? 0;
-  const qty       = Math.abs(item.amount ?? 1);
-  // Per-contract premium (netAmount already accounts for qty×100)
-  const premium   = rawAmount; // keep sign: positive=credit, negative=debit
+  const isOpen    = optType === "BTO" || optType === "STO";
+  const callOrPut = inst.putCall?.toUpperCase(); // "CALL" | "PUT"
+
+  // qty: absolute value of amount on the option item (number of contracts)
+  const qty = Math.abs(itemAmount);
+
+  // Premium: use netAmount (includes fees, matches what we actually paid/received)
+  // Keep sign: positive = credit received (STO/STC), negative = debit paid (BTO/BTC)
+  const netAmount = tx.netAmount ?? 0;
+  const premium   = netAmount;
 
   // Trade date
   const tradeDate = tx.tradeDate
     ? tx.tradeDate.slice(0, 10)
-    : tx.transactionDate?.slice(0, 10);
+    : tx.time?.slice(0, 10);
 
-  // Expiration: Schwab returns expirationDate as "YYYY-MM-DDTHH:mm:ssZ" or "YYYY-MM-DD"
+  // Expiration
   const expires = inst.expirationDate
     ? inst.expirationDate.slice(0, 10)
     : null;
 
   return {
-    schwabTransactionId: tx.transactionId ?? tx.activityId ?? null,
+    schwabTransactionId: tx.activityId ?? tx.transactionId ?? null,
     stock:               inst.underlyingSymbol?.toUpperCase() ?? null,
     type:                callOrPut === "PUT" ? "Put" : "Call",
     optType,
@@ -110,7 +118,6 @@ function parseTransaction(tx) {
     strategy:            null, // user fills in
     notes:               null, // user fills in
     createdVia:          "Schwab Import",
-    // raw for debugging
     _raw:                tx,
   };
 }
@@ -242,6 +249,30 @@ export default async function handler(req, res) {
       }, token);
       const txList = Array.isArray(txData) ? txData : (txData?.transactions ?? []);
       allRaw.push(...txList);
+    }
+
+    // Debug mode: return raw first 3 transactions + parse attempt details
+    if (req.query.debug === "1") {
+      const debugInfo = allRaw.slice(0, 3).map(tx => {
+        const items    = tx.transferItems ?? [];
+        const optItem  = items.find(i => i.instrument?.assetType === "OPTION");
+        const parsed   = parseTransaction(tx);
+        return {
+          activityId:      tx.activityId,
+          netAmount:       tx.netAmount,
+          transferItemCount: items.length,
+          assetTypes:      items.map(i => i.instrument?.assetType),
+          optItemFound:    !!optItem,
+          optItemEffect:   optItem?.positionEffect,
+          optItemAmount:   optItem?.amount,
+          optItemCost:     optItem?.cost,
+          parsedResult:    parsed ? { optType: parsed.optType, stock: parsed.stock, strike: parsed.strike } : null,
+          parseFailReason: !optItem ? "no OPTION in transferItems"
+                         : !parsed  ? "optType could not be determined"
+                         : "ok",
+        };
+      });
+      return res.status(200).json({ debug: debugInfo, rawTotal: allRaw.length });
     }
 
     // Step 3: Parse — options only
