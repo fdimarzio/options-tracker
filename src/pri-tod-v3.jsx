@@ -329,7 +329,7 @@ function CelebrationOverlay({profit, onDone}) {
 
 // ── Main App ──────────────────────────────────────────────────────────────────
 // ── Balance History Component ─────────────────────────────────────────────────
-function BalanceHistory({ supabase, cashData }) {
+function BalanceHistory({ supabase, cashData, onSave }) {
   const [balHistory, setBalHistory] = useState(null);
   const [balEditMode, setBalEditMode] = useState(false);
   const [balEdits, setBalEdits] = useState({});
@@ -342,6 +342,7 @@ function BalanceHistory({ supabase, cashData }) {
   const saveBalHistory = async (updated) => {
     await supabase.from("col_prefs").upsert({id:"balance_history",cols:updated,updated_at:new Date().toISOString()},{onConflict:"id"});
     setBalHistory(updated);
+    if(onSave) onSave(updated);
   };
 
   const monthKeys = [];
@@ -892,6 +893,15 @@ export default function App() {
     if (stocksSortKey===key) setStocksSortDir(d=>d==="asc"?"desc":"asc");
     else { setStocksSortKey(key); setStocksSortDir("asc"); }
   };
+  // Balance history inline state for analytics table columns
+  const [balHistoryInline, setBalHistoryInline] = useState({});
+  const nowMonthKey = new Date().toISOString().slice(0,7);
+  const liveSchwabInline = cashData?.schwab ? +cashData.schwab : null;
+  useEffect(()=>{
+    supabase.from("col_prefs").select("cols").eq("id","balance_history").single()
+      .then(({data})=>{ if(data?.cols) setBalHistoryInline(data.cols); });
+  },[]);
+
   // Cash balances stored in stocksData under special key "__cash__"
   const cashData = stocksData["__cash__"] || {};
   const updateCash = async (field, value) => {
@@ -2776,6 +2786,10 @@ ${JSON.stringify(summary, null, 1)}`;
                   <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Profit</th>
                   <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Margin</th>
                   <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Contracts</th>
+                  {analyticsView==="monthly" && <th style={{padding:"5px 8px",textAlign:"right",color:"#58a6ff",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Schwab $</th>}
+                  {analyticsView==="monthly" && <th style={{padding:"5px 8px",textAlign:"right",color:"#ffd166",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>ETrade $</th>}
+                  {analyticsView==="monthly" && <th style={{padding:"5px 8px",textAlign:"right",color:"#00ff88",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Total $</th>}
+                  {analyticsView==="monthly" && <th style={{padding:"5px 8px",textAlign:"right",color:"#c084fc",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>MoM%</th>}
                   {analyticsView!=="daily" && <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Notes</th>}
                 </tr></thead>
                 <tbody>
@@ -2789,6 +2803,24 @@ ${JSON.stringify(summary, null, 1)}`;
                         <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:m.profit>=0?"#00ff88":"#ff4560"}}>{fSign(m.profit)}</td>
                         <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:pp<0?"#ff4560":pp>=0.6?"#00ff88":pp>=0.3?"#ffd166":"#58a6ff"}}>{(pp*100).toFixed(1)}%</td>
                         <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#2a3040"}}>{m.contracts}</td>
+                        {analyticsView==="monthly" && (() => {
+                          const b = balHistoryInline?.[m.key] || {};
+                          const schwab = b.schwab ?? (m.key===nowMonthKey&&liveSchwabInline ? liveSchwabInline : null);
+                          const etrade = b.etrade ?? null;
+                          const total  = schwab||etrade ? (schwab||0)+(etrade||0) : null;
+                          const allKeys = [...periodData].reverse().map(x=>x.key);
+                          const prevKey = allKeys[allKeys.indexOf(m.key)-1];
+                          const prevB = prevKey ? (balHistoryInline?.[prevKey]||{}) : {};
+                          const prevTotal = prevB.schwab||prevB.etrade ? (+prevB.schwab||0)+(+prevB.etrade||0) : null;
+                          const mom = total&&prevTotal ? ((total-prevTotal)/prevTotal*100) : null;
+                          const fBal = v => v!=null ? "$"+(+v).toLocaleString("en-US",{maximumFractionDigits:0}) : "—";
+                          return (<>
+                            <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:"#58a6ff"}}>{fBal(schwab)}</td>
+                            <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:"#ffd166"}}>{fBal(etrade)}</td>
+                            <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:"#00ff88",fontWeight:700}}>{fBal(total)}</td>
+                            <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:mom>0?"#00ff88":mom<0?"#ff4560":"#3a4050"}}>{mom!=null?(mom>0?"+":"")+mom.toFixed(1)+"%":"—"}</td>
+                          </>);
+                        })()}
                         {analyticsView!=="daily" && (
                           <td style={{padding:"5px 8px",minWidth:180}} onClick={e=>e.stopPropagation()}>
                             {editingNote===m.key ? (
@@ -2930,7 +2962,7 @@ ${JSON.stringify(summary, null, 1)}`;
         )}
 
         {/* ══ STRATEGIES ══ */}
-        {tab==="analytics" && <BalanceHistory supabase={supabase} cashData={cashData} />}
+        {tab==="analytics" && <BalanceHistory supabase={supabase} cashData={cashData} onSave={updated=>setBalHistoryInline(updated)} />}
 
         {tab==="strategies" && (
           <div style={{display:"flex",flexDirection:"column",gap:9}}>
