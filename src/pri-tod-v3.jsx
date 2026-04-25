@@ -2325,7 +2325,7 @@ ${JSON.stringify(summary, null, 1)}`;
                 try {
                   const end = Date.now();
                   const start = end - 365*2*24*60*60*1000; // 2 years
-                  const res = await fetch(\`/api/schwab-proxy?path=/marketdata/v1/pricehistory&symbol=%24SPX&periodType=month&frequencyType=monthly&frequency=1&startDate=\${start}&endDate=\${end}&needExtendedHoursData=false\`);
+                  const res = await fetch(`/api/schwab-proxy?path=/marketdata/v1/pricehistory&symbol=%24SPX&periodType=month&frequencyType=monthly&frequency=1&startDate=${start}&endDate=${end}&needExtendedHoursData=false`);
                   const d = await res.json();
                   if(d?.candles?.length) {
                     const spx = d.candles.map((c,i,arr) => {
