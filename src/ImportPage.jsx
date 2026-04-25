@@ -53,7 +53,7 @@ const pill = (label, color) => ({
 });
 
 const OPT_COLORS = { BTO: C.blue, STO: C.green, BTC: C.orange, STC: C.yellow };
-const MATCH_COLORS = { exact: C.green, partial: C.yellow, unmatched: C.red, manual: C.blue };
+const MATCH_COLORS = { exact: C.green, partial: C.yellow, split: C.blue, unmatched: C.red, manual: C.blue };
 
 // ── toDB mapper (mirrors main app) ───────────────────────────────────────────
 function contractToDB(c) {
@@ -259,6 +259,76 @@ function MatchModal({ closer, openContracts, onSelect, onClose }) {
   );
 }
 
+
+// ── Edit Opener Modal ─────────────────────────────────────────────────────────
+// Allows correcting qty (and other fields) on a mismatched DB opener record
+function EditOpenerModal({ contract, closer, onSave, onClose }) {
+  const [qty,     setQty]     = useState(String(contract?.qty ?? ""));
+  const [saving,  setSaving]  = useState(false);
+  const [err,     setErr]     = useState(null);
+
+  if (!contract) return null;
+
+  const handleSave = async () => {
+    setSaving(true);
+    setErr(null);
+    try {
+      const supabase = createClient(
+        import.meta.env.VITE_SUPABASE_URL,
+        import.meta.env.VITE_SUPABASE_ANON_KEY
+      );
+      const { error } = await supabase
+        .from("contracts")
+        .update({ qty: +qty })
+        .eq("id", contract.id);
+      if (error) throw new Error(error.message);
+      onSave({ ...contract, qty: +qty });
+      onClose();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const overlay = { position:"fixed", inset:0, background:"rgba(0,0,0,0.75)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:1001 };
+  const modal   = { background:"#0d1117", border:"1px solid #2a3040", borderRadius:10, width:"min(480px,95vw)", fontFamily:"monospace", padding:"24px", boxShadow:"0 24px 80px rgba(0,0,0,0.6)" };
+  const inp     = { width:"100%", background:"#0a1018", border:"1px solid #2a3040", borderRadius:4, color:"#e6edf3", fontFamily:"monospace", fontSize:13, padding:"7px 10px", outline:"none", boxSizing:"border-box" };
+
+  return (
+    <div style={overlay} onClick={onClose}>
+      <div style={modal} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize:14, fontWeight:700, color:"#ffd166", marginBottom:4 }}>✎ Edit Opener Record</div>
+        <div style={{ fontSize:11, color:"#6e7681", marginBottom:16 }}>
+          Fixing DB record #{contract.id} · {contract.stock} {contract.opt_type} {contract.strike} {contract.expires}
+        </div>
+        <div style={{ display:"flex", gap:16, marginBottom:12, fontSize:12 }}>
+          <div>
+            <div style={{ color:"#6e7681", marginBottom:4 }}>Closer qty (from Schwab)</div>
+            <div style={{ color:"#e6edf3", fontWeight:700 }}>{closer?.qty}</div>
+          </div>
+          <div>
+            <div style={{ color:"#6e7681", marginBottom:4 }}>DB qty (to fix)</div>
+            <div style={{ color:"#ffd166", fontWeight:700 }}>{contract.qty}</div>
+          </div>
+        </div>
+        <div style={{ marginBottom:16 }}>
+          <label style={{ fontSize:11, color:"#6e7681", display:"block", marginBottom:6 }}>New Qty</label>
+          <input type="number" value={qty} min={1} onChange={e => setQty(e.target.value)} style={inp} />
+        </div>
+        {err && <div style={{ color:"#ff6b6b", fontSize:12, marginBottom:12 }}>⚠ {err}</div>}
+        <div style={{ display:"flex", gap:8, justifyContent:"flex-end" }}>
+          <button onClick={onClose} style={{ background:"transparent", border:"1px solid #2a3040", borderRadius:4, color:"#6e7681", fontFamily:"monospace", fontSize:12, padding:"6px 14px", cursor:"pointer" }}>Cancel</button>
+          <button onClick={handleSave} disabled={saving || !qty}
+            style={{ background:"#ffd16622", border:"1px solid #ffd16688", borderRadius:4, color:"#ffd166", fontFamily:"monospace", fontSize:12, fontWeight:700, padding:"6px 16px", cursor:saving?"not-allowed":"pointer", opacity:saving?0.6:1 }}>
+            {saving ? "Saving…" : "Save to DB"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 export default function ImportPage() {
   const [mode,         setMode]         = useState("config");   // config | loading | review | done
@@ -275,10 +345,13 @@ export default function ImportPage() {
   const [committing,   setCommitting]   = useState(false);
   const [committed,    setCommitted]    = useState([]);
   const [filterOptType,    setFilterOptType]    = useState("ALL");
-  const [showUnmatchedOnly, setShowUnmatchedOnly] = useState(false);
+  const [matchFilter,      setMatchFilter]      = useState("ALL"); // ALL|exact|partial|split|unmatched
   const [sortCol,          setSortCol]          = useState("dateExec");
   const [sortDir,          setSortDir]          = useState("desc");
+  const [dismissed,        setDismissed]        = useState(new Set()); // _idx values
+  const [showDismissed,    setShowDismissed]    = useState(false);
   const [matchModal,       setMatchModal]       = useState(null);
+  const [editOpenerModal,  setEditOpenerModal]  = useState(null); // { txIdx, contract }
 
   // ── Fetch transactions ──────────────────────────────────────────────────────
   const fetchTransactions = useCallback(async () => {
@@ -315,6 +388,18 @@ export default function ImportPage() {
                 : t
     ));
   }, []);
+
+  // ── Dismiss helpers ─────────────────────────────────────────────────────────
+  const dismiss = (idx) => {
+    setDismissed(prev => new Set([...prev, idx]));
+    setChecked(prev => { const n = new Set(prev); n.delete(idx); return n; });
+  };
+  const dismissGroup = (splitGroup) => {
+    const idxs = transactions.filter(t => t.splitGroup === splitGroup).map(t => t._idx);
+    setDismissed(prev => new Set([...prev, ...idxs]));
+    setChecked(prev => { const n = new Set(prev); idxs.forEach(i => n.delete(i)); return n; });
+  };
+  const undismiss = (idx) => setDismissed(prev => { const n = new Set(prev); n.delete(idx); return n; });
 
   // ── Toggle check ────────────────────────────────────────────────────────────
   const toggleCheck = (idx) => {
@@ -401,7 +486,8 @@ export default function ImportPage() {
 
   const filtered = transactions
     .filter(t => filterOptType === "ALL" ? true : t.optType === filterOptType)
-    .filter(t => showUnmatchedOnly ? t.matchConfidence === "unmatched" : true)
+    .filter(t => matchFilter === "ALL" ? true : t.matchConfidence === matchFilter)
+    .filter(t => showDismissed ? dismissed.has(t._idx) : !dismissed.has(t._idx))
     .sort((a, b) => {
       const fn = SORT_KEYS[sortCol] ?? (t => "");
       const av = fn(a), bv = fn(b);
@@ -629,8 +715,13 @@ export default function ImportPage() {
   }
 
   // ── Review screen ──────────────────────────────────────────────────────────
-  const checkedCount   = checked.size;
-  const unmatchedCount = filtered.filter(t => t.matchConfidence === "unmatched").length;
+  const checkedCount    = checked.size;
+  const allActive       = transactions.filter(t => !dismissed.has(t._idx));
+  const unmatchedCount  = allActive.filter(t => t.matchConfidence === "unmatched").length;
+  const exactCount      = allActive.filter(t => t.matchConfidence === "exact").length;
+  const partialCount    = allActive.filter(t => t.matchConfidence === "partial").length;
+  const splitCount      = allActive.filter(t => t.matchConfidence === "split").length;
+  const dismissedCount  = dismissed.size;
 
   return (
     <div style={{ ...page, padding: "16px 20px" }}>
@@ -657,12 +748,27 @@ export default function ImportPage() {
               {f}
             </button>
           ))}
-          <button
-            onClick={() => setShowUnmatchedOnly(v => !v)}
-            style={{ ...btn(C.red), background: showUnmatchedOnly ? C.red + "33" : "transparent", fontSize: 11, padding: "4px 10px" }}>
-            {showUnmatchedOnly ? "⚠ Unmatched Only" : "⚠ Unmatched"}
-            {unmatchedCount > 0 && <span style={{ marginLeft: 5, background: C.red + "44", borderRadius: 8, padding: "1px 5px" }}>{unmatchedCount}</span>}
-          </button>
+          <div style={{ width: 1, height: 20, background: C.border }} />
+          {/* Match confidence filters */}
+          {[
+            { key: "ALL",       label: "All",       color: C.muted,   count: null },
+            { key: "exact",     label: "Exact",     color: C.green,   count: exactCount },
+            { key: "partial",   label: "Partial",   color: C.yellow,  count: partialCount },
+            { key: "split",     label: "Split",     color: C.blue,    count: splitCount },
+            { key: "unmatched", label: "Unmatched", color: C.red,     count: unmatchedCount },
+          ].map(({ key, label, color, count }) => (
+            <button key={key} onClick={() => setMatchFilter(key)}
+              style={{ ...btn(color), background: matchFilter === key ? color + "33" : "transparent", fontSize: 11, padding: "4px 10px" }}>
+              {label}
+              {count > 0 && <span style={{ marginLeft: 4, background: color + "33", borderRadius: 8, padding: "1px 5px" }}>{count}</span>}
+            </button>
+          ))}
+          {dismissedCount > 0 && (
+            <button onClick={() => setShowDismissed(v => !v)}
+              style={{ ...btn(C.dimText), background: showDismissed ? C.dimText + "22" : "transparent", fontSize: 11, padding: "4px 10px" }}>
+              {showDismissed ? "← Active" : `Dismissed (${dismissedCount})`}
+            </button>
+          )}
           <div style={{ width: 1, height: 20, background: C.border }} />
           <button onClick={checkAll}  style={btn(C.blue, false)}>Check All</button>
           <button onClick={uncheckAll} style={btn(C.muted)}>Uncheck All</button>
@@ -721,12 +827,24 @@ export default function ImportPage() {
             </thead>
             <tbody>
               {filtered.map((t) => {
-                const isChecked = checked.has(t._idx);
-                const rowBg = isChecked ? C.green + "08" : "transparent";
+                const isChecked  = checked.has(t._idx);
+                const isDismissed = dismissed.has(t._idx);
+                const isSplit    = !!t.splitGroup;
+                const splitColor = C.blue + "22";
+                const rowBg = isDismissed ? "#ffffff05"
+                            : isChecked   ? C.green + "08"
+                            : isSplit     ? splitColor
+                            : "transparent";
                 return (
                   <tr key={t._idx}
-                    style={{ background: rowBg, borderBottom: `1px solid ${C.border}`, transition: "background 0.15s" }}
-                    onClick={() => toggleCheck(t._idx)}>
+                    style={{
+                      background: rowBg,
+                      borderBottom: `1px solid ${C.border}`,
+                      borderLeft: isSplit ? `3px solid ${C.blue}66` : "3px solid transparent",
+                      opacity: isDismissed ? 0.4 : 1,
+                      transition: "background 0.15s",
+                    }}
+                    onClick={() => !isDismissed && toggleCheck(t._idx)}>
 
                     {/* Checkbox */}
                     <td style={{ padding: "8px 10px", textAlign: "center" }} onClick={e => e.stopPropagation()}>
@@ -801,20 +919,17 @@ export default function ImportPage() {
                       />
                     </td>
 
-                    {/* Match status — button opens modal for BTC/STC */}
-                    <td style={{ padding: "6px 10px", minWidth: 150 }} onClick={e => e.stopPropagation()}>
+                    {/* Match cell — actions depend on confidence */}
+                    <td style={{ padding: "6px 10px", minWidth: 180 }} onClick={e => e.stopPropagation()}>
                       {(t.optType === "BTC" || t.optType === "STC") ? (
                         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                          {/* Status pill */}
-                          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                          {/* Confidence pill + parent id */}
+                          <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
                             <span style={pill(t.matchConfidence, MATCH_COLORS[t.matchConfidence] || C.muted)}>
                               {t.matchConfidence}
+                              {t.splitGroup && ` ${t.splitIndex}/${t.splitCount}`}
                             </span>
-                            {t.parentId && (
-                              <span style={{ fontSize: 10, color: C.dimText }}>
-                                #{t.parentId}
-                              </span>
-                            )}
+                            {t.parentId && <span style={{ fontSize: 10, color: C.dimText }}>#{t.parentId}</span>}
                           </div>
                           {/* Matched contract summary */}
                           {t.matchedContract && (
@@ -822,36 +937,72 @@ export default function ImportPage() {
                               {t.matchedContract.stock} {t.matchedContract.strike} {t.matchedContract.expires?.slice(5)} ×{t.matchedContract.qty}
                             </div>
                           )}
-                          {/* Link / Change + Copy Debug buttons */}
-                          <div style={{ display: "flex", gap: 4 }}>
-                            <button
-                              onClick={e => { e.stopPropagation(); setMatchModal({ txIdx: t._idx }); }}
-                              style={{ fontSize: 10, background: "transparent", border: `1px solid ${C.border2}`, borderRadius: 3, color: C.muted, fontFamily: "monospace", padding: "2px 7px", cursor: "pointer" }}>
-                              {t.matchConfidence === "unmatched" ? "🔗 Link" : "✎ Change"}
-                            </button>
-                            <button
-                              onClick={e => {
+                          {/* Action buttons per confidence */}
+                          {!dismissed.has(t._idx) && (
+                            <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
+                              {/* Exact: dismiss or import anyway */}
+                              {t.matchConfidence === "exact" && (<>
+                                <button onClick={e => { e.stopPropagation(); dismiss(t._idx); }}
+                                  style={{ fontSize: 10, background: C.green+"11", border:`1px solid ${C.green}44`, borderRadius:3, color:C.green, fontFamily:"monospace", padding:"2px 7px", cursor:"pointer" }}>
+                                  ✓ Dismiss
+                                </button>
+                                <button onClick={e => { e.stopPropagation(); setMatchModal({ txIdx: t._idx }); }}
+                                  style={{ fontSize: 10, background:"transparent", border:`1px solid ${C.border2}`, borderRadius:3, color:C.dimText, fontFamily:"monospace", padding:"2px 7px", cursor:"pointer" }}>
+                                  ✎ Change
+                                </button>
+                              </>)}
+                              {/* Partial: edit opener, link, or dismiss */}
+                              {t.matchConfidence === "partial" && (<>
+                                <button onClick={e => { e.stopPropagation(); setEditOpenerModal({ txIdx: t._idx, contract: t.matchedContract }); }}
+                                  style={{ fontSize: 10, background: C.yellow+"11", border:`1px solid ${C.yellow}44`, borderRadius:3, color:C.yellow, fontFamily:"monospace", padding:"2px 7px", cursor:"pointer" }}>
+                                  ✎ Edit Opener
+                                </button>
+                                <button onClick={e => { e.stopPropagation(); setMatchModal({ txIdx: t._idx }); }}
+                                  style={{ fontSize: 10, background:"transparent", border:`1px solid ${C.border2}`, borderRadius:3, color:C.muted, fontFamily:"monospace", padding:"2px 7px", cursor:"pointer" }}>
+                                  🔗 Link
+                                </button>
+                                <button onClick={e => { e.stopPropagation(); dismiss(t._idx); }}
+                                  style={{ fontSize: 10, background:"transparent", border:`1px solid ${C.border2}`, borderRadius:3, color:C.dimText, fontFamily:"monospace", padding:"2px 7px", cursor:"pointer" }}>
+                                  ✕
+                                </button>
+                              </>)}
+                              {/* Split: dismiss whole group or change */}
+                              {t.matchConfidence === "split" && (<>
+                                <button onClick={e => { e.stopPropagation(); dismissGroup(t.splitGroup); }}
+                                  style={{ fontSize: 10, background: C.blue+"11", border:`1px solid ${C.blue}44`, borderRadius:3, color:C.blue, fontFamily:"monospace", padding:"2px 7px", cursor:"pointer" }}>
+                                  ✓ Dismiss All
+                                </button>
+                                <button onClick={e => { e.stopPropagation(); setMatchModal({ txIdx: t._idx }); }}
+                                  style={{ fontSize: 10, background:"transparent", border:`1px solid ${C.border2}`, borderRadius:3, color:C.dimText, fontFamily:"monospace", padding:"2px 7px", cursor:"pointer" }}>
+                                  ✎ Change
+                                </button>
+                              </>)}
+                              {/* Unmatched: link, dismiss, or import as orphan */}
+                              {t.matchConfidence === "unmatched" && (<>
+                                <button onClick={e => { e.stopPropagation(); setMatchModal({ txIdx: t._idx }); }}
+                                  style={{ fontSize: 10, background: C.red+"11", border:`1px solid ${C.red}44`, borderRadius:3, color:C.red, fontFamily:"monospace", padding:"2px 7px", cursor:"pointer" }}>
+                                  🔗 Link
+                                </button>
+                                <button onClick={e => { e.stopPropagation(); dismiss(t._idx); }}
+                                  style={{ fontSize: 10, background:"transparent", border:`1px solid ${C.border2}`, borderRadius:3, color:C.dimText, fontFamily:"monospace", padding:"2px 7px", cursor:"pointer" }}>
+                                  ✕ Dismiss
+                                </button>
+                              </>)}
+                              {/* Debug always available */}
+                              <button onClick={e => {
                                 e.stopPropagation();
-                                const debug = {
-                                  parsed: {
-                                    schwabTransactionId: t.schwabTransactionId,
-                                    stock: t.stock, type: t.type, optType: t.optType,
-                                    strike: t.strike, qty: t.qty, expires: t.expires,
-                                    premium: t.premium, dateExec: t.dateExec,
-                                    matchConfidence: t.matchConfidence, parentId: t.parentId,
-                                  },
-                                  raw: t._raw,
-                                };
-                                navigator.clipboard.writeText(JSON.stringify(debug, null, 2))
-                                  .then(() => {
-                                    e.target.textContent = "✓ copied";
-                                    setTimeout(() => { e.target.textContent = "⎘ debug"; }, 1500);
-                                  });
-                              }}
-                              style={{ fontSize: 10, background: "transparent", border: `1px solid ${C.border2}`, borderRadius: 3, color: C.dimText, fontFamily: "monospace", padding: "2px 7px", cursor: "pointer" }}>
-                              ⎘ debug
+                                navigator.clipboard.writeText(JSON.stringify({ parsed: { schwabTransactionId:t.schwabTransactionId, stock:t.stock, optType:t.optType, strike:t.strike, qty:t.qty, expires:t.expires, premium:t.premium, dateExec:t.dateExec, matchConfidence:t.matchConfidence, parentId:t.parentId, splitGroup:t.splitGroup }, raw:t._raw }, null, 2))
+                                  .then(() => { e.target.textContent="✓"; setTimeout(()=>{e.target.textContent="⎘";},1500); });
+                              }} style={{ fontSize:10, background:"transparent", border:`1px solid ${C.border2}`, borderRadius:3, color:C.dimText, fontFamily:"monospace", padding:"2px 6px", cursor:"pointer" }}>⎘</button>
+                            </div>
+                          )}
+                          {/* Undismiss if dismissed */}
+                          {dismissed.has(t._idx) && (
+                            <button onClick={e => { e.stopPropagation(); undismiss(t._idx); }}
+                              style={{ fontSize:10, background:"transparent", border:`1px solid ${C.border2}`, borderRadius:3, color:C.dimText, fontFamily:"monospace", padding:"2px 7px", cursor:"pointer" }}>
+                              ↺ Restore
                             </button>
-                          </div>
+                          )}
                         </div>
                       ) : (
                         <span style={{ color: C.dimText, fontSize: 11 }}>—</span>
@@ -864,6 +1015,23 @@ export default function ImportPage() {
           </table>
         </div>
       )}
+
+      {/* Edit Opener Modal */}
+      {editOpenerModal && (() => {
+        const tx = transactions.find(t => t._idx === editOpenerModal.txIdx);
+        return (
+          <EditOpenerModal
+            contract={editOpenerModal.contract}
+            closer={tx}
+            onSave={updated => {
+              // Update the matchedContract in the transaction so display reflects the fix
+              updateTx(editOpenerModal.txIdx, "matchedContract", updated);
+              updateTx(editOpenerModal.txIdx, "matchConfidence", "exact");
+            }}
+            onClose={() => setEditOpenerModal(null)}
+          />
+        );
+      })()}
 
       {/* Match Modal */}
       {matchModal && (() => {

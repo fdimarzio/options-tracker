@@ -325,7 +325,30 @@ export default async function handler(req, res) {
       c.priceAtExecutionType  = c.dateExec === todayStr ? "live" : "closing";
     }
 
-    // Step 5: Auto-link closers to openers
+    // Step 5: Detect split fills — same orderId + same stock/strike/expiry/effect
+    // Schwab splits multi-lot fills into separate activity records
+    const orderGroups = {};
+    for (const c of parsed) {
+      const orderId = c._raw?.orderId;
+      if (!orderId) continue;
+      const key = `${orderId}|${c.stock}|${c.strike}|${c.expires}|${c.optType}`;
+      if (!orderGroups[key]) orderGroups[key] = [];
+      orderGroups[key].push(c);
+    }
+    // Tag split groups
+    for (const group of Object.values(orderGroups)) {
+      if (group.length < 2) continue;
+      const orderId   = group[0]._raw?.orderId;
+      const splitTotal = group.reduce((s, c) => s + Number(c.qty), 0);
+      for (let i = 0; i < group.length; i++) {
+        group[i].splitGroup = String(orderId);
+        group[i].splitIndex = i + 1;
+        group[i].splitCount = group.length;
+        group[i].splitTotal = splitTotal;
+      }
+    }
+
+    // Step 6: Auto-link closers to openers
     const existingOpens = await loadExistingOpens();
 
     // Assign temp batch indices to openers within this batch
@@ -335,10 +358,15 @@ export default async function handler(req, res) {
 
     for (const c of parsed) {
       if (c.optType === "BTC" || c.optType === "STC") {
-        const match = autoMatch(c, existingOpens, batchOpeners);
+        // For split fills, match using the combined splitTotal qty
+        const qtyForMatch = c.splitTotal ?? c.qty;
+        const match = autoMatch({ ...c, qty: qtyForMatch }, existingOpens, batchOpeners);
         c.parentId         = match?.parentId ?? null;
-        c.matchedContract  = match?.matchedContract ?? null; // for display in review UI
-        c.matchConfidence  = match?.confidence ?? "unmatched";
+        c.matchedContract  = match?.matchedContract ?? null;
+        // Upgrade confidence to "split" if it was exact/partial due to split fill
+        c.matchConfidence  = c.splitGroup && match?.confidence !== "unmatched"
+          ? "split"
+          : (match?.confidence ?? "unmatched");
       } else {
         c.parentId        = null;
         c.matchedContract = null;
@@ -346,13 +374,9 @@ export default async function handler(req, res) {
       }
     }
 
-    // Also send the full list of open DB contracts to the UI
-    // so the manual-match dropdown can be populated
-    const allOpenContracts = existingOpens;
-
     res.status(200).json({
       transactions: parsed,
-      openContracts: allOpenContracts,
+      openContracts: existingOpens,
       meta: { startDate, endDate, total: parsed.length, rawTotal: allRaw.length },
     });
   } catch (err) {
