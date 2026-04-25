@@ -2858,34 +2858,34 @@ ${JSON.stringify(summary, null, 1)}`;
                             <td style={{padding:"4px 6px",textAlign:"right"}} onClick={e=>e.stopPropagation()}>
                               {b.schwabAuto
                                 ? <span style={{fontFamily:"monospace",fontSize:11,color:"#58a6ff"}}>{fBal(schwab)}<span style={{fontSize:7,color:"#00ff8860",marginLeft:3}}>●</span></span>
-                                : <input type="number" defaultValue={schwab||""} placeholder="—"
-                                    onBlur={e=>{
+                                : <input type="number" value={schwab??""} placeholder="—"
+                                    onChange={e=>{
                                       const val = e.target.value ? +e.target.value : null;
                                       const updated = {...balHistoryInline,[m.key]:{...(balHistoryInline[m.key]||{}),schwab:val}};
                                       setBalHistoryInline(updated);
-                                      supabase.from("col_prefs").upsert({id:"balance_history",cols:updated,updated_at:new Date().toISOString()},{onConflict:"id"});
+                                      supabase.from("col_prefs").upsert({id:"balance_history",cols:updated,updated_at:new Date().toISOString()},{onConflict:"id"}).then(r=>{if(r.error)console.error("[bal save]",r.error.message);});
                                     }}
                                     style={{width:80,background:"transparent",border:"1px solid #58a6ff30",borderRadius:3,color:"#58a6ff",fontFamily:"monospace",fontSize:11,padding:"2px 4px",textAlign:"right",outline:"none"}}/>
                               }
                             </td>
                             <td style={{padding:"4px 6px",textAlign:"right"}} onClick={e=>e.stopPropagation()}>
-                              <input type="number" defaultValue={etrade||""} placeholder="—"
-                                onBlur={e=>{
+                              <input type="number" value={etrade??""} placeholder="—"
+                                onChange={e=>{
                                   const val = e.target.value ? +e.target.value : null;
                                   const updated = {...balHistoryInline,[m.key]:{...(balHistoryInline[m.key]||{}),etrade:val}};
                                   setBalHistoryInline(updated);
-                                  supabase.from("col_prefs").upsert({id:"balance_history",cols:updated,updated_at:new Date().toISOString()},{onConflict:"id"});
+                                  supabase.from("col_prefs").upsert({id:"balance_history",cols:updated,updated_at:new Date().toISOString()},{onConflict:"id"}).then(r=>{if(r.error)console.error("[bal save]",r.error.message);});
                                 }}
                                 style={{width:80,background:"transparent",border:"1px solid #ffd16630",borderRadius:3,color:"#ffd166",fontFamily:"monospace",fontSize:11,padding:"2px 4px",textAlign:"right",outline:"none"}}/>
                             </td>
                             <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:"#00ff88",fontWeight:700}}>{fBal(total)}</td>
                             <td style={{padding:"4px 6px",textAlign:"right"}} onClick={e=>e.stopPropagation()}>
-                              <input type="number" defaultValue={b.distrib||""} placeholder="—"
-                                onBlur={e=>{
+                              <input type="number" value={b.distrib??""} placeholder="0"
+                                onChange={e=>{
                                   const val = e.target.value ? +e.target.value : null;
                                   const updated = {...balHistoryInline,[m.key]:{...(balHistoryInline[m.key]||{}),distrib:val}};
                                   setBalHistoryInline(updated);
-                                  supabase.from("col_prefs").upsert({id:"balance_history",cols:updated,updated_at:new Date().toISOString()},{onConflict:"id"});
+                                  supabase.from("col_prefs").upsert({id:"balance_history",cols:updated,updated_at:new Date().toISOString()},{onConflict:"id"}).then(r=>{if(r.error)console.error("[bal save]",r.error.message);});
                                 }}
                                 style={{width:75,background:"transparent",border:"1px solid #ff456030",borderRadius:3,color:"#ff4560",fontFamily:"monospace",fontSize:11,padding:"2px 4px",textAlign:"right",outline:"none"}}/>
                             </td>
@@ -2948,9 +2948,11 @@ ${JSON.stringify(summary, null, 1)}`;
                     try {
                       const end = Date.now();
                       const start = end - 365*3*24*60*60*1000;
-                      const url = "/api/schwab-proxy?path=/marketdata/v1/pricehistory&symbol=%24SPX&periodType=month&frequencyType=monthly&frequency=1&startDate="+start+"&endDate="+end+"&needExtendedHoursData=false";
+                      // Schwab uses $SPX.X for S&P 500 index — encoded as %24SPX.X
+                      const url = "/api/schwab-proxy?path=/marketdata/v1/pricehistory&symbol=%24SPX.X&periodType=month&frequencyType=monthly&frequency=1&startDate="+start+"&endDate="+end+"&needExtendedHoursData=false";
                       const res = await fetch(url);
                       const d = await res.json();
+                      console.log("[SPX] response:", JSON.stringify(d).slice(0,300));
                       if(d?.candles?.length){
                         // Store raw close prices — % will be computed relative to portfolio's first month
                         const spx = d.candles.map(c=>({
