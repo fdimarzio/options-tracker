@@ -2816,7 +2816,8 @@ ${JSON.stringify(summary, null, 1)}`;
                   {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#58a6ff",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Schwab $</th>}
                   {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#ffd166",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>ETrade $</th>}
                   {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#00ff88",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Total $</th>}
-                  {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#c084fc",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>MoM%</th>}
+                  {analyticsView==="monthly" && <th style={{padding:"5px 8px",textAlign:"right",color:"#c084fc",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>MoM%</th>}
+                  {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#ff4560",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Distrib</th>}
                   {analyticsView==="monthly" && <th style={{padding:"5px 8px",textAlign:"right",color:"#ff9f1c",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>YTD%</th>}
                   {analyticsView!=="daily" && <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Notes</th>}
                 </tr></thead>
@@ -2878,8 +2879,30 @@ ${JSON.stringify(summary, null, 1)}`;
                                 style={{width:80,background:"transparent",border:"1px solid #ffd16630",borderRadius:3,color:"#ffd166",fontFamily:"monospace",fontSize:11,padding:"2px 4px",textAlign:"right",outline:"none"}}/>
                             </td>
                             <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:"#00ff88",fontWeight:700}}>{fBal(total)}</td>
-                            <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11}}>{fPct(mom,"#00ff88","#ff4560")}</td>
+                            <td style={{padding:"4px 6px",textAlign:"right"}} onClick={e=>e.stopPropagation()}>
+                              <input type="number" defaultValue={b.distrib||""} placeholder="—"
+                                onBlur={e=>{
+                                  const val = e.target.value ? +e.target.value : null;
+                                  const updated = {...balHistoryInline,[m.key]:{...(balHistoryInline[m.key]||{}),distrib:val}};
+                                  setBalHistoryInline(updated);
+                                  supabase.from("col_prefs").upsert({id:"balance_history",cols:updated,updated_at:new Date().toISOString()},{onConflict:"id"});
+                                }}
+                                style={{width:75,background:"transparent",border:"1px solid #ff456030",borderRadius:3,color:"#ff4560",fontFamily:"monospace",fontSize:11,padding:"2px 4px",textAlign:"right",outline:"none"}}/>
+                            </td>
                           </>);
+                        })()}
+                        {analyticsView==="monthly" && (() => {
+                          // MoM% — always visible regardless of showBalCols
+                          const bm=balHistoryInline?.[m.key]||{};
+                          const sm=bm.schwab??(m.key===nowMonthKey&&liveSchwabInline?liveSchwabInline:null);
+                          const em=bm.etrade??null;
+                          const totalM=sm||em?(+sm||0)+(+em||0):null;
+                          const allKeysM=[...periodData].reverse().map(x=>x.key);
+                          const prevKM=allKeysM[allKeysM.indexOf(m.key)-1];
+                          const prevBm=prevKM?(balHistoryInline?.[prevKM]||{}):{};
+                          const prevTM=prevBm.schwab||prevBm.etrade?(+prevBm.schwab||0)+(+prevBm.etrade||0):null;
+                          const momM=totalM&&prevTM?((totalM-prevTM)/prevTM*100):null;
+                          return <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:momM>0?"#00ff88":momM<0?"#ff4560":"#3a4050"}}>{momM!=null?(momM>0?"+":"")+momM.toFixed(1)+"%":"—"}</td>;
                         })()}
                         {analyticsView==="monthly" && (() => {
                           const b2 = balHistoryInline?.[m.key] || {};
@@ -2929,10 +2952,10 @@ ${JSON.stringify(summary, null, 1)}`;
                       const res = await fetch(url);
                       const d = await res.json();
                       if(d?.candles?.length){
-                        const spx = d.candles.map((c,i,arr)=>({
+                        // Store raw close prices — % will be computed relative to portfolio's first month
+                        const spx = d.candles.map(c=>({
                           label: new Date(c.datetime).toISOString().slice(0,7),
-                          spxClose: c.close,
-                          spxPct: i>0 ? +((c.close-arr[0].close)/arr[0].close*100).toFixed(2) : 0
+                          close: c.close,
                         }));
                         setSpxData(spx);
                         setSpxOverlay(true);
@@ -2943,18 +2966,29 @@ ${JSON.stringify(summary, null, 1)}`;
                   </button>
                 </div>
                 {(()=>{
-                  // Build chart data: one point per month with total balance + S&P % change from first month
-                  const months = Object.keys(balHistoryInline).sort();
+                  // Build chart data: one point per month with total balance + S&P % vs same base
+                  const months = Object.keys(balHistoryInline).sort().filter(mk=>{
+                    const b=balHistoryInline[mk]||{};
+                    return (+b.schwab||0)+(+b.etrade||0)>0;
+                  });
                   if(months.length < 2) return <div style={{padding:"20px 0",textAlign:"center",color:"#3a4050",fontSize:10,fontFamily:"monospace"}}>Enter balance data above to see chart</div>;
-                  // Normalize both series to % change from first data point
-                  const firstB = months[0];
-                  const firstTotal = (+balHistoryInline[firstB]?.schwab||0)+(+balHistoryInline[firstB]?.etrade||0);
-                  const spxMap = Object.fromEntries(spxData.map(s=>[s.label,s.spxPct]));
+                  const firstMk = months[0];
+                  const firstB = balHistoryInline[firstMk]||{};
+                  const firstTotal = (+firstB.schwab||0)+(+firstB.etrade||0);
+                  // SPX: find close price for the same starting month, normalize from there
+                  const spxCloseMap = Object.fromEntries(spxData.map(s=>[s.label,s.close]));
+                  const spxBase = spxCloseMap[firstMk] || spxData[0]?.close;
                   const chartBalData = months.map(mk=>{
                     const b = balHistoryInline[mk]||{};
                     const total = (+b.schwab||0)+(+b.etrade||0);
-                    const portPct = firstTotal>0 ? +((total-firstTotal)/firstTotal*100).toFixed(2) : null;
-                    return {label:mk.slice(5), fullLabel:mk, portPct, spxPct:spxMap[mk]??null, total};
+                    // Distributions adjust the denominator: perf = (end-start)/(start-distrib)
+                    const cumDistrib = months.slice(0,months.indexOf(mk)+1)
+                      .reduce((s,m)=>s+(+balHistoryInline[m]?.distrib||0),0);
+                    const adjBase = Math.max(firstTotal - cumDistrib, 1);
+                    const portPct = firstTotal>0 ? +((total-firstTotal)/adjBase*100).toFixed(2) : null;
+                    const spxClose = spxCloseMap[mk];
+                    const spxPct = spxBase&&spxClose ? +((spxClose-spxBase)/spxBase*100).toFixed(2) : null;
+                    return {label:mk.slice(5), fullLabel:mk, portPct, spxPct, total};
                   });
                   return (
                     <ResponsiveContainer width="100%" height={180}>
