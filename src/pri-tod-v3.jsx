@@ -328,6 +328,107 @@ function CelebrationOverlay({profit, onDone}) {
 }
 
 // ── Main App ──────────────────────────────────────────────────────────────────
+// ── Balance History Component ─────────────────────────────────────────────────
+function BalanceHistory({ supabase, cashData }) {
+  const [balHistory, setBalHistory] = useState(null);
+  const [balEditMode, setBalEditMode] = useState(false);
+  const [balEdits, setBalEdits] = useState({});
+
+  useEffect(()=>{
+    supabase.from("col_prefs").select("cols").eq("id","balance_history").single()
+      .then(({data})=>{ if(data?.cols) setBalHistory(data.cols); else setBalHistory({}); });
+  },[]);
+
+  const saveBalHistory = async (updated) => {
+    await supabase.from("col_prefs").upsert({id:"balance_history",cols:updated,updated_at:new Date().toISOString()},{onConflict:"id"});
+    setBalHistory(updated);
+  };
+
+  const monthKeys = [];
+  const now5 = new Date();
+  for (let i=12; i>=0; i--) {
+    const d = new Date(now5.getFullYear(), now5.getMonth()-i, 1);
+    monthKeys.push(d.toISOString().slice(0,7));
+  }
+  const thisMonthKey = now5.toISOString().slice(0,7);
+  const liveSchwab = cashData.schwab ? +cashData.schwab : null;
+
+  const rows = monthKeys.map(mk => {
+    const b = balHistory?.[mk] || {};
+    const schwab = b.schwab ?? (mk===thisMonthKey&&liveSchwab ? liveSchwab : null);
+    const etrade = b.etrade ?? null;
+    const total  = (schwab||0)+(etrade||0);
+    return { mk, schwab, etrade, total, isLive: mk===thisMonthKey&&liveSchwab&&!b.schwab };
+  });
+
+  const withChanges = rows.map((r,i) => {
+    const prev = rows[i-1];
+    const mom  = prev?.total>0 && r.total>0 ? ((r.total-prev.total)/prev.total*100) : null;
+    const janKey = r.mk.slice(0,4)+"-01";
+    const janRow = rows.find(x=>x.mk===janKey);
+    const ytd  = janRow?.total>0 && r.total>0 ? ((r.total-janRow.total)/janRow.total*100) : null;
+    return {...r, mom, ytd};
+  });
+
+  if (!balHistory) return <div style={{padding:20,color:"#3a4050",fontFamily:"monospace",fontSize:10}}>Loading balance history…</div>;
+
+  return (
+    <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:"12px",marginTop:9}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+        <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em"}}>ACCOUNT BALANCE HISTORY</div>
+        <button onClick={()=>{
+          if(balEditMode){
+            const updated = {...balHistory};
+            Object.entries(balEdits).forEach(([mk,vals])=>{ updated[mk]={...(updated[mk]||{}),...vals}; });
+            if(liveSchwab) { updated[thisMonthKey]={...(updated[thisMonthKey]||{}),schwab:liveSchwab,schwabAuto:true}; }
+            saveBalHistory(updated);
+            setBalEdits({});
+          }
+          setBalEditMode(v=>!v);
+        }} style={{background:balEditMode?"#00ff8814":"transparent",border:"1px solid "+(balEditMode?"#00ff8844":"#21262d"),borderRadius:4,color:balEditMode?"#00ff88":"#3a4050",fontFamily:"monospace",fontSize:9,padding:"3px 10px",cursor:"pointer"}}>
+          {balEditMode?"💾 Save":"✎ Edit"}
+        </button>
+      </div>
+      <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:10,fontFamily:"monospace"}}>
+          <thead>
+            <tr style={{borderBottom:"1px solid #1c2128"}}>
+              <th style={{padding:"4px 8px",textAlign:"left",color:"#3a4050",fontWeight:400}}>Month</th>
+              <th style={{padding:"4px 8px",textAlign:"right",color:"#58a6ff",fontWeight:400}}>Schwab</th>
+              <th style={{padding:"4px 8px",textAlign:"right",color:"#ffd166",fontWeight:400}}>ETrade</th>
+              <th style={{padding:"4px 8px",textAlign:"right",color:"#00ff88",fontWeight:400}}>Total</th>
+              <th style={{padding:"4px 8px",textAlign:"right",color:"#c084fc",fontWeight:400}}>MoM%</th>
+              <th style={{padding:"4px 8px",textAlign:"right",color:"#ff9f1c",fontWeight:400}}>YTD%</th>
+            </tr>
+          </thead>
+          <tbody>
+            {withChanges.map(r=>(
+              <tr key={r.mk} style={{borderBottom:"1px solid #0d1117",background:r.mk===thisMonthKey?"#00ff8806":"transparent"}}>
+                <td style={{padding:"4px 8px",color:r.mk===thisMonthKey?"#00ff88":"#8b949e"}}>{r.mk}{r.isLive&&<span style={{fontSize:7,color:"#00ff8870",marginLeft:4}}>live</span>}</td>
+                <td style={{padding:"4px 8px",textAlign:"right"}}>
+                  {balEditMode && r.mk!==thisMonthKey ? (
+                    <input type="number" defaultValue={r.schwab||""} placeholder="—" onBlur={e=>setBalEdits(p=>({...p,[r.mk]:{...(p[r.mk]||{}),schwab:e.target.value?+e.target.value:null}}))}
+                      style={{width:80,background:"transparent",border:"1px solid #21262d",borderRadius:3,color:"#58a6ff",fontFamily:"monospace",fontSize:10,padding:"2px 4px",textAlign:"right"}}/>
+                  ) : <span style={{color:"#58a6ff"}}>{r.schwab!=null?"$"+(+r.schwab).toLocaleString("en-US",{maximumFractionDigits:0}):"—"}</span>}
+                </td>
+                <td style={{padding:"4px 8px",textAlign:"right"}}>
+                  {balEditMode ? (
+                    <input type="number" defaultValue={r.etrade||""} placeholder="—" onBlur={e=>setBalEdits(p=>({...p,[r.mk]:{...(p[r.mk]||{}),etrade:e.target.value?+e.target.value:null}}))}
+                      style={{width:80,background:"transparent",border:"1px solid #21262d",borderRadius:3,color:"#ffd166",fontFamily:"monospace",fontSize:10,padding:"2px 4px",textAlign:"right"}}/>
+                  ) : <span style={{color:"#ffd166"}}>{r.etrade!=null?"$"+(+r.etrade).toLocaleString("en-US",{maximumFractionDigits:0}):"—"}</span>}
+                </td>
+                <td style={{padding:"4px 8px",textAlign:"right",color:"#00ff88",fontWeight:700}}>{r.total>0?"$"+(r.total).toLocaleString("en-US",{maximumFractionDigits:0}):"—"}</td>
+                <td style={{padding:"4px 8px",textAlign:"right",color:r.mom>0?"#00ff88":r.mom<0?"#ff4560":"#3a4050"}}>{r.mom!=null?(r.mom>0?"+":"")+r.mom.toFixed(1)+"%":"—"}</td>
+                <td style={{padding:"4px 8px",textAlign:"right",color:r.ytd>0?"#ff9f1c":r.ytd<0?"#ff4560":"#3a4050"}}>{r.ytd!=null?(r.ytd>0?"+":"")+r.ytd.toFixed(1)+"%":"—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 // ── Import Tab wrapper ────────────────────────────────────────────────────────
 import ImportPageComponent from "./ImportPage.jsx";
 function ImportTab({ supabase }) {
@@ -2829,118 +2930,7 @@ ${JSON.stringify(summary, null, 1)}`;
         )}
 
         {/* ══ STRATEGIES ══ */}
-        {/* Balance history — injected into analytics tab */}
-        {tab==="analytics" && (() => {
-          // Balance history stored in col_prefs under "balance_history"
-          // Shape: { "2025-01": { schwab: 12000, etrade: 8000 }, ... }
-          const [balHistory, setBalHistory] = React.useState(null);
-          const [balEditMode, setBalEditMode] = React.useState(false);
-          const [balEdits, setBalEdits] = React.useState({});
-
-          React.useEffect(()=>{
-            supabase.from("col_prefs").select("cols").eq("id","balance_history").single()
-              .then(({data})=>{ if(data?.cols) setBalHistory(data.cols); else setBalHistory({}); });
-          },[]);
-
-          const saveBalHistory = async (updated) => {
-            await supabase.from("col_prefs").upsert({id:"balance_history",cols:updated,updated_at:new Date().toISOString()},{onConflict:"id"});
-            setBalHistory(updated);
-          };
-
-          // Generate month keys for last 13 months + current
-          const monthKeys = [];
-          const now5 = new Date();
-          for (let i=12; i>=0; i--) {
-            const d = new Date(now5.getFullYear(), now5.getMonth()-i, 1);
-            monthKeys.push(d.toISOString().slice(0,7));
-          }
-          const thisMonthKey = now5.toISOString().slice(0,7);
-
-          // Auto-populate current month from live Schwab data
-          const currentBal = balHistory?.[thisMonthKey] || {};
-          const liveSchwab = cashData.schwab ? +cashData.schwab : null;
-          if (liveSchwab && !currentBal.schwabAuto) {
-            // Will be set on first save
-          }
-
-          const rows = monthKeys.map(mk => {
-            const b = balHistory?.[mk] || {};
-            const schwab = b.schwab ?? (mk===thisMonthKey&&liveSchwab ? liveSchwab : null);
-            const etrade = b.etrade ?? null;
-            const total  = (schwab||0)+(etrade||0);
-            return { mk, schwab, etrade, total, isLive: mk===thisMonthKey&&liveSchwab&&!b.schwab };
-          });
-
-          // MoM and YTD calcs
-          const withChanges = rows.map((r,i) => {
-            const prev = rows[i-1];
-            const mom  = prev?.total>0 && r.total>0 ? ((r.total-prev.total)/prev.total*100) : null;
-            const janKey = r.mk.slice(0,4)+"-01";
-            const janRow = rows.find(x=>x.mk===janKey);
-            const ytd  = janRow?.total>0 && r.total>0 ? ((r.total-janRow.total)/janRow.total*100) : null;
-            return {...r, mom, ytd};
-          });
-
-          if (!balHistory) return <div style={{padding:20,color:"#3a4050",fontFamily:"monospace",fontSize:10}}>Loading balance history…</div>;
-
-          return (
-            <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:"12px",marginTop:9}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-                <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em"}}>ACCOUNT BALANCE HISTORY</div>
-                <button onClick={()=>{
-                  if(balEditMode){
-                    // Save edits
-                    const updated = {...balHistory};
-                    Object.entries(balEdits).forEach(([mk,vals])=>{ updated[mk]={...(updated[mk]||{}),...vals}; });
-                    // Auto-save current month Schwab if live
-                    if(liveSchwab) { updated[thisMonthKey]={...(updated[thisMonthKey]||{}),schwab:liveSchwab,schwabAuto:true}; }
-                    saveBalHistory(updated);
-                    setBalEdits({});
-                  }
-                  setBalEditMode(v=>!v);
-                }} style={{background:balEditMode?"#00ff8814":"transparent",border:"1px solid "+(balEditMode?"#00ff8844":"#21262d"),borderRadius:4,color:balEditMode?"#00ff88":"#3a4050",fontFamily:"monospace",fontSize:9,padding:"3px 10px",cursor:"pointer"}}>
-                  {balEditMode?"💾 Save":"✎ Edit"}
-                </button>
-              </div>
-              <div style={{overflowX:"auto"}}>
-                <table style={{width:"100%",borderCollapse:"collapse",fontSize:10,fontFamily:"monospace"}}>
-                  <thead>
-                    <tr style={{borderBottom:"1px solid #1c2128"}}>
-                      <th style={{padding:"4px 8px",textAlign:"left",color:"#3a4050",fontWeight:400}}>Month</th>
-                      <th style={{padding:"4px 8px",textAlign:"right",color:"#58a6ff",fontWeight:400}}>Schwab</th>
-                      <th style={{padding:"4px 8px",textAlign:"right",color:"#ffd166",fontWeight:400}}>ETrade</th>
-                      <th style={{padding:"4px 8px",textAlign:"right",color:"#00ff88",fontWeight:400}}>Total</th>
-                      <th style={{padding:"4px 8px",textAlign:"right",color:"#c084fc",fontWeight:400}}>MoM%</th>
-                      <th style={{padding:"4px 8px",textAlign:"right",color:"#ff9f1c",fontWeight:400}}>YTD%</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {withChanges.map(r=>(
-                      <tr key={r.mk} style={{borderBottom:"1px solid #0d1117",background:r.mk===thisMonthKey?"#00ff8806":"transparent"}}>
-                        <td style={{padding:"4px 8px",color:r.mk===thisMonthKey?"#00ff88":"#8b949e"}}>{r.mk}{r.isLive&&<span style={{fontSize:7,color:"#00ff8870",marginLeft:4}}>live</span>}</td>
-                        <td style={{padding:"4px 8px",textAlign:"right"}}>
-                          {balEditMode && r.mk!==thisMonthKey ? (
-                            <input type="number" defaultValue={r.schwab||""} placeholder="—" onBlur={e=>setBalEdits(p=>({...p,[r.mk]:{...(p[r.mk]||{}),schwab:e.target.value?+e.target.value:null}}))}
-                              style={{width:80,background:"transparent",border:"1px solid #21262d",borderRadius:3,color:"#58a6ff",fontFamily:"monospace",fontSize:10,padding:"2px 4px",textAlign:"right"}}/>
-                          ) : <span style={{color:"#58a6ff"}}>{r.schwab!=null?"$"+(+r.schwab).toLocaleString("en-US",{maximumFractionDigits:0}):"—"}</span>}
-                        </td>
-                        <td style={{padding:"4px 8px",textAlign:"right"}}>
-                          {balEditMode ? (
-                            <input type="number" defaultValue={r.etrade||""} placeholder="—" onBlur={e=>setBalEdits(p=>({...p,[r.mk]:{...(p[r.mk]||{}),etrade:e.target.value?+e.target.value:null}}))}
-                              style={{width:80,background:"transparent",border:"1px solid #21262d",borderRadius:3,color:"#ffd166",fontFamily:"monospace",fontSize:10,padding:"2px 4px",textAlign:"right"}}/>
-                          ) : <span style={{color:"#ffd166"}}>{r.etrade!=null?"$"+(+r.etrade).toLocaleString("en-US",{maximumFractionDigits:0}):"—"}</span>}
-                        </td>
-                        <td style={{padding:"4px 8px",textAlign:"right",color:"#00ff88",fontWeight:700}}>{r.total>0?"$"+(r.total).toLocaleString("en-US",{maximumFractionDigits:0}):"—"}</td>
-                        <td style={{padding:"4px 8px",textAlign:"right",color:r.mom>0?"#00ff88":r.mom<0?"#ff4560":"#3a4050"}}>{r.mom!=null?(r.mom>0?"+":"")+r.mom.toFixed(1)+"%":"—"}</td>
-                        <td style={{padding:"4px 8px",textAlign:"right",color:r.ytd>0?"#ff9f1c":r.ytd<0?"#ff4560":"#3a4050"}}>{r.ytd!=null?(r.ytd>0?"+":"")+r.ytd.toFixed(1)+"%":"—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          );
-        })()}
+        {tab==="analytics" && <BalanceHistory supabase={supabase} cashData={cashData} />}
 
         {tab==="strategies" && (
           <div style={{display:"flex",flexDirection:"column",gap:9}}>
