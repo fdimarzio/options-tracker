@@ -191,7 +191,7 @@ function MatchModal({ closer, openContracts, onSelect, onClose }) {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead style={{ position: "sticky", top: 0, background: "#0d1117" }}>
                 <tr style={{ borderBottom: "1px solid #1c2128" }}>
-                  {["ID","Stock","Type","Strike","Expiry","Qty","Date","Premium","Status"].map(h => (
+                  {["ID","Stock","Type","Strike","Expiry","Qty","Date","Premium","Status",""].map(h => (
                     <th key={h} style={{ padding: "8px 12px", textAlign: "left", color: "#6e7681", fontWeight: 400 }}>{h}</th>
                   ))}
                 </tr>
@@ -223,6 +223,21 @@ function MatchModal({ closer, openContracts, onSelect, onClose }) {
                         {o.premium != null ? `${o.premium >= 0 ? "+" : ""}$${Math.abs(o.premium).toFixed(2)}` : "—"}
                       </td>
                       <td style={{ padding: "9px 12px", color: o.status === "Open" ? "#00ff88" : "#6e7681" }}>{o.status}</td>
+                      <td style={{ padding: "4px 8px" }} onClick={e => e.stopPropagation()}>
+                        <button
+                          onClick={e => {
+                            e.stopPropagation();
+                            navigator.clipboard.writeText(JSON.stringify(o, null, 2))
+                              .then(() => {
+                                e.target.textContent = "✓";
+                                setTimeout(() => { e.target.textContent = "⎘"; }, 1500);
+                              });
+                          }}
+                          style={{ fontSize: 11, background: "transparent", border: "1px solid #2a3040", borderRadius: 3, color: "#6e7681", fontFamily: "monospace", padding: "2px 6px", cursor: "pointer" }}
+                          title="Copy row data to clipboard">
+                          ⎘
+                        </button>
+                      </td>
                     </tr>
                   );
                 })}
