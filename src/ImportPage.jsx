@@ -259,8 +259,11 @@ export default function ImportPage() {
   const [error,        setError]        = useState(null);
   const [committing,   setCommitting]   = useState(false);
   const [committed,    setCommitted]    = useState([]);
-  const [filterOptType, setFilterOptType] = useState("ALL");
-  const [matchModal,    setMatchModal]    = useState(null);  // { txIdx } when open
+  const [filterOptType,    setFilterOptType]    = useState("ALL");
+  const [showUnmatchedOnly, setShowUnmatchedOnly] = useState(false);
+  const [sortCol,          setSortCol]          = useState("dateExec");
+  const [sortDir,          setSortDir]          = useState("desc");
+  const [matchModal,       setMatchModal]       = useState(null);
 
   // ── Fetch transactions ──────────────────────────────────────────────────────
   const fetchTransactions = useCallback(async () => {
@@ -368,10 +371,40 @@ export default function ImportPage() {
     }
   }, [transactions, checked, testMode]);
 
-  // ── Filtered view ────────────────────────────────────────────────────────────
-  const filtered = transactions.filter(t =>
-    filterOptType === "ALL" ? true : t.optType === filterOptType
-  );
+  // ── Filtered + sorted view ──────────────────────────────────────────────────
+  const SORT_KEYS = {
+    stock: t => t.stock ?? "",
+    optType: t => t.optType ?? "",
+    strike: t => Number(t.strike) ?? 0,
+    expires: t => t.expires ?? "",
+    qty: t => Number(t.qty) ?? 0,
+    premium: t => Number(t.premium) ?? 0,
+    priceAtExecution: t => Number(t.priceAtExecution) ?? 0,
+    dateExec: t => t.dateExec ?? "",
+    matchConfidence: t => t.matchConfidence ?? "",
+  };
+
+  const filtered = transactions
+    .filter(t => filterOptType === "ALL" ? true : t.optType === filterOptType)
+    .filter(t => showUnmatchedOnly ? t.matchConfidence === "unmatched" : true)
+    .sort((a, b) => {
+      const fn = SORT_KEYS[sortCol] ?? (t => "");
+      const av = fn(a), bv = fn(b);
+      const cmp = typeof av === "number"
+        ? av - bv
+        : String(av).localeCompare(String(bv));
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+
+  const handleSort = (col) => {
+    if (sortCol === col) setSortDir(d => d === "asc" ? "desc" : "asc");
+    else { setSortCol(col); setSortDir("asc"); }
+  };
+
+  const SortIcon = ({ col }) => {
+    if (sortCol !== col) return <span style={{ color: "#2a3040", marginLeft: 3 }}>⇅</span>;
+    return <span style={{ color: C.blue, marginLeft: 3 }}>{sortDir === "asc" ? "↑" : "↓"}</span>;
+  };
 
   // ── Styles ──────────────────────────────────────────────────────────────────
   const page = {
@@ -609,6 +642,12 @@ export default function ImportPage() {
               {f}
             </button>
           ))}
+          <button
+            onClick={() => setShowUnmatchedOnly(v => !v)}
+            style={{ ...btn(C.red), background: showUnmatchedOnly ? C.red + "33" : "transparent", fontSize: 11, padding: "4px 10px" }}>
+            {showUnmatchedOnly ? "⚠ Unmatched Only" : "⚠ Unmatched"}
+            {unmatchedCount > 0 && <span style={{ marginLeft: 5, background: C.red + "44", borderRadius: 8, padding: "1px 5px" }}>{unmatchedCount}</span>}
+          </button>
           <div style={{ width: 1, height: 20, background: C.border }} />
           <button onClick={checkAll}  style={btn(C.blue, false)}>Check All</button>
           <button onClick={uncheckAll} style={btn(C.muted)}>Uncheck All</button>
@@ -637,17 +676,32 @@ export default function ImportPage() {
             <thead>
               <tr style={{ background: "#0d1117", borderBottom: `2px solid ${C.border2}` }}>
                 <th style={{ padding: "8px 10px", textAlign: "center", width: 30, color: C.dimText, fontWeight: 400 }}>✓</th>
-                <th style={{ padding: "8px 10px", textAlign: "left", color: C.dimText, fontWeight: 400 }}>Stock</th>
-                <th style={{ padding: "8px 10px", textAlign: "left", color: C.dimText, fontWeight: 400 }}>Type</th>
-                <th style={{ padding: "8px 10px", textAlign: "right", color: C.dimText, fontWeight: 400 }}>Strike</th>
-                <th style={{ padding: "8px 10px", textAlign: "left", color: C.dimText, fontWeight: 400 }}>Expiry</th>
-                <th style={{ padding: "8px 10px", textAlign: "right", color: C.dimText, fontWeight: 400 }}>Qty</th>
-                <th style={{ padding: "8px 10px", textAlign: "right", color: C.dimText, fontWeight: 400 }}>Premium</th>
-                <th style={{ padding: "8px 10px", textAlign: "right", color: C.dimText, fontWeight: 400, minWidth: 100 }}>Stock Price</th>
-                <th style={{ padding: "8px 10px", textAlign: "left", color: C.dimText, fontWeight: 400 }}>Date</th>
-                <th style={{ padding: "8px 10px", textAlign: "left", color: C.dimText, fontWeight: 400, minWidth: 130 }}>Strategy</th>
-                <th style={{ padding: "8px 10px", textAlign: "left", color: C.dimText, fontWeight: 400, minWidth: 160 }}>Notes</th>
-                <th style={{ padding: "8px 10px", textAlign: "left", color: C.dimText, fontWeight: 400 }}>Match</th>
+                {[
+                  { label: "Stock",       col: "stock",            align: "left"  },
+                  { label: "Type",        col: "optType",          align: "left"  },
+                  { label: "Strike",      col: "strike",           align: "right" },
+                  { label: "Expiry",      col: "expires",          align: "left"  },
+                  { label: "Qty",         col: "qty",              align: "right" },
+                  { label: "Premium",     col: "premium",          align: "right" },
+                  { label: "Stock Price", col: "priceAtExecution", align: "right", minWidth: 100 },
+                  { label: "Date",        col: "dateExec",         align: "left"  },
+                  { label: "Strategy",    col: null,               align: "left",  minWidth: 130 },
+                  { label: "Notes",       col: null,               align: "left",  minWidth: 160 },
+                  { label: "Match",       col: "matchConfidence",  align: "left"  },
+                ].map(({ label, col, align, minWidth }) => (
+                  <th key={label}
+                    onClick={col ? () => handleSort(col) : undefined}
+                    style={{
+                      padding: "8px 10px", textAlign: align,
+                      color: sortCol === col ? C.blue : C.dimText,
+                      fontWeight: 400, minWidth,
+                      cursor: col ? "pointer" : "default",
+                      userSelect: "none",
+                      whiteSpace: "nowrap",
+                    }}>
+                    {label}{col && <SortIcon col={col} />}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
