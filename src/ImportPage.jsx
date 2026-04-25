@@ -330,11 +330,11 @@ function EditOpenerModal({ contract, closer, onSave, onClose }) {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function ImportPage() {
+export default function ImportPage({ parallelRun = false, defaultDays = 30 }) {
   const [mode,         setMode]         = useState("config");   // config | loading | review | done
   const [testMode,     setTestMode]     = useState(true);
   const [rangeType,    setRangeType]    = useState("days");     // days | dates
-  const [days,         setDays]         = useState(30);
+  const [days,         setDays]         = useState(defaultDays);
   const [startDate,    setStartDate]    = useState("");
   const [endDate,      setEndDate]      = useState("");
   const [transactions,   setTransactions]   = useState([]);
@@ -568,22 +568,26 @@ export default function ImportPage() {
             </div>
           )}
 
-          {/* Test mode toggle */}
-          <div style={{ ...card, border: `1px solid ${testMode ? C.yellow + "44" : C.border}` }}>
+          {/* Test mode toggle — locked in parallel-run mode */}
+          <div style={{ ...card, border: `1px solid ${parallelRun ? C.orange + "44" : testMode ? C.yellow + "44" : C.border}` }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: testMode ? C.yellow : C.text }}>
-                  {testMode ? "🧪 Test Mode ON" : "🚀 Live Mode"}
+                <div style={{ fontSize: 13, fontWeight: 700, color: parallelRun ? C.orange : testMode ? C.yellow : C.text }}>
+                  {parallelRun ? "⚡ Parallel Run Mode" : testMode ? "🧪 Test Mode ON" : "🚀 Live Mode"}
                 </div>
                 <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>
-                  {testMode
+                  {parallelRun
+                    ? "Commit is disabled — reviewing transactions in parallel with manual entry. Cut over date TBD."
+                    : testMode
                     ? "Transactions will NOT be saved to the database. Safe for testing."
                     : "Transactions WILL be committed to the production database."}
                 </div>
               </div>
-              <button onClick={() => setTestMode(v => !v)} style={btn(testMode ? C.yellow : C.green)}>
-                {testMode ? "Switch to Live" : "Switch to Test"}
-              </button>
+              {!parallelRun && (
+                <button onClick={() => setTestMode(v => !v)} style={btn(testMode ? C.yellow : C.green)}>
+                  {testMode ? "Switch to Live" : "Switch to Test"}
+                </button>
+              )}
             </div>
           </div>
 
@@ -779,15 +783,30 @@ export default function ImportPage() {
           <div style={{ width: 1, height: 20, background: C.border }} />
           <button onClick={checkAll}  style={btn(C.blue, false)}>Check All</button>
           <button onClick={uncheckAll} style={btn(C.muted)}>Uncheck All</button>
+          {parallelRun && (
+            <button
+              onClick={() => { checked.forEach(idx => dismiss(idx)); setChecked(new Set()); }}
+              disabled={checkedCount === 0}
+              style={{ ...btn(C.orange, checkedCount === 0), fontSize: 11, padding: "4px 10px" }}>
+              ✓ Clear Reviewed ({checkedCount})
+            </button>
+          )}
           <button
-            onClick={commitChecked}
-            disabled={checkedCount === 0 || committing}
-            style={btn(C.green, checkedCount === 0 || committing)}>
-            {committing ? "Saving..." : `${testMode ? "Test Commit" : "Commit"} ${checkedCount > 0 ? checkedCount : ""} Checked →`}
+            onClick={parallelRun ? undefined : commitChecked}
+            disabled={checkedCount === 0 || committing || parallelRun}
+            title={parallelRun ? "Commit disabled during parallel run" : ""}
+            style={btn(C.green, checkedCount === 0 || committing || parallelRun)}>
+            {parallelRun ? "🔒 Commit Disabled" : committing ? "Saving..." : `${testMode ? "Test Commit" : "Commit"} ${checkedCount > 0 ? checkedCount : ""} Checked →`}
           </button>
         </div>
       </div>
 
+      {parallelRun && (
+        <div style={{ background: C.orange + "0a", border: `1px solid ${C.orange}44`, borderRadius: 6, padding: "8px 14px", marginBottom: 10, fontSize: 11, color: C.orange, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span>⚡ <strong>Parallel Run</strong> — reviewing only, no commits. Cut over date TBD (next weekend).</span>
+          <span style={{ color: C.dimText, fontSize: 10 }}>Cutover: pull transactions after that date only</span>
+        </div>
+      )}
       {error && (
         <div style={{ background: C.red + "0a", border: `1px solid ${C.red}44`, borderRadius: 6, padding: "10px 14px", marginBottom: 12, fontSize: 12, color: C.red }}>
           ⚠ {error}
@@ -1083,11 +1102,24 @@ export default function ImportPage() {
           <span style={{ fontSize: 12, color: C.muted }}>
             {checkedCount} of {filtered.length} selected
           </span>
+          {parallelRun && (
+            <button
+              onClick={() => {
+                // Clear reviewed = dismiss all checked rows
+                checked.forEach(idx => dismiss(idx));
+                setChecked(new Set());
+              }}
+              disabled={checkedCount === 0}
+              style={{ ...btn(C.orange, checkedCount === 0), padding: "9px 20px", fontSize: 14 }}>
+              ✓ Clear Reviewed ({checkedCount})
+            </button>
+          )}
           <button
-            onClick={commitChecked}
-            disabled={checkedCount === 0 || committing}
-            style={{ ...btn(C.green, checkedCount === 0 || committing), padding: "9px 24px", fontSize: 14 }}>
-            {committing ? "Saving..." : testMode ? `🧪 Test Commit (${checkedCount})` : `Commit ${checkedCount} Transactions →`}
+            onClick={parallelRun ? undefined : commitChecked}
+            disabled={checkedCount === 0 || committing || parallelRun}
+            title={parallelRun ? "Commit disabled during parallel run — cut over date TBD" : ""}
+            style={{ ...btn(C.green, checkedCount === 0 || committing || parallelRun), padding: "9px 24px", fontSize: 14, position: "relative" }}>
+            {committing ? "Saving..." : parallelRun ? `🔒 Commit Disabled` : testMode ? `🧪 Test Commit (${checkedCount})` : `Commit ${checkedCount} Transactions →`}
           </button>
         </div>
       </div>

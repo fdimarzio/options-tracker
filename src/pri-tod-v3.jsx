@@ -328,6 +328,15 @@ function CelebrationOverlay({profit, onDone}) {
 }
 
 // ── Main App ──────────────────────────────────────────────────────────────────
+
+// ── Import Tab wrapper ────────────────────────────────────────────────────────
+// Renders the ImportPage component inline within the main app shell.
+// During parallel-run week, commit is disabled — review only.
+import ImportPageComponent from "./ImportPage.jsx";
+function ImportTab() {
+  return <ImportPageComponent parallelRun={true} defaultDays={1} />;
+}
+
 export default function App() {
   // Auth
   const [users,setUsers]         = useState(USERS_DEFAULT);
@@ -2028,7 +2037,7 @@ ${JSON.stringify(summary, null, 1)}`;
           </div>
         </div>
         <div style={{display:"flex",gap:2,flex:1,justifyContent:"center"}}>
-          {["dashboard","contracts","analytics","plan","stocks"].map(n=>(
+          {["dashboard","contracts","analytics","plan","stocks","import"].map(n=>(
             <button key={n} onClick={()=>setTab(n)} style={{background:tab===n?"#00ff8814":"transparent",color:tab===n?"#00ff88":"#444",border:tab===n?"1px solid #00ff8825":"1px solid transparent",borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"monospace",letterSpacing:"0.05em",textTransform:"uppercase",whiteSpace:"nowrap"}}>{n}</button>
           ))}
         </div>
@@ -3925,6 +3934,9 @@ ${JSON.stringify(summary, null, 1)}`;
           );
         })()}
 
+
+        {/* ══ IMPORT ══ */}
+        {tab==="import" && <ImportTab />}
 
       </div>
     </div>
