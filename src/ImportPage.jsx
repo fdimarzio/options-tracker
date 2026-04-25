@@ -507,6 +507,13 @@ export default function ImportPage() {
     return <span style={{ color: C.blue, marginLeft: 3 }}>{sortDir === "asc" ? "↑" : "↓"}</span>;
   };
 
+  // Pre-compute split group premium totals for display
+  const splitGroupTotals = {};
+  for (const t of transactions) {
+    if (!t.splitGroup) continue;
+    splitGroupTotals[t.splitGroup] = (splitGroupTotals[t.splitGroup] ?? 0) + (t.premium ?? 0);
+  }
+
   // ── Styles ──────────────────────────────────────────────────────────────────
   const page = {
     minHeight:   "100vh",
@@ -874,9 +881,19 @@ export default function ImportPage() {
                     {/* Qty */}
                     <td style={{ padding: "8px 10px", textAlign: "right", color: C.text }}>{t.qty}</td>
 
-                    {/* Premium */}
-                    <td style={{ padding: "8px 10px", textAlign: "right", color: t.premium >= 0 ? C.green : C.red, fontWeight: 700 }}>
-                      {t.premium >= 0 ? "+" : ""}${Math.abs(t.premium).toFixed(2)}
+                    {/* Premium — for split fills, show individual + group total on last leg */}
+                    <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700 }}>
+                      <div style={{ color: t.premium >= 0 ? C.green : C.red }}>
+                        {t.premium >= 0 ? "+" : ""}${Math.abs(t.premium).toFixed(2)}
+                      </div>
+                      {t.splitGroup && t.splitIndex === t.splitCount && (() => {
+                        const total = splitGroupTotals[t.splitGroup] ?? 0;
+                        return (
+                          <div style={{ fontSize: 10, color: C.blue, marginTop: 2, borderTop: `1px solid ${C.blue}44`, paddingTop: 2 }}>
+                            ∑ {total >= 0 ? "+" : ""}${Math.abs(total).toFixed(2)}
+                          </div>
+                        );
+                      })()}
                     </td>
 
                     {/* Stock price — editable */}
