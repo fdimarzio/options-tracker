@@ -192,39 +192,44 @@ async function loadExistingOpens() {
 
 // ── Auto-match a closing trade to its opener ─────────────────────────────────
 // Returns { parentId, matchedContract, confidence }
+// BTC can close BTO or STO (e.g. covered call opened as STO, bought back as BTC)
+// STC can close BTO or STO (e.g. long call opened as BTO, sold as STC)
 function autoMatch(closer, dbOpeners, batchOpeners = []) {
-  const oppositeType = { BTC: "BTO", STC: "STO" };
-  const targetOptType = oppositeType[closer.optType];
-  if (!targetOptType) return null;
+  const validOpenerTypes = { BTC: ["BTO", "STO"], STC: ["STO", "BTO"] };
+  const targetTypes = validOpenerTypes[closer.optType];
+  if (!targetTypes) return null;
 
-  // Combine batch openers (same import) and DB openers
-  // Normalize to a common shape for comparison
-  const candidates = [
-    ...batchOpeners
-      .filter(o => o.optType === targetOptType)
-      .map(o => ({ id: o._batchIdx, stock: o.stock, opt_type: o.optType, strike: o.strike, expires: o.expires, qty: o.qty, account: o.account, _isBatch: true })),
-    ...dbOpeners.filter(o => o.opt_type === targetOptType),
-  ];
+  // Prefer DB openers over batch openers — DB records have real numeric ids
+  // Normalize batch openers to same shape, deprioritize them
+  const normalizedBatch = batchOpeners
+    .filter(o => targetTypes.includes(o.optType))
+    .map(o => ({ id: o._batchIdx, stock: o.stock, opt_type: o.optType, strike: o.strike, expires: o.expires, qty: o.qty, account: o.account, _isBatch: true }));
 
-  // Match on stock + strike + expiry (drop account filter — some older records may vary)
-  const matches = candidates.filter(o => {
-    const stock  = o.stock?.toUpperCase()  === closer.stock?.toUpperCase();
-    const strike = Number(o.strike)        === Number(closer.strike);
-    const exp    = o.expires?.slice(0, 10) === closer.expires;
-    return stock && strike && exp;
-  });
+  const normalizedDB = dbOpeners.filter(o => targetTypes.includes(o.opt_type));
 
-  if (!matches.length) return { parentId: null, matchedContract: null, confidence: "unmatched" };
+  // DB records first — if we find a match there, use it (real id)
+  for (const pool of [normalizedDB, normalizedBatch]) {
+    const matches = pool.filter(o => {
+      const stock  = o.stock?.toUpperCase()  === closer.stock?.toUpperCase();
+      const strike = Number(o.strike)        === Number(closer.strike);
+      const exp    = o.expires?.slice(0, 10) === closer.expires;
+      return stock && strike && exp;
+    });
 
-  // Prefer exact qty match
-  const exactQty = matches.find(o => Number(o.qty) === Number(closer.qty));
-  if (exactQty) return { parentId: exactQty.id, matchedContract: exactQty, confidence: "exact" };
+    if (!matches.length) continue;
 
-  // Otherwise pick closest qty — mark as partial
-  const best = matches.reduce((a, b) =>
-    Math.abs(Number(a.qty) - Number(closer.qty)) < Math.abs(Number(b.qty) - Number(closer.qty)) ? a : b
-  );
-  return { parentId: best.id, matchedContract: best, confidence: "partial" };
+    // Prefer exact qty
+    const exactQty = matches.find(o => Number(o.qty) === Number(closer.qty));
+    if (exactQty) return { parentId: exactQty.id, matchedContract: exactQty, confidence: "exact" };
+
+    // Otherwise closest qty
+    const best = matches.reduce((a, b) =>
+      Math.abs(Number(a.qty) - Number(closer.qty)) < Math.abs(Number(b.qty) - Number(closer.qty)) ? a : b
+    );
+    return { parentId: best.id, matchedContract: best, confidence: "partial" };
+  }
+
+  return { parentId: null, matchedContract: null, confidence: "unmatched" };
 }
 
 // ── Main handler ─────────────────────────────────────────────────────────────
