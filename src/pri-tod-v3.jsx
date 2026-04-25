@@ -893,6 +893,9 @@ export default function App() {
     if (stocksSortKey===key) setStocksSortDir(d=>d==="asc"?"desc":"asc");
     else { setStocksSortKey(key); setStocksSortDir("asc"); }
   };
+  // Cash balances stored in stocksData under special key "__cash__"
+  const cashData = stocksData["__cash__"] || {};
+
   // Balance history inline state for analytics table columns
   const [balHistoryInline, setBalHistoryInline] = useState({});
   const nowMonthKey = new Date().toISOString().slice(0,7);
@@ -900,10 +903,8 @@ export default function App() {
   useEffect(()=>{
     supabase.from("col_prefs").select("cols").eq("id","balance_history").single()
       .then(({data})=>{ if(data?.cols) setBalHistoryInline(data.cols); });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
-
-  // Cash balances stored in stocksData under special key "__cash__"
-  const cashData = stocksData["__cash__"] || {};
   const updateCash = async (field, value) => {
     const cashVal = value === "" ? null : +value;
     const updated = {...stocksData, "__cash__": {...cashData, [field]: cashVal}};
