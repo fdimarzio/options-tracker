@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { fetchQuotes, fetchOpenPositionChains, findOptionForContract, fetchPositions, schwabGet } from "./schwab.js";
-import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
+import { BarChart, Bar, ComposedChart, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { createClient } from "@supabase/supabase-js";
 
 // ── Supabase client ───────────────────────────────────────────────────────────
@@ -1047,7 +1047,18 @@ export default function App() {
         });
         // Update Schwab cash
         if (cash > 0) updateCash("schwab", cash.toFixed(2));
-        console.log("[schwab] loaded", stocks.length, "positions, cash:", cash);
+        // Auto-save current month Schwab balance (cash + stock value) to balance_history
+        if (accountValue > 0) {
+          const mk = new Date().toISOString().slice(0,7);
+          supabase.from("col_prefs").select("cols").eq("id","balance_history").single()
+            .then(({data}) => {
+              const hist = data?.cols || {};
+              const updated = { ...hist, [mk]: { ...(hist[mk]||{}), schwab: accountValue, schwabAuto: true } };
+              supabase.from("col_prefs").upsert({ id:"balance_history", cols:updated, updated_at:new Date().toISOString() }, {onConflict:"id"});
+              setBalHistoryInline(updated);
+            });
+        }
+        console.log("[schwab] loaded", stocks.length, "positions, cash:", cash, "accountValue:", accountValue);
       } catch (posErr) {
         console.warn("[schwab] positions fetch failed:", posErr.message);
       }
@@ -1264,6 +1275,9 @@ export default function App() {
     });
   };
   const [analyticsView,setAnalyticsView] = useState("monthly");
+  const [showBalCols,setShowBalCols]     = useState(true);   // hide/show Schwab/ETrade/Total/MoM/YTD cols
+  const [spxOverlay,setSpxOverlay]       = useState(false);  // S&P 500 overlay on chart
+  const [spxData,setSpxData]             = useState([]);      // [{label, spxPct}]
   const [profitDateMode,setProfitDateMode] = useState("exec"); // "exec" | "close"
   const profitDateField = (c) => profitDateMode==="close" ? c.closeDate : c.dateExec;
   const profitMTD = closedC.filter(c=>profitDateField(c)?.startsWith(thisMonth)).reduce((s,c)=>s+(c.profit||0),0);
@@ -2305,20 +2319,50 @@ ${JSON.stringify(summary, null, 1)}`;
               {["executed","closed"].map(v=>(
                 <button key={v} onClick={()=>setChartDate(v)} style={{background:chartDate===v?"#58a6ff14":"transparent",color:chartDate===v?"#58a6ff":"#2a3040",border:chartDate===v?"1px solid #58a6ff25":"1px solid #1c2128",borderRadius:4,padding:"2px 8px",fontSize:8,fontFamily:"monospace",textTransform:"uppercase"}}>{v}</button>
               ))}
+              <button onClick={async()=>{
+                if(spxOverlay){setSpxOverlay(false);return;}
+                // Fetch S&P 500 monthly data via Schwab proxy
+                try {
+                  const end = Date.now();
+                  const start = end - 365*2*24*60*60*1000; // 2 years
+                  const res = await fetch(\`/api/schwab-proxy?path=/marketdata/v1/pricehistory&symbol=%24SPX&periodType=month&frequencyType=monthly&frequency=1&startDate=\${start}&endDate=\${end}&needExtendedHoursData=false\`);
+                  const d = await res.json();
+                  if(d?.candles?.length) {
+                    const spx = d.candles.map((c,i,arr) => {
+                      const label = new Date(c.datetime).toISOString().slice(0,7);
+                      const pct = i>0 ? ((c.close-arr[i-1].close)/arr[i-1].close*100) : 0;
+                      return {label, spxPct: +pct.toFixed(2)};
+                    });
+                    setSpxData(spx);
+                    setSpxOverlay(true);
+                  }
+                } catch(e) { console.warn("SPX fetch failed:",e.message); }
+              }} style={{background:spxOverlay?"#ff9f1c14":"transparent",color:spxOverlay?"#ff9f1c":"#3a4050",border:spxOverlay?"1px solid #ff9f1c25":"1px solid #1c2128",borderRadius:4,padding:"2px 8px",fontSize:8,fontFamily:"monospace",marginLeft:8}}>
+                S&P 500
+              </button>
             </div>
             {/* Charts */}
             <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:8}}>
               <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:11}}>
                 <div style={{fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em",marginBottom:7}}>PREMIUM & PROFIT — {chartView.toUpperCase()} BY DATE {chartDate.toUpperCase()}</div>
                 <ResponsiveContainer width="100%" height={140}>
-                  <BarChart data={chartData} barGap={2} barSize={chartView==="monthly"?20:chartView==="weekly"?12:6}>
-                    <CartesianGrid strokeDasharray="2 4" stroke="#0d1117" vertical={false}/>
-                    <XAxis dataKey="label" tick={{fill:"#2a3040",fontSize:8,fontFamily:"monospace"}} axisLine={false} tickLine={false}/>
-                    <YAxis tick={{fill:"#2a3040",fontSize:8,fontFamily:"monospace"}} axisLine={false} tickLine={false} tickFormatter={v=>"$"+(v/1000).toFixed(0)+"k"}/>
-                    <Tooltip content={<ChartTip/>}/>
-                    <Bar dataKey="premium" name="Premium" fill="#58a6ff" radius={[2,2,0,0]} opacity={0.7}/>
-                    <Bar dataKey="profit"  name="Profit"  radius={[2,2,0,0]}>{chartData.map((e,i)=><Cell key={i} fill={e.profit>=0?"#00ff88":"#ff4560"} opacity={0.8}/>)}</Bar>
-                  </BarChart>
+                  {(()=>{
+                    const spxMap = Object.fromEntries(spxData.map(s=>[s.label,s.spxPct]));
+                    const mergedData = chartData.map(d=>({...d,spxPct:spxMap[d.key||d.label]??spxMap[d.label]??null}));
+                    const CChart = spxOverlay ? ComposedChart : BarChart;
+                    return (
+                      <CChart data={mergedData} barGap={2} barSize={chartView==="monthly"?20:chartView==="weekly"?12:6}>
+                        <CartesianGrid strokeDasharray="2 4" stroke="#0d1117" vertical={false}/>
+                        <XAxis dataKey="label" tick={{fill:"#2a3040",fontSize:8,fontFamily:"monospace"}} axisLine={false} tickLine={false}/>
+                        <YAxis yAxisId="left" tick={{fill:"#2a3040",fontSize:8,fontFamily:"monospace"}} axisLine={false} tickLine={false} tickFormatter={v=>"$"+(v/1000).toFixed(0)+"k"}/>
+                        {spxOverlay && <YAxis yAxisId="right" orientation="right" tick={{fill:"#ff9f1c60",fontSize:7,fontFamily:"monospace"}} axisLine={false} tickLine={false} tickFormatter={v=>(v>0?"+":"")+v.toFixed(0)+"%"}/>}
+                        <Tooltip content={<ChartTip/>}/>
+                        <Bar yAxisId="left" dataKey="premium" name="Premium" fill="#58a6ff" radius={[2,2,0,0]} opacity={0.7}/>
+                        <Bar yAxisId="left" dataKey="profit"  name="Profit"  radius={[2,2,0,0]}>{mergedData.map((e,i)=><Cell key={i} fill={e.profit>=0?"#00ff88":"#ff4560"} opacity={0.8}/>)}</Bar>
+                        {spxOverlay && <Line yAxisId="right" type="monotone" dataKey="spxPct" name="S&P 500 %" stroke="#ff9f1c" strokeWidth={2} dot={false} connectNulls/>}
+                      </CChart>
+                    );
+                  })()}
                 </ResponsiveContainer>
               </div>
               <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:11}}>
@@ -2779,7 +2823,14 @@ ${JSON.stringify(summary, null, 1)}`;
 
             {/* Period breakdown with notes */}
             <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8}} className="ms">
-              <div style={{padding:"7px 11px",fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em"}}>{analyticsView.toUpperCase()} BREAKDOWN — profit by {profitDateMode==="exec"?"open date":"close date"}</div>
+              <div style={{padding:"7px 11px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                <span style={{fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em"}}>{analyticsView.toUpperCase()} BREAKDOWN — profit by {profitDateMode==="exec"?"open date":"close date"}</span>
+                {analyticsView==="monthly" && (
+                  <button onClick={()=>setShowBalCols(v=>!v)} style={{fontSize:8,fontFamily:"monospace",padding:"2px 8px",borderRadius:3,border:"1px solid #21262d",cursor:"pointer",background:showBalCols?"#00ff8810":"transparent",color:showBalCols?"#00ff88":"#3a4050"}}>
+                    {showBalCols?"▼ Hide Balances":"▶ Show Balances"}
+                  </button>
+                )}
+              </div>
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                 <thead><tr>
                   <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Period</th>
@@ -2787,10 +2838,11 @@ ${JSON.stringify(summary, null, 1)}`;
                   <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Profit</th>
                   <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Margin</th>
                   <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Contracts</th>
-                  {analyticsView==="monthly" && <th style={{padding:"5px 8px",textAlign:"right",color:"#58a6ff",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Schwab $</th>}
-                  {analyticsView==="monthly" && <th style={{padding:"5px 8px",textAlign:"right",color:"#ffd166",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>ETrade $</th>}
-                  {analyticsView==="monthly" && <th style={{padding:"5px 8px",textAlign:"right",color:"#00ff88",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Total $</th>}
-                  {analyticsView==="monthly" && <th style={{padding:"5px 8px",textAlign:"right",color:"#c084fc",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>MoM%</th>}
+                  {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#58a6ff",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Schwab $</th>}
+                  {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#ffd166",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>ETrade $</th>}
+                  {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#00ff88",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Total $</th>}
+                  {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#c084fc",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>MoM%</th>}
+                  {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#ff9f1c",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>YTD%</th>}
                   {analyticsView!=="daily" && <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Notes</th>}
                 </tr></thead>
                 <tbody>
@@ -2804,22 +2856,34 @@ ${JSON.stringify(summary, null, 1)}`;
                         <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:m.profit>=0?"#00ff88":"#ff4560"}}>{fSign(m.profit)}</td>
                         <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:pp<0?"#ff4560":pp>=0.6?"#00ff88":pp>=0.3?"#ffd166":"#58a6ff"}}>{(pp*100).toFixed(1)}%</td>
                         <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#2a3040"}}>{m.contracts}</td>
-                        {analyticsView==="monthly" && (() => {
+                        {analyticsView==="monthly" && showBalCols && (() => {
                           const b = balHistoryInline?.[m.key] || {};
                           const schwab = b.schwab ?? (m.key===nowMonthKey&&liveSchwabInline ? liveSchwabInline : null);
                           const etrade = b.etrade ?? null;
                           const total  = schwab||etrade ? (schwab||0)+(etrade||0) : null;
+                          // MoM: compare to previous month in periodData
                           const allKeys = [...periodData].reverse().map(x=>x.key);
                           const prevKey = allKeys[allKeys.indexOf(m.key)-1];
                           const prevB = prevKey ? (balHistoryInline?.[prevKey]||{}) : {};
-                          const prevTotal = prevB.schwab||prevB.etrade ? (+prevB.schwab||0)+(+prevB.etrade||0) : null;
+                          const prevSchwab = prevB.schwab ?? null;
+                          const prevEtrade = prevB.etrade ?? null;
+                          const prevTotal = prevSchwab||prevEtrade ? (+prevSchwab||0)+(+prevEtrade||0) : null;
                           const mom = total&&prevTotal ? ((total-prevTotal)/prevTotal*100) : null;
-                          const fBal = v => v!=null ? "$"+(+v).toLocaleString("en-US",{maximumFractionDigits:0}) : "—";
+                          // YTD: compare to Jan 1 of same year
+                          const janKey = m.key.slice(0,4)+"-01";
+                          const janB = balHistoryInline?.[janKey] || {};
+                          const janSchwab = janB.schwab ?? null;
+                          const janEtrade = janB.etrade ?? null;
+                          const janTotal = janSchwab||janEtrade ? (+janSchwab||0)+(+janEtrade||0) : null;
+                          const ytd = total&&janTotal&&m.key!==janKey ? ((total-janTotal)/janTotal*100) : null;
+                          const fBal = v => v!=null ? "\$"+(+v).toLocaleString("en-US",{maximumFractionDigits:0}) : "—";
+                          const fPct = (v,col1,col2) => v!=null ? <span style={{color:v>0?col1:v<0?col2:"#3a4050"}}>{v>0?"+":""}{v.toFixed(1)}%</span> : "—";
                           return (<>
-                            <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:"#58a6ff"}}>{fBal(schwab)}</td>
+                            <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:"#58a6ff"}}>{fBal(schwab)}{b.schwabAuto&&<span style={{fontSize:7,color:"#00ff8860",marginLeft:3}}>●</span>}</td>
                             <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:"#ffd166"}}>{fBal(etrade)}</td>
                             <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:"#00ff88",fontWeight:700}}>{fBal(total)}</td>
-                            <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:mom>0?"#00ff88":mom<0?"#ff4560":"#3a4050"}}>{mom!=null?(mom>0?"+":"")+mom.toFixed(1)+"%":"—"}</td>
+                            <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11}}>{fPct(mom,"#00ff88","#ff4560")}</td>
+                            <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11}}>{fPct(ytd,"#ff9f1c","#ff4560")}</td>
                           </>);
                         })()}
                         {analyticsView!=="daily" && (
