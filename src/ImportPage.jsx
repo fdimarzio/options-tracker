@@ -12,11 +12,6 @@
 import { useState, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
 
-const supabase = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
-);
-
 // ── Strategies (keep in sync with main app) ───────────────────────────────────
 const STRATEGIES = [
   "Covered Call", "Cash-Secured Put", "Naked Call", "Naked Put",
@@ -262,7 +257,7 @@ function MatchModal({ closer, openContracts, onSelect, onClose }) {
 
 // ── Edit Opener Modal ─────────────────────────────────────────────────────────
 // Allows correcting qty (and other fields) on a mismatched DB opener record
-function EditOpenerModal({ contract, closer, onSave, onClose }) {
+function EditOpenerModal({ contract, closer, onSave, onClose, supabaseProp = null }) {
   const [qty,     setQty]     = useState(String(contract?.qty ?? ""));
   const [saving,  setSaving]  = useState(false);
   const [err,     setErr]     = useState(null);
@@ -273,7 +268,7 @@ function EditOpenerModal({ contract, closer, onSave, onClose }) {
     setSaving(true);
     setErr(null);
     try {
-      const supabase = createClient(
+      const supabase = supabaseProp ?? createClient(
         import.meta.env.VITE_SUPABASE_URL,
         import.meta.env.VITE_SUPABASE_ANON_KEY
       );
@@ -330,7 +325,12 @@ function EditOpenerModal({ contract, closer, onSave, onClose }) {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function ImportPage({ parallelRun = false, defaultDays = 30 }) {
+export default function ImportPage({ parallelRun = false, defaultDays = 30, supabaseClient = null }) {
+  // Use passed-in client (from main app) or create own as fallback
+  const supabase = supabaseClient ?? createClient(
+    import.meta.env.VITE_SUPABASE_URL,
+    import.meta.env.VITE_SUPABASE_ANON_KEY
+  );
   const [mode,         setMode]         = useState("config");   // config | loading | review | done
   const [testMode,     setTestMode]     = useState(true);
   const [rangeType,    setRangeType]    = useState("days");     // days | dates

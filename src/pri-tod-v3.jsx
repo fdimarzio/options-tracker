@@ -328,6 +328,12 @@ function CelebrationOverlay({profit, onDone}) {
 }
 
 // ── Main App ──────────────────────────────────────────────────────────────────
+// ── Import Tab wrapper ────────────────────────────────────────────────────────
+import ImportPageComponent from "./ImportPage.jsx";
+function ImportTab({ supabase }) {
+  return <ImportPageComponent parallelRun={true} defaultDays={1} supabaseClient={supabase} />;
+}
+
 export default function App() {
   // Auth
   const [users,setUsers]         = useState(USERS_DEFAULT);
@@ -2066,7 +2072,7 @@ ${JSON.stringify(summary, null, 1)}`;
           </div>
         </div>
         <div style={{display:"flex",gap:2,flex:1,justifyContent:"center"}}>
-          {["dashboard","contracts","analytics","plan","stocks"].map(n=>(
+          {["dashboard","contracts","analytics","plan","stocks","import"].map(n=>(
             <button key={n} onClick={()=>setTab(n)} style={{background:tab===n?"#00ff8814":"transparent",color:tab===n?"#00ff88":"#444",border:tab===n?"1px solid #00ff8825":"1px solid transparent",borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"monospace",letterSpacing:"0.05em",textTransform:"uppercase",whiteSpace:"nowrap"}}>{n}</button>
           ))}
         </div>
@@ -2229,7 +2235,7 @@ ${JSON.stringify(summary, null, 1)}`;
               const premColl  = openSTOs.reduce((s,c)=>s+(c.premium||0),0);
               const premPaid  = openBTOs.reduce((s,c)=>s+Math.abs(c.premium||0),0);
               // Current value from live chain data
-              const currVal   = openC.reduce((s,c)=>{const o=getOptionData(c);return s+(o?.mark!=null?(o.mark*(c.qty||1)*100):0);},0);
+              const currVal   = openC.reduce((s,c)=>{const o=findOptionForContract(etradeChains,c);return s+(o?.mark!=null?(o.mark*(c.qty||1)*100):0);},0);
               const unrealPL  = premColl - currVal;
               // Expiry buckets
               const thisWeek  = openC.filter(c=>c.expires&&c.expires<=fmt(endOfWeek));
@@ -4127,6 +4133,9 @@ ${JSON.stringify(summary, null, 1)}`;
           );
         })()}
 
+
+        {/* ══ IMPORT ══ */}
+        {tab==="import" && <ImportTab supabase={supabase} />}
 
       </div>
     </div>
