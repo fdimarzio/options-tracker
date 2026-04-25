@@ -807,12 +807,36 @@ export default function ImportPage() {
                               {t.matchedContract.stock} {t.matchedContract.strike} {t.matchedContract.expires?.slice(5)} ×{t.matchedContract.qty}
                             </div>
                           )}
-                          {/* Link / Change button */}
-                          <button
-                            onClick={e => { e.stopPropagation(); setMatchModal({ txIdx: t._idx }); }}
-                            style={{ fontSize: 10, background: "transparent", border: `1px solid ${C.border2}`, borderRadius: 3, color: C.muted, fontFamily: "monospace", padding: "2px 7px", cursor: "pointer", alignSelf: "flex-start" }}>
-                            {t.matchConfidence === "unmatched" ? "🔗 Link" : "✎ Change"}
-                          </button>
+                          {/* Link / Change + Copy Debug buttons */}
+                          <div style={{ display: "flex", gap: 4 }}>
+                            <button
+                              onClick={e => { e.stopPropagation(); setMatchModal({ txIdx: t._idx }); }}
+                              style={{ fontSize: 10, background: "transparent", border: `1px solid ${C.border2}`, borderRadius: 3, color: C.muted, fontFamily: "monospace", padding: "2px 7px", cursor: "pointer" }}>
+                              {t.matchConfidence === "unmatched" ? "🔗 Link" : "✎ Change"}
+                            </button>
+                            <button
+                              onClick={e => {
+                                e.stopPropagation();
+                                const debug = {
+                                  parsed: {
+                                    schwabTransactionId: t.schwabTransactionId,
+                                    stock: t.stock, type: t.type, optType: t.optType,
+                                    strike: t.strike, qty: t.qty, expires: t.expires,
+                                    premium: t.premium, dateExec: t.dateExec,
+                                    matchConfidence: t.matchConfidence, parentId: t.parentId,
+                                  },
+                                  raw: t._raw,
+                                };
+                                navigator.clipboard.writeText(JSON.stringify(debug, null, 2))
+                                  .then(() => {
+                                    e.target.textContent = "✓ copied";
+                                    setTimeout(() => { e.target.textContent = "⎘ debug"; }, 1500);
+                                  });
+                              }}
+                              style={{ fontSize: 10, background: "transparent", border: `1px solid ${C.border2}`, borderRadius: 3, color: C.dimText, fontFamily: "monospace", padding: "2px 7px", cursor: "pointer" }}>
+                              ⎘ debug
+                            </button>
+                          </div>
                         </div>
                       ) : (
                         <span style={{ color: C.dimText, fontSize: 11 }}>—</span>
