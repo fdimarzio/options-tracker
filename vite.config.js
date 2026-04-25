@@ -22,6 +22,19 @@ export default defineConfig(({ mode }) => {
 
     server: {
       proxy: {
+        "/schwab-dev": {
+          target: "https://api.schwabapi.com",
+          changeOrigin: true,
+          secure: true,
+          rewrite: (path) => path.replace(/^\/schwab-dev/, ""),
+          configure(proxy) {
+            proxy.on("proxyReq", (proxyReq) => {
+              const token = env.SCHWAB_ACCESS_TOKEN;
+              if (token) proxyReq.setHeader("Authorization", `Bearer ${token}`);
+              proxyReq.setHeader("Accept", "application/json");
+            });
+          },
+        },
         "/etrade": {
           target: "https://api.etrade.com",
           changeOrigin: true,
@@ -52,6 +65,14 @@ export default defineConfig(({ mode }) => {
               proxyReq.setHeader("Authorization", authHeader);
               proxyReq.setHeader("Accept", "application/json");
               console.log(`[etrade-proxy]   Auth: ${authHeader.slice(0, 80)}...`);
+              // Temporary: log full signature base for comparison with serverless
+              const _sb = (() => {
+                const _op = { oauth_consumer_key:env.VITE_ETRADE_CONSUMER_KEY||env.ETRADE_CONSUMER_KEY, oauth_token:env.VITE_ETRADE_ACCESS_TOKEN||env.ETRADE_ACCESS_TOKEN, oauth_signature_method:"HMAC-SHA1", oauth_timestamp:Math.floor(Date.now()/1000).toString(), oauth_nonce:"TESTNONCE123", oauth_version:"1.0" };
+                const _enc = s => encodeURIComponent(String(s??'')).replace(/[!'()*]/g,c=>'%'+c.charCodeAt(0).toString(16).toUpperCase());
+                const _ps = Object.entries(_op).map(([k,v])=>[_enc(k),_enc(String(v))]).sort(([a],[b])=>a<b?-1:1).map(([k,v])=>k+'='+v).join('&');
+                return ['GET',_enc(baseUrl),_enc(_ps)].join('&');
+              })();
+              console.log('[etrade-proxy] LOCAL signatureBase:', _sb.slice(0, 300));
             });
 
             proxy.on("proxyRes", (proxyRes, req) => {

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { fetchQuotes, fetchOpenPositionChains, findOptionForContract } from "./etrade.js";
+import { fetchQuotes, fetchOpenPositionChains, findOptionForContract, fetchPositions, schwabGet } from "./schwab.js";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { createClient } from "@supabase/supabase-js";
 
@@ -273,7 +273,7 @@ const KPI = ({label,value,sub,color="#00ff88"}) => (
   </div>
 );
 const FL = ({children,req}) => (
-  <div style={{fontSize:9,color:"#2a3040",fontFamily:"monospace",marginBottom:3,textTransform:"uppercase",letterSpacing:"0.06em"}}>
+  <div style={{fontSize:9,color:"#4a5568",fontFamily:"monospace",marginBottom:3,textTransform:"uppercase",letterSpacing:"0.06em"}}>
     {children}{req && <span style={{color:"#ff4560",marginLeft:2}}>*</span>}
   </div>
 );
@@ -499,6 +499,12 @@ export default function App() {
         // Load stocks data
         const { data: sdData } = await supabase.from("col_prefs").select("*").eq("id","stocks_data").single();
         if (sdData?.cols) setStocksData(sdData.cols);
+
+        // Load watchlist
+        try {
+          const { data: wlData } = await supabase.from("col_prefs").select("*").eq("id","watchlist").single();
+          if (wlData?.cols?.tickers) setWatchlist(wlData.cols.tickers);
+        } catch {}
 
         // Load period notes
         const { data: nData } = await supabase.from("period_notes").select("*");
@@ -749,7 +755,7 @@ export default function App() {
   // Stocks tab state
   const [stocksData, setStocksData] = useState({}); // {ticker: {sharesSchwab, sharesEtrade, currentPrice, earningsDate}}
   const [selectedTicker, setSelectedTicker] = useState(null);
-  const [stocksFilter, setStocksFilter] = useState("all"); // "all" | "owned"
+  const [stocksFilter, setStocksFilter] = useState("owned"); // "all" | "owned"
   const [showAddStock, setShowAddStock] = useState(false);
   const [addStockForm, setAddStockForm] = useState({ticker:"",schwabShares:"",etradeShares:"",price:"",earningsDate:""});
   const [stocksSortKey, setStocksSortKey] = useState("ticker");
@@ -773,6 +779,21 @@ export default function App() {
   const [aiLoading, setAiLoading] = useState(false);
   const aiEndRef = useRef(null);
 
+  // Watchlist helpers
+  const addToWatchlist = async (ticker) => {
+    const t = ticker.toUpperCase().trim();
+    if (!t || watchlist.includes(t)) return;
+    const updated = [...watchlist, t];
+    setWatchlist(updated);
+    try { await supabase.from("col_prefs").upsert({id:"watchlist", cols:{tickers:updated}, updated_at:new Date().toISOString()}); } catch {}
+  };
+  const removeFromWatchlist = async (ticker) => {
+    const updated = watchlist.filter(t => t !== ticker);
+    setWatchlist(updated);
+    if (selectedWatchTicker === ticker) setSelectedWatchTicker(null);
+    try { await supabase.from("col_prefs").upsert({id:"watchlist", cols:{tickers:updated}, updated_at:new Date().toISOString()}); } catch {}
+  };
+
   const updateStockData = async (ticker, field, value) => {
     const updated = {...stocksData, [ticker]: {...(stocksData[ticker]||{}), [field]: value}};
     setStocksData(updated);
@@ -784,6 +805,25 @@ export default function App() {
   const [etradeMsg, setEtradeMsg]             = useState("");
   const [etradeChains, setEtradeChains]       = useState({}); // { "TICKER|YYYY-MM-DD": {calls,puts} }
   const [etradeLastFetch, setEtradeLastFetch] = useState(null);
+  const [schwabPositions, setSchwabPositions]   = useState([]);
+  const [watchlist, setWatchlist]               = useState([]); // array of ticker strings
+  const [watchlistInput, setWatchlistInput]     = useState("");
+  const [stockContractFilter, setStockContractFilter] = useState("open"); // "open" | "all"
+  // Option chain controls — per ticker, stored as { [ticker]: { strikes: 5, dates: 3 } }
+  const [chainControls, setChainControls] = useState({});
+  const getChainControl = (ticker) => ({ strikes: 5, dates: 3, ...chainControls[ticker] });
+  const setChainControl = (ticker, key, val) => setChainControls(prev => ({ ...prev, [ticker]: { ...getChainControl(ticker), [key]: val } }));
+  const [selectedWatchTicker, setSelectedWatchTicker] = useState(null); // live stock positions from Schwab
+  // Load notifiedToday from localStorage (persists across reloads, resets daily)
+  const [notifiedToday, setNotifiedToday] = useState(() => {
+    try {
+      const stored = localStorage.getItem("notifiedToday");
+      if (!stored) return {};
+      const { date, keys } = JSON.parse(stored);
+      const today = new Date().toISOString().slice(0, 10);
+      return date === today ? keys : {}; // reset if it's a new day
+    } catch { return {}; }
+  });
 
   // Merge live quote prices into stocksData and persist
   const applyQuotesToStocksData = useCallback(async (quotes) => {
@@ -826,11 +866,44 @@ export default function App() {
         setEtradeMsg("No open contracts to refresh");
         return;
       }
+      // Fetch Schwab stock positions
+      setEtradeMsg("Fetching Schwab positions…");
+      try {
+        const { stocks, cash, accountValue } = await fetchPositions();
+        setSchwabPositions(stocks);
+        // Auto-populate stocksData with live position data
+        setStocksData(prev => {
+          const updated = { ...prev };
+          for (const pos of stocks) {
+            updated[pos.symbol] = {
+              ...(updated[pos.symbol] || {}),
+              sharesSchwab:  Math.round(pos.qty * 10000) / 10000,
+              currentPrice:  pos.marketValue / pos.qty,
+              avgPrice:      pos.avgPrice,
+              gainLoss:      pos.gainLoss,
+              gainLossPct:   pos.gainLossPct,
+              currentDayGL:  pos.currentDayGL,
+              currentDayGLPct: pos.currentDayGLPct,
+              lastQuoteAt:   new Date().toISOString(),
+            };
+          }
+          try { supabase.from("col_prefs").upsert({ id:"stocks_data", cols:updated, updated_at:new Date().toISOString() }); } catch {}
+          return updated;
+        });
+        // Update Schwab cash
+        if (cash > 0) updateCash("schwab", cash.toFixed(2));
+        console.log("[schwab] loaded", stocks.length, "positions, cash:", cash);
+      } catch (posErr) {
+        console.warn("[schwab] positions fetch failed:", posErr.message);
+      }
+
       setEtradeMsg("Fetching quotes for " + openTickers.length + " open ticker(s)…");
       const quotes = await fetchQuotes(openTickers);
       await applyQuotesToStocksData(quotes);
 
       // Stamp currentPrice (stock price) onto each open contract for ITM/OTM display
+      // Also fetch chains for watchlist tickers (using nearest expiries)
+      // We'll fetch for open contracts + watchlist combos
       const openContracts = originals.filter(c => c.status === "Open" && c.stock && c.expires);
       const updatedContracts = contracts.map(c => {
         if (c.status !== "Open" || !c.stock) return c;
@@ -853,10 +926,14 @@ export default function App() {
         }
       }
 
+
+      // Evaluate signals and send Pushover notifications
+      evaluateAndNotify(freshChains, updatedContracts).catch(console.warn);
+
       const now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       setEtradeLastFetch(now);
       setEtradeStatus("ok");
-      setEtradeMsg("Synced " + Object.keys(quotes).length + " quote(s) at " + now + (openContracts.length ? " · chains: sandbox limited" : ""));
+      setEtradeMsg("Synced " + Object.keys(quotes).length + " quote(s) at " + now);
     } catch (err) {
       console.error("[etrade] refresh error:", err);
       setEtradeStatus("error");
@@ -879,6 +956,93 @@ export default function App() {
     return findOptionForContract(etradeChains, contract);
   }, [etradeChains]);
 
+  // On-demand chain fetch for a specific ticker with controls
+  const fetchChainForTicker = useCallback(async (ticker, strikes = 5, dates = 3) => {
+    try {
+      const data = await schwabGet("/marketdata/v1/chains", {
+        symbol: ticker.toUpperCase(),
+        contractType: "ALL",
+        strikeCount: strikes * 2,  // above + below ATM
+      });
+      const calls = [], puts = [];
+      const allExpiries = [...new Set([
+        ...Object.keys(data?.callExpDateMap || {}),
+        ...Object.keys(data?.putExpDateMap  || {}),
+      ])].sort().slice(0, dates);  // take first N expiry dates
+
+      for (const expKey of allExpiries) {
+        const expDate = expKey.split(":")[0];
+        const cStrikes = data?.callExpDateMap?.[expKey] || {};
+        const pStrikes = data?.putExpDateMap?.[expKey]  || {};
+        for (const [, opts] of Object.entries(cStrikes)) for (const o of opts)
+          calls.push({ ticker, expiryDate:expDate, type:"Call", strike:o.strikePrice, bid:o.bid, ask:o.ask, last:o.last??o.mark??null, volume:o.totalVolume, openInterest:o.openInterest, iv:o.volatility, delta:o.delta, gamma:o.gamma, theta:o.theta, vega:o.vega, inTheMoney:o.inTheMoney });
+        for (const [, opts] of Object.entries(pStrikes)) for (const o of opts)
+          puts.push({ ticker, expiryDate:expDate, type:"Put", strike:o.strikePrice, bid:o.bid, ask:o.ask, last:o.last??o.mark??null, volume:o.totalVolume, openInterest:o.openInterest, iv:o.volatility, delta:o.delta, gamma:o.gamma, theta:o.theta, vega:o.vega, inTheMoney:o.inTheMoney });
+      }
+      setEtradeChains(prev => ({ ...prev, [`${ticker.toUpperCase()}|live`]: { calls, puts, fetchedAt: Date.now() } }));
+    } catch(e) { console.warn("[schwab] chain fetch failed:", ticker, e.message); }
+  }, []);
+
+  // Signal evaluation + Pushover notifications
+  const evaluateAndNotify = useCallback(async (freshChains, freshContracts) => {
+    const signals = [];
+    for (const c of freshContracts) {
+      if (c.status !== "Open" || !c.stock) continue;
+      const bd  = getContractBand(c);
+      if (!bd) continue;
+      const lo   = findOptionForContract(freshChains, c);
+      const last = lo?.last ?? lo?.mark ?? lo?.bid ?? null;
+      if (last == null || !c.premium) continue;
+      const mv      = (c.qty||1) * last * 100;
+      const prem    = Math.abs(c.premium);
+      const gain    = c.optType==="BTO" ? mv - prem : prem - mv;
+      const gainPct = prem > 0 ? (gain/prem)*100 : 0;
+      const target  = bd.targetClose;
+      if (gain >= target) {
+        signals.push({ contract:`${c.stock} ${c.expires} $${c.strike} ${c.type}`, type:"TARGET_HIT", gainPct, gainDollar:gain, targetClose:target, mktValue:mv, qty:c.qty });
+      } else if (gainPct >= 90 && c.qty > 1) {
+        const perC = prem/(c.qty||1), gainPerU = gain/(c.qty||1);
+        const pq   = gainPerU > 0 ? Math.ceil(perC/gainPerU) : null;
+        if (pq && pq < c.qty) signals.push({ contract:`${c.stock} ${c.expires} $${c.strike} ${c.type}`, type:"PARTIAL_CLOSE", gainPct, gainDollar:gain, targetClose:target, mktValue:mv, qty:c.qty, partialQty:pq });
+      } else if (gain >= target * 0.75) {
+        signals.push({ contract:`${c.stock} ${c.expires} $${c.strike} ${c.type}`, type:"APPROACHING_TARGET", gainPct, gainDollar:gain, targetClose:target, mktValue:mv, qty:c.qty });
+      }
+    }
+    if (!signals.length) return;
+    // Deduplicate — one signal per unique contract string
+    const seen = new Set();
+    const unique = signals.filter(s => {
+      if (seen.has(s.contract)) return false;
+      seen.add(s.contract);
+      return true;
+    });
+    // Filter out contracts already notified today
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const toSend = unique.filter(s => {
+      const key = s.contract + "|" + todayKey;
+      return !notifiedToday[key];
+    });
+    if (!toSend.length) {
+      console.log("[notify] all signals already sent today, skipping");
+      return;
+    }
+    try {
+      const r    = await fetch("/api/notify", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({signals: toSend}) });
+      const data = await r.json();
+      if (data.sent > 0) {
+        console.log("[notify] sent", data.sent, "signal(s):", data.contracts);
+        // Mark as notified today so we don't re-send on next refresh
+        const todayKey2 = new Date().toISOString().slice(0, 10);
+        setNotifiedToday(prev => {
+          const updated = { ...prev };
+          for (const s of toSend) updated[s.contract + "|" + todayKey2] = true;
+          // Persist to localStorage so it survives page reloads
+          try { localStorage.setItem("notifiedToday", JSON.stringify({ date: todayKey2, keys: updated })); } catch {}
+          return updated;
+        });
+      }
+    } catch (err) { console.warn("[notify] failed:", err.message); }
+  }, [getContractBand, notifiedToday]);
 
   // Chart data builder
   const mkChartData = (list, view, dateField) => {
@@ -1068,11 +1232,13 @@ export default function App() {
     const isPartial = qtyToClose < orig.qty;
     // Prorate premium for partial close
     const qtyRatio = qtyToClose / orig.qty;
+    // proratedPremium = portion of original premium for the qty being closed
     const proratedPremium = orig.premium * qtyRatio;
-    const proratedCTC = ctc * qtyRatio; // ctc entered as total for qty being closed
+    // ctc is entered as the TOTAL cost for the qty being closed (not per contract)
+    // so we use ctc directly, not multiplied by qtyRatio again
     const profit = isBTO
-      ? +(proratedCTC - Math.abs(proratedPremium)).toFixed(2)
-      : +(Math.abs(proratedPremium) - ctc).toFixed(2);
+      ? +(ctc - Math.abs(proratedPremium)).toFixed(2)   // BTO: sold for ctc, paid proratedPremium
+      : +(Math.abs(proratedPremium) - ctc).toFixed(2);  // STO: received proratedPremium, paid ctc to close
     const basis = Math.abs(proratedPremium);
     const profitPct = basis > 0 ? +(profit / basis).toFixed(4) : 0;
     const daysHeld = orig.dateExec && closeForm.closeDate ? Math.round((new Date(closeForm.closeDate)-new Date(orig.dateExec))/86400000) : null;
@@ -1147,8 +1313,17 @@ export default function App() {
   // Plan
   const openPlanForm = (ticker, prefill={}) => {
     const d = tickerDefaults(ticker);
-    setPlanForm({ticker,action:prefill.action||"STO",type:prefill.type||"Call",qty:prefill.qty||d.qty||1,strike:prefill.strike||"",expiration:prefill.expiration||nextExpiry(ticker)||"",account:prefill.account||d.account||"",premium:"",stockPrice:"",bid:"",ask:"",last:"",targetPremium:"",notes:prefill.notes||""});
+    const defQty = defaultQtyForTicker(ticker);
+    setPlanForm({ticker,action:prefill.action||"STO",type:prefill.type||"Call",qty:prefill.qty||d.qty||defQty,strike:prefill.strike||"",expiration:prefill.expiration||nextExpiry(ticker)||"",account:prefill.account||d.account||"",premium:"",stockPrice:"",bid:"",ask:"",last:"",targetPremium:"",notes:prefill.notes||""});
   };
+  // Get default qty for plan based on Schwab shares (shares / 100, min 1)
+  const defaultQtyForTicker = (ticker) => {
+    const pos = schwabPositions.find(p => p.symbol === ticker?.toUpperCase());
+    const sd  = stocksData[ticker?.toUpperCase()] || {};
+    const shares = pos?.qty ?? sd.sharesSchwab ?? 0;
+    return Math.max(1, Math.floor(shares / 100));
+  };
+
   const savePlan = () => {
     if (!planForm?.action) return;
     // Dedupe: don't add if identical ticker+action+strike+expiration+account already exists as open
@@ -1853,7 +2028,7 @@ ${JSON.stringify(summary, null, 1)}`;
           </div>
         </div>
         <div style={{display:"flex",gap:2,flex:1,justifyContent:"center"}}>
-          {["dashboard","contracts","analytics","plan"].map(n=>(
+          {["dashboard","contracts","analytics","plan","stocks"].map(n=>(
             <button key={n} onClick={()=>setTab(n)} style={{background:tab===n?"#00ff8814":"transparent",color:tab===n?"#00ff88":"#444",border:tab===n?"1px solid #00ff8825":"1px solid transparent",borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"monospace",letterSpacing:"0.05em",textTransform:"uppercase",whiteSpace:"nowrap"}}>{n}</button>
           ))}
         </div>
@@ -1869,7 +2044,6 @@ ${JSON.stringify(summary, null, 1)}`;
                 {[
                   {label:"Profile",      icon:"👤", fn:()=>{setShowProfile(true);setShowMenu(false);}},
                   {label:"Team",         icon:"👥", fn:()=>{setShowTeam(true);setShowMenu(false);}},
-                  {label:"Stocks",       icon:"📈", fn:()=>{setTab("stocks");setShowMenu(false);}},
                   {label:"Strategies",   icon:"♟",  fn:()=>{setTab("strategies");setShowMenu(false);}},
                   {label:"Profit Bands", icon:"🎯", fn:()=>{setShowBands(true);setShowMenu(false);}},
                   {label:"OTM/DTE Matrix",icon:"📐",fn:()=>{setShowMatrix(true);setShowMenu(false);}},
@@ -2132,7 +2306,7 @@ ${JSON.stringify(summary, null, 1)}`;
                 <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:10}}>
                   <div style={{width:5,height:5,borderRadius:"50%",background:"#00ff88"}}/>
                   <span style={{fontFamily:"monospace",fontSize:10,color:"#00ff88",letterSpacing:"0.07em"}}>{editing?"EDIT CONTRACT":"NEW CONTRACT"}</span>
-                  <span style={{fontSize:9,color:"#3a4050",fontFamily:"monospace",marginLeft:4}}>* required</span>
+                  <span style={{fontSize:9,color:"#58a6ff60",fontFamily:"monospace",marginLeft:4}}>* required</span>
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(125px,1fr))",gap:7}}>
                   <div><FL req>Ticker</FL><input type="text" value={form.stock||""} autoComplete="off" spellCheck="false" className={formErrors.stock?"err":""} style={{textTransform:"uppercase"}} onChange={e=>{const t=e.target.value.toUpperCase();const d=tickerDefaults(t);setForm(p=>({...p,stock:t,expires:nextExpiry(t)||p.expires||"",account:d.account||p.account||"",qty:d.qty||p.qty||""}));}} placeholder=""/></div>
@@ -2188,7 +2362,7 @@ ${JSON.stringify(summary, null, 1)}`;
                   <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:10}}>
                     <div style={{width:5,height:5,borderRadius:"50%",background:"#ffd166"}}/>
                     <span style={{fontFamily:"monospace",fontSize:10,color:"#ffd166",letterSpacing:"0.07em"}}>CLOSE CONTRACT — {closeLabel}</span>
-                    {orig && <span style={{fontSize:10,color:"#555",fontFamily:"monospace"}}>{fTitle(orig)} — opened at <span style={{color:"#58a6ff"}}>{fMoney(orig.premium)}</span></span>}
+                    {orig && <span style={{fontSize:10,color:"#8b949e",fontFamily:"monospace"}}>{fTitle(orig)} — opened at <span style={{color:"#58a6ff"}}>{fMoney(orig.premium)}</span></span>}
                   </div>
                   <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(135px,1fr))",gap:7,marginBottom:9}}>
                     {orig && orig.qty > 1 && <div><FL>Qty to Close (of {orig.qty})</FL><input type="number" min={1} max={orig.qty} value={closeForm.qtyToClose||orig.qty} onChange={e=>setCloseForm(p=>({...p,qtyToClose:Math.min(orig.qty,Math.max(1,+e.target.value||1))}))} /></div>}
@@ -2200,9 +2374,9 @@ ${JSON.stringify(summary, null, 1)}`;
                   <div style={{marginBottom:9}}><FL>Notes</FL><textarea rows={2} value={closeForm.notes||""} onChange={e=>setCloseForm(p=>({...p,notes:e.target.value}))} style={{resize:"vertical"}}/></div>
                   {orig && ctc>0 && (
                     <div style={{display:"flex",gap:14,padding:"7px 11px",background:"#080c12",borderRadius:6,marginBottom:9,fontFamily:"monospace",fontSize:11}}>
-                      <span style={{color:"#555"}}>Profit: <span style={{color:ep>=0?"#00ff88":"#ff4560",fontWeight:700}}>{fSign(ep)}</span></span>
-                      <span style={{color:"#555"}}>Return: <span style={{color:ep>=0?"#00ff88":"#ff4560",fontWeight:700}}>{epct}%</span></span>
-                      {ed!=null && <span style={{color:"#555"}}>Days: <span style={{color:"#888"}}>{ed}</span></span>}
+                      <span style={{color:"#8b949e"}}>Profit: <span style={{color:ep>=0?"#00ff88":"#ff4560",fontWeight:700}}>{fSign(ep)}</span></span>
+                      <span style={{color:"#8b949e"}}>Return: <span style={{color:ep>=0?"#00ff88":"#ff4560",fontWeight:700}}>{epct}%</span></span>
+                      {ed!=null && <span style={{color:"#8b949e"}}>Days: <span style={{color:"#888"}}>{ed}</span></span>}
                       <span style={{fontSize:16}}>{ep>=0?"🪙":"📉"}</span>
                     </div>
                   )}
@@ -2260,8 +2434,27 @@ ${JSON.stringify(summary, null, 1)}`;
                             case "premium":     return <td key="premium" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:c.premium<0?"#ff4560":"#58a6ff"}}>{fMoney(c.premium)}</td>;
                             case "costToClose": return <td key="costToClose" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#2a3040"}}>{c.costToClose!=null?fMoney(c.costToClose):"—"}</td>;
                             case "closeDate":   return <td key="closeDate" style={{padding:"5px 8px",fontFamily:"monospace",fontSize:10,color:"#555"}}>{c.closeDate||"—"}</td>;
-                            case "profit":  return <td key="profit" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11}}>{c.profit!=null?<span style={{color:c.profit>=0?"#00ff88":"#ff4560"}}>{fSign(c.profit)}</span>:<span style={{color:"#1c2128"}}>—</span>}</td>;
-                            case "profitPct": return <td key="profitPct" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11}}>{c.profitPct!=null?<span style={{color:c.profitPct>=0?"#00ff88":"#ff4560"}}>{(c.profitPct*100).toFixed(1)}%</span>:<span style={{color:"#1c2128"}}>—</span>}</td>;
+                            case "profit": {
+                              // For STO parent: find profit from linked BTC/STC child
+                              const closeChild = c.profit == null
+                                ? contracts.find(x => x.parentId === c.id && x.profit != null)
+                                : null;
+                              const displayProfit = c.profit ?? closeChild?.profit ?? null;
+                              const displayPct    = c.profitPct ?? closeChild?.profitPct ?? null;
+                              return <td key="profit" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11}}>
+                                {displayProfit!=null
+                                  ? <><span style={{color:displayProfit>=0?"#00ff88":"#ff4560"}}>{fSign(displayProfit)}</span>
+                                      {displayPct!=null && <span style={{fontSize:8,color:displayProfit>=0?"#00ff8870":"#ff456070",marginLeft:3}}>{(displayPct*100).toFixed(1)}%</span>}</>
+                                  : <span style={{color:"#1c2128"}}>—</span>}
+                              </td>;
+                            }
+                            case "profitPct": {
+                              const closeChild2 = c.profitPct == null ? contracts.find(x => x.parentId === c.id && x.profitPct != null) : null;
+                              const pct = c.profitPct ?? closeChild2?.profitPct ?? null;
+                              return <td key="profitPct" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11}}>
+                                {pct!=null ? <span style={{color:pct>=0?"#00ff88":"#ff4560"}}>{(pct*100).toFixed(1)}%</span> : <span style={{color:"#1c2128"}}>—</span>}
+                              </td>;
+                            }
                             case "daysHeld": return <td key="daysHeld" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#555",fontSize:11}}>{c.daysHeld!=null?c.daysHeld:"—"}</td>;
                             case "account": return <td key="account" style={{padding:"5px 8px"}}><Tag color={c.account==="Schwab"?"blue":"amber"}>{c.account}</Tag></td>;
                             case "status":  return <td key="status" style={{padding:"5px 8px"}}><Tag color={c.status==="Open"?"green":"gray"}>{c.status}</Tag></td>;
@@ -2679,45 +2872,167 @@ ${JSON.stringify(summary, null, 1)}`;
         {/* ══ PLAN ══ */}
         {tab==="plan" && (
           <div style={{display:"flex",flexDirection:"column",gap:9}}>
-            {/* Ticker cards */}
+            {/* Watchlist */}
             <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:11}}>
-              <div style={{fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em",marginBottom:9}}>TICKER CARDS — tap to add to plan</div>
-              <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-                {knownTickers.map(t=>{
-                  const sd = stocksData[t.ticker] || {};
-                  const sharesOwned = (sd.schwabShares||0) + (sd.etradeShares||0);
-                  const hasOpenCall = openC.some(c=>c.stock?.toUpperCase()===t.ticker&&c.type==="Call");
-                  const isOwned = sharesOwned > 0;
-                  const borderColor = isOwned && !hasOpenCall ? "#00ff88" : isOwned && hasOpenCall ? "#ffd166" : "#21262d";
-                  const bg = isOwned && !hasOpenCall ? "#00ff8808" : isOwned && hasOpenCall ? "#ffd16608" : "#080c12";
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:9}}>
+                <span style={{fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em"}}>WATCHLIST</span>
+                <span style={{fontSize:8,color:"#3a4050",fontFamily:"monospace"}}>— click ticker to view details · click ✕ to remove</span>
+              </div>
+              {/* Watchlist tickers */}
+              <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:9}}>
+                {watchlist.map(t => {
+                  const sd  = stocksData[t] || {};
+                  const pos = schwabPositions.find(p => p.symbol === t);
+                  const chg = sd.changeClose;
                   return (
-                    <button key={t.ticker} onClick={()=>openPlanForm(t.ticker)}
-                      title={isOwned?`${sharesOwned} shares owned${hasOpenCall?" · covered call outstanding":""}` : ""}
-                      style={{background:bg,border:`1px solid ${borderColor}`,borderRadius:5,padding:"3px 7px",cursor:"pointer",display:"flex",alignItems:"center",gap:4}}>
-                      <span style={{fontFamily:"monospace",fontWeight:700,color:"#e6edf3",fontSize:11}}>{t.ticker}</span>
-                      {t.open>0 && <span style={{background:"#00ff8820",color:"#00ff88",border:"1px solid #00ff8830",borderRadius:8,fontSize:8,fontFamily:"monospace",padding:"0 3px"}}>{t.open}</span>}
-                      {isOwned && !hasOpenCall && (<span style={{fontSize:8,color:"#00ff88",fontFamily:"monospace"}}>CC</span>)}
-                      {isOwned && hasOpenCall  && (<span style={{fontSize:8,color:"#ffd166",fontFamily:"monospace"}}>★</span>)}
-                    </button>
+                    <div key={t} style={{display:"flex",alignItems:"center",gap:3,background:"#080c12",border:"1px solid #21262d",borderRadius:6,padding:"4px 8px"}}>
+                      <button onClick={()=>setSelectedWatchTicker(selectedWatchTicker===t?null:t)}
+                        style={{background:"none",border:"none",cursor:"pointer",padding:0,display:"flex",flexDirection:"column",alignItems:"flex-start",gap:1}}>
+                        <span style={{fontFamily:"monospace",fontWeight:700,color:"#e6edf3",fontSize:12}}>{t}</span>
+                        {sd.currentPrice && (
+                          <span style={{fontSize:9,fontFamily:"monospace",color:chg!=null?(chg>=0?"#00ff88":"#ff4560"):"#555"}}>
+                            {f$(sd.currentPrice)}{chg!=null?(" "+(chg>=0?"+":"")+f$(chg)):""}
+                          </span>
+                        )}
+                        {sd.earningsDate && sd.earningsDate >= TODAY && (
+                          <span style={{fontSize:8,color:"#ffd166",fontFamily:"monospace"}}>⚡ {sd.earningsDate}</span>
+                        )}
+                      </button>
+                      <button onClick={()=>removeFromWatchlist(t)}
+                        style={{background:"none",border:"none",color:"#3a4050",cursor:"pointer",fontSize:10,padding:"0 2px",lineHeight:1}}>✕</button>
+                    </div>
                   );
                 })}
-                {knownTickers.length===0 && <span style={{color:"#2a3040",fontSize:10,fontFamily:"monospace"}}>Import history to see tickers</span>}
+                {watchlist.length===0 && <span style={{color:"#2a3040",fontSize:10,fontFamily:"monospace"}}>Add tickers below to watch</span>}
               </div>
-              <div style={{display:"flex",gap:10,marginTop:7,flexWrap:"wrap"}}>
-                <span style={{fontSize:8,color:"#3a4050",fontFamily:"monospace"}}>Legend:</span>
-                <span style={{fontSize:8,color:"#00ff88",fontFamily:"monospace"}}>■ CC = shares owned, no open call (available for covered call)</span>
-                <span style={{fontSize:8,color:"#ffd166",fontFamily:"monospace"}}>■ ★ = shares owned + open call outstanding</span>
-                <span style={{fontSize:8,color:"#555",fontFamily:"monospace"}}>■ no color = no shares tracked</span>
-              </div>
-              {/* Add any ticker to plan */}
-              <div style={{marginTop:9,display:"flex",gap:6,alignItems:"center"}}>
-                <input type="text" placeholder="Add any ticker…" id="planFreeTicker"
-                  style={{width:110,fontSize:11,padding:"4px 7px",textTransform:"uppercase"}}
-                  onKeyDown={e=>{if(e.key==="Enter"&&e.target.value.trim()){openPlanForm(e.target.value.trim().toUpperCase());e.target.value="";}}}/>
-                <button onClick={()=>{const el=document.getElementById("planFreeTicker");if(el?.value.trim()){openPlanForm(el.value.trim().toUpperCase());el.value="";}}}
+              {/* Add to watchlist */}
+              <div style={{display:"flex",gap:6,alignItems:"center",marginBottom: selectedWatchTicker ? 11 : 0}}>
+                <input value={watchlistInput} onChange={e=>setWatchlistInput(e.target.value.toUpperCase())}
+                  onKeyDown={e=>{if(e.key==="Enter"&&watchlistInput.trim()){addToWatchlist(watchlistInput);setWatchlistInput("");}}}
+                  placeholder="Add ticker…" style={{width:110,fontSize:11,padding:"4px 7px",textTransform:"uppercase"}}/>
+                <button onClick={()=>{if(watchlistInput.trim()){addToWatchlist(watchlistInput);setWatchlistInput("");}}}
+                  style={{background:"#58a6ff14",color:"#58a6ff",border:"1px solid #58a6ff30",borderRadius:5,padding:"4px 10px",fontSize:10,fontFamily:"monospace"}}>+ Watch</button>
+                <button onClick={()=>{const t=watchlistInput.trim();if(t){openPlanForm(t);}}}
                   style={{background:"#00ff8814",color:"#00ff88",border:"1px solid #00ff8830",borderRadius:5,padding:"4px 10px",fontSize:10,fontFamily:"monospace"}}>+ Plan</button>
-                <span style={{fontSize:8,color:"#2a3040",fontFamily:"monospace"}}>any ticker, even if not in history</span>
               </div>
+              {/* Watchlist detail — same as stocks detail */}
+              {selectedWatchTicker && (() => {
+                const sd  = stocksData[selectedWatchTicker] || {};
+                const pos = schwabPositions.find(p => p.symbol === selectedWatchTicker);
+                const openContracts = originals.filter(c => c.status==="Open" && c.stock?.toUpperCase()===selectedWatchTicker);
+                const chain = etradeChains[selectedWatchTicker] || null;
+                // Get all chain entries for this ticker
+                const chainKeys = Object.keys(etradeChains).filter(k => k.startsWith(selectedWatchTicker+"|"));
+                const allCalls = chainKeys.flatMap(k => etradeChains[k]?.calls || []);
+                const allPuts  = chainKeys.flatMap(k => etradeChains[k]?.puts  || []);
+                return (
+                  <div style={{background:"#080c12",border:"1px solid #21262d",borderRadius:7,padding:11,animation:"fadeIn .15s"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+                      <span style={{fontFamily:"monospace",fontWeight:700,color:"#e6edf3",fontSize:16}}>{selectedWatchTicker}</span>
+                      {sd.currentPrice && <span style={{fontFamily:"monospace",fontSize:14,color:"#c9d1d9",fontWeight:600}}>{f$(sd.currentPrice)}</span>}
+                      {sd.changeClose!=null && <span style={{fontSize:11,fontFamily:"monospace",fontWeight:700,color:sd.changeClose>=0?"#00ff88":"#ff4560"}}>{sd.changeClose>=0?"+":""}{f$(sd.changeClose)} ({sd.changePct!=null?(sd.changePct*100).toFixed(2)+"%":""})</span>}
+                      {sd.earningsDate && <span style={{fontSize:9,fontFamily:"monospace",padding:"2px 7px",borderRadius:3,background:sd.earningsDate>=TODAY?"#ffd16620":"#1c2128",color:sd.earningsDate>=TODAY?"#ffd166":"#3a4050",border:`1px solid ${sd.earningsDate>=TODAY?"#ffd16640":"#21262d"}`}}>{sd.earningsDate>=TODAY?"⚡ Earnings ":""}{sd.earningsDate}</span>}
+                      {sd.bid && <span style={{fontSize:9,color:"#555",fontFamily:"monospace"}}>b:{f$(sd.bid)} a:{f$(sd.ask)}</span>}
+                    </div>
+                    {/* Schwab position if owned */}
+                    {pos && (
+                      <div style={{display:"flex",gap:12,marginBottom:10,flexWrap:"wrap"}}>
+                        {[["Shares",pos.qty],["Avg Cost",f$(pos.avgPrice)],["Mkt Value",f$(pos.marketValue)],["Gain",`${pos.gainLoss>=0?"+":""}${f$(pos.gainLoss)} (${pos.gainLossPct.toFixed(1)}%)`],["Day",`${pos.currentDayGL>=0?"+":""}${f$(pos.currentDayGL)}`]].map(([lbl,val])=>(
+                          <div key={lbl} style={{display:"flex",flexDirection:"column",gap:2}}>
+                            <span style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.06em"}}>{lbl.toUpperCase()}</span>
+                            <span style={{fontSize:11,fontFamily:"monospace",color:"#c9d1d9"}}>{val}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {/* Open contracts */}
+                    {openContracts.length > 0 && (
+                      <div style={{marginBottom:10}}>
+                        <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.06em",marginBottom:5}}>OPEN CONTRACTS</div>
+                        {openContracts.map(c => {
+                          const lo = getLiveOption(c);
+                          return (
+                            <div key={c.id} style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",fontSize:10,fontFamily:"monospace",color:"#888",padding:"3px 0",borderTop:"1px solid #1c2128"}}>
+                              <span style={{color:"#e6edf3",fontWeight:700}}>{fTitle(c)}</span>
+                              <span>qty:{c.qty}</span>
+                              {lo && <><span style={{color:"#00ff88"}}>b:{f$(lo.bid)}</span><span style={{color:"#58a6ff"}}>a:{f$(lo.ask)}</span><span>last:{f$(lo.last)}</span></>}
+                              {lo?.delta && <span style={{color:"#58a6ff"}}>Δ{lo.delta.toFixed(3)}</span>}
+                              {lo?.iv && <span style={{color:"#c084fc"}}>IV{lo.iv.toFixed(1)}%</span>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {/* Option chain — on demand with controls */}
+                    {(() => {
+                      const wCtrl = getChainControl(selectedWatchTicker);
+                      const wKey = `${selectedWatchTicker}|live`;
+                      const wChain = etradeChains[wKey];
+                      const wCalls = wChain?.calls || allCalls;
+                      const wPuts  = wChain?.puts  || allPuts;
+                      const wBtnStyle = (active) => ({fontSize:8,fontFamily:"monospace",padding:"2px 6px",borderRadius:3,border:"1px solid #21262d",cursor:"pointer",background:active?"#58a6ff20":"transparent",color:active?"#58a6ff":"#3a4050"});
+                      return (
+                      <div>
+                        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6,flexWrap:"wrap"}}>
+                          <span style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.06em"}}>OPTION CHAIN</span>
+                          <span style={{fontSize:7,color:"#3a4050",fontFamily:"monospace"}}>±</span>
+                          {[3,5,7,10].map(n=><button key={n} onClick={()=>{setChainControl(selectedWatchTicker,"strikes",n);fetchChainForTicker(selectedWatchTicker,n,wCtrl.dates);}} style={wBtnStyle(wCtrl.strikes===n)}>{n}</button>)}
+                          <span style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",marginLeft:4}}>dates</span>
+                          {[3,5,7,10].map(n=><button key={n} onClick={()=>{setChainControl(selectedWatchTicker,"dates",n);fetchChainForTicker(selectedWatchTicker,wCtrl.strikes,n);}} style={wBtnStyle(wCtrl.dates===n)}>{n}</button>)}
+                          <button onClick={()=>fetchChainForTicker(selectedWatchTicker,wCtrl.strikes,wCtrl.dates)} style={{fontSize:8,padding:"2px 8px",borderRadius:3,border:"1px solid #58a6ff30",cursor:"pointer",background:"#58a6ff14",color:"#58a6ff",fontFamily:"monospace"}}>⟳</button>
+                        </div>
+                        {wCalls.length === 0 && wPuts.length === 0 && <div style={{fontSize:9,color:"#3a4050",fontFamily:"monospace"}}>Click ⟳ to fetch chain</div>}
+                        {(wCalls.length > 0 || wPuts.length > 0) &&
+                        ((() => {
+                          const allOpts = [...wCalls,...wPuts];
+                          const expiries = [...new Set(allOpts.map(o=>o.expiryDate))].sort();
+                          const thS = {padding:"3px 5px",textAlign:"right",color:"#3a4050",borderBottom:"1px solid #1c2128",fontSize:7};
+                          return expiries.map(exp => {
+                            const cs = wCalls.filter(o=>o.expiryDate===exp).sort((a,b)=>a.strike-b.strike);
+                            const ps = wPuts.filter(o=>o.expiryDate===exp).sort((a,b)=>a.strike-b.strike);
+                            const strikes = [...new Set([...cs.map(o=>o.strike),...ps.map(o=>o.strike)])].sort((a,b)=>a-b);
+                            const cm = Object.fromEntries(cs.map(o=>[o.strike,o]));
+                            const pm = Object.fromEntries(ps.map(o=>[o.strike,o]));
+                            return (
+                              <div key={exp} style={{marginBottom:8}}>
+                                <div style={{padding:"3px 6px",fontSize:8,color:"#58a6ff",fontFamily:"monospace",background:"#58a6ff10"}}>{exp}</div>
+                                <div style={{overflowX:"auto"}}>
+                                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:8,fontFamily:"monospace"}}>
+                                    <thead><tr>
+                                      <th style={{...thS,color:"#00ff8870"}}>Bid</th><th style={{...thS,color:"#00ff8870"}}>Ask</th><th style={{...thS,color:"#00ff8870"}}>Δ</th>
+                                      <th style={{...thS,color:"#ffd166",textAlign:"center",background:"#0d1117"}}>STRIKE</th>
+                                      <th style={{...thS,color:"#ff456070"}}>Δ</th><th style={{...thS,color:"#ff456070"}}>Ask</th><th style={{...thS,color:"#ff456070"}}>Bid</th>
+                                    </tr></thead>
+                                    <tbody>
+                                      {strikes.map(s=>{
+                                        const c=cm[s]; const p=pm[s];
+                                        const wAddCall = () => { openPlanForm(selectedWatchTicker, {action:"STO",type:"Call",strike:s,expiration:exp}); setTab("plan"); };
+                                      const wAddPut  = () => { openPlanForm(selectedWatchTicker, {action:"STO",type:"Put", strike:s,expiration:exp}); setTab("plan"); };
+                                      return <tr key={s} style={{borderTop:"1px solid #0d1117"}}>
+                                          <td onClick={c?wAddCall:undefined} style={{padding:"2px 5px",textAlign:"right",color:"#00ff88",cursor:c?"pointer":"default",userSelect:"none"}} title={c?"Add Call to plan":undefined}>{c?.bid!=null?`${f$(c.bid)} +`:"—"}</td>
+                                          <td style={{padding:"2px 5px",textAlign:"right",color:"#58a6ff"}}>{c?.ask!=null?f$(c.ask):"—"}</td>
+                                          <td style={{padding:"2px 5px",textAlign:"right",color:"#58a6ff"}}>{c?.delta!=null?c.delta.toFixed(2):"—"}</td>
+                                          <td style={{padding:"2px 5px",textAlign:"center",fontWeight:700,color:"#ffd166",background:"#0d1117"}}>{f$(s)}</td>
+                                          <td style={{padding:"2px 5px",textAlign:"right",color:"#ff4560"}}>{p?.delta!=null?p.delta.toFixed(2):"—"}</td>
+                                          <td style={{padding:"2px 5px",textAlign:"right",color:"#58a6ff"}}>{p?.ask!=null?f$(p.ask):"—"}</td>
+                                          <td onClick={p?wAddPut:undefined} style={{padding:"2px 5px",textAlign:"right",color:"#ff4560",cursor:p?"pointer":"default",userSelect:"none"}} title={p?"Add Put to plan":undefined}>{p?.bid!=null?`+ ${f$(p.bid)}`:"—"}</td>
+                                        </tr>;
+                                      })}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            );
+                          });
+                        })()
+                        )}
+
+                      </div>
+                      );
+                    })()}
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Expiring today */}
@@ -2795,6 +3110,26 @@ ${JSON.stringify(summary, null, 1)}`;
                   <div><FL>Ask</FL><input type="number" value={planForm.ask} onChange={e=>pf("ask",e.target.value)}/></div>
                 </div>
                 <div style={{marginBottom:9}}><FL>Notes</FL><input type="text" value={planForm.notes} onChange={e=>pf("notes",e.target.value)}/></div>
+                {/* Earnings warning */}
+                {(() => {
+                  const sd = stocksData[planForm.ticker] || {};
+                  const earn = sd.earningsDate;
+                  const exp  = planForm.expiration;
+                  if (!earn || !exp) return null;
+                  const earnDate = new Date(earn + "T12:00:00");
+                  const expDate  = new Date(exp  + "T12:00:00");
+                  if (expDate >= earnDate && earnDate >= new Date()) {
+                    return (
+                      <div style={{background:"#ffd16615",border:"1px solid #ffd16640",borderRadius:6,padding:"7px 11px",marginBottom:9,display:"flex",alignItems:"center",gap:7}}>
+                        <span style={{fontSize:14}}>⚠️</span>
+                        <span style={{fontSize:10,color:"#ffd166",fontFamily:"monospace"}}>
+                          <strong>Earnings Warning:</strong> {planForm.ticker} reports on {earn} — this contract expires after earnings. IV crush may affect option value.
+                        </span>
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
                 <div style={{display:"flex",gap:7}}>
                   <button onClick={savePlan} style={{background:"#00ff88",color:"#010409",border:"none",borderRadius:6,padding:"7px 16px",fontSize:11,fontWeight:700,fontFamily:"monospace"}}>ADD TO PLAN</button>
                   <button onClick={()=>setPlanForm(null)} style={{background:"transparent",color:"#555",border:"1px solid #21262d",borderRadius:6,padding:"7px 12px",fontSize:11}}>Cancel</button>
@@ -2906,7 +3241,7 @@ ${JSON.stringify(summary, null, 1)}`;
             const td = tickerMap[selectedTicker] || {ticker:selectedTicker, totalPremium:0, totalProfit:0, contracts:[], openCount:0, closedCount:0};
             const sd = stocksData[selectedTicker] || {};
             const tickerContracts = contracts.filter(c => c.stock?.toUpperCase()===selectedTicker).sort((a,b)=>new Date(b.dateExec)-new Date(a.dateExec));
-            return (
+            return (<>
               <div style={{display:"flex",flexDirection:"column",gap:9}}>
                 <div style={{display:"flex",alignItems:"center",gap:10}}>
                   <button onClick={()=>setSelectedTicker(null)} style={{background:"transparent",border:"1px solid #1c2128",borderRadius:6,padding:"5px 10px",fontSize:11,color:"#555",fontFamily:"monospace"}}>← Stocks</button>
@@ -2923,6 +3258,16 @@ ${JSON.stringify(summary, null, 1)}`;
                 <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:13}}>
                   <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
                     <span style={{fontFamily:"monospace",fontSize:8,color:"#2a3040",letterSpacing:"0.08em"}}>STOCK DATA</span>
+                    {sd.earningsDate && (
+                      <span style={{
+                        fontSize:9, fontFamily:"monospace", padding:"2px 8px", borderRadius:4,
+                        background: sd.earningsDate >= TODAY ? "#ffd16620" : "#1c2128",
+                        color:      sd.earningsDate >= TODAY ? "#ffd166"   : "#3a4050",
+                        border:     `1px solid ${sd.earningsDate >= TODAY ? "#ffd16640" : "#21262d"}`,
+                      }}>
+                        {sd.earningsDate >= TODAY ? "⚡ Earnings " : "Earnings "}{sd.earningsDate}
+                      </span>
+                    )}
                     {sd.lastQuoteAt && (
                       <span style={{fontSize:7,color:"#00ff8870",fontFamily:"monospace",background:"#00ff8812",border:"1px solid #00ff8820",borderRadius:3,padding:"1px 5px"}}>
                         live · {sd.lastQuoteAt ? new Date(sd.lastQuoteAt).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}) : ""}
@@ -2934,6 +3279,35 @@ ${JSON.stringify(summary, null, 1)}`;
                       </span>
                     )}
                   </div>
+                  {/* Greeks summary from open contracts */}
+                  {(() => {
+                    const openForTicker = originals.filter(c => c.status==="Open" && c.stock?.toUpperCase()===selectedTicker);
+                    const greeks = openForTicker.map(c => {
+                      const lo = getLiveOption(c);
+                      if (!lo) return null;
+                      return { label: `${c.expires} $${c.strike} ${c.type}`, delta: lo.delta, gamma: lo.gamma, theta: lo.theta, vega: lo.vega, iv: lo.iv };
+                    }).filter(Boolean);
+                    if (!greeks.length) return null;
+                    return (
+                      <div style={{marginBottom:10}}>
+                        <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:6}}>GREEKS — OPEN CONTRACTS</div>
+                        <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                          {greeks.map((g,i) => (
+                            <div key={i} style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                              <span style={{fontSize:9,color:"#555",fontFamily:"monospace",minWidth:160}}>{g.label}</span>
+                              {[["Δ",g.delta,"#58a6ff"],["Γ",g.gamma,"#ffd166"],["Θ",g.theta,"#ff4560"],["V",g.vega,"#00ff88"],["IV",g.iv!=null?g.iv.toFixed(1)+"%":null,"#c084fc"]].map(([lbl,val,col])=>
+                                val!=null && (
+                                  <span key={lbl} style={{fontSize:9,fontFamily:"monospace",background:col+"18",color:col,border:`1px solid ${col}30`,borderRadius:3,padding:"1px 6px"}}>
+                                    {lbl} {typeof val==="number" && lbl!=="IV" ? val.toFixed(3) : val}
+                                  </span>
+                                )
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
                   <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:8}}>
                     <div><FL>Shares — Schwab</FL><input type="number" defaultValue={sd.sharesSchwab||""} onBlur={e=>updateStockData(selectedTicker,"sharesSchwab",e.target.value?+e.target.value:null)}/></div>
                     <div><FL>Shares — Etrade</FL><input type="number" defaultValue={sd.sharesEtrade||""} onBlur={e=>updateStockData(selectedTicker,"sharesEtrade",e.target.value?+e.target.value:null)}/></div>
@@ -2950,7 +3324,11 @@ ${JSON.stringify(summary, null, 1)}`;
                 </div>
                 {/* Contract history for this ticker */}
                 <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8}} className="ms">
-                  <div style={{padding:"7px 11px",fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em"}}>CONTRACT HISTORY</div>
+                  <div style={{padding:"7px 11px",display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em"}}>CONTRACT HISTORY</span>
+                  <button onClick={()=>setStockContractFilter("open")} style={{fontSize:8,fontFamily:"monospace",padding:"1px 7px",borderRadius:3,border:"none",cursor:"pointer",background:stockContractFilter==="open"?"#00ff8820":"transparent",color:stockContractFilter==="open"?"#00ff88":"#3a4050"}}>Open</button>
+                  <button onClick={()=>setStockContractFilter("all")} style={{fontSize:8,fontFamily:"monospace",padding:"1px 7px",borderRadius:3,border:"none",cursor:"pointer",background:stockContractFilter==="all"?"#58a6ff20":"transparent",color:stockContractFilter==="all"?"#58a6ff":"#3a4050"}}>All</button>
+                </div>
                   <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
                     <thead><tr>
                       <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Contract</th>
@@ -2965,7 +3343,7 @@ ${JSON.stringify(summary, null, 1)}`;
                       <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Status</th>
                     </tr></thead>
                     <tbody>
-                      {tickerContracts.map(c=>(
+                      {tickerContracts.filter(c => stockContractFilter==="open" ? c.status==="Open" : true).map(c=>(
                         <tr key={c.id} className="rh" style={{borderTop:"1px solid #0d1117",cursor:"pointer"}} onClick={()=>setViewC(c)}>
                           {(() => { const lo = c.status==="Open" ? getLiveOption(c) : null; return (<>
                           <td style={{padding:"5px 8px",fontFamily:"monospace",color:"#c9d1d9",fontSize:10,whiteSpace:"nowrap"}}>{fTitle(c)}</td>
@@ -2979,7 +3357,14 @@ ${JSON.stringify(summary, null, 1)}`;
                           <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:10,color:"#58a6ff"}}>
                             {lo?.ask!=null ? f$(lo.ask) : <span style={{color:"#1c2128"}}>—</span>}
                           </td>
-                          <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11}}>{c.profit!=null?<span style={{color:c.profit>=0?"#00ff88":"#ff4560"}}>{fSign(c.profit)}</span>:<span style={{color:"#1c2128"}}>—</span>}</td>
+                          <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11}}>{(() => {
+                            const cc = c.profit == null ? contracts.find(x => x.parentId === c.id && x.profit != null) : null;
+                            const dp = c.profit ?? cc?.profit ?? null;
+                            const dpp = c.profitPct ?? cc?.profitPct ?? null;
+                            return dp!=null
+                              ? <><span style={{color:dp>=0?"#00ff88":"#ff4560"}}>{fSign(dp)}</span>{dpp!=null&&<span style={{fontSize:8,color:dp>=0?"#00ff8870":"#ff456070",marginLeft:3}}>{(dpp*100).toFixed(1)}%</span>}</>
+                              : <span style={{color:"#1c2128"}}>—</span>;
+                          })()}</td>
                           <td style={{padding:"5px 8px"}}><Tag color={c.account==="Schwab"?"blue":"amber"}>{c.account}</Tag></td>
                           <td style={{padding:"5px 8px"}}><Tag color={c.status==="Open"?"green":"gray"}>{c.status}</Tag></td>
                           </>); })()}
@@ -2989,7 +3374,94 @@ ${JSON.stringify(summary, null, 1)}`;
                   </table>
                 </div>
               </div>
-            );
+              {/* Option Chain — on demand with controls */}
+              {(() => {
+                const ctrl = getChainControl(selectedTicker);
+                const chainKey = `${selectedTicker}|live`;
+                const liveChain = etradeChains[chainKey];
+                const allOptions = liveChain ? [...(liveChain.calls||[]),...(liveChain.puts||[])] : [];
+                const btnStyle = (active) => ({fontSize:8,fontFamily:"monospace",padding:"2px 7px",borderRadius:3,border:"1px solid #21262d",cursor:"pointer",background:active?"#58a6ff20":"transparent",color:active?"#58a6ff":"#3a4050"});
+                return (
+                  <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,marginTop:9}}>
+                    <div style={{padding:"7px 11px",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                      <span style={{fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em"}}>OPTION CHAIN — {selectedTicker}</span>
+                      <span style={{fontSize:8,color:"#3a4050",fontFamily:"monospace"}}>Strikes ±</span>
+                      {[3,5,7,10].map(n=><button key={n} onClick={()=>{setChainControl(selectedTicker,"strikes",n);fetchChainForTicker(selectedTicker,n,ctrl.dates);}} style={btnStyle(ctrl.strikes===n)}>{n}</button>)}
+                      <span style={{fontSize:8,color:"#3a4050",fontFamily:"monospace",marginLeft:6}}>Dates</span>
+                      {[3,5,7,10].map(n=><button key={n} onClick={()=>{setChainControl(selectedTicker,"dates",n);fetchChainForTicker(selectedTicker,ctrl.strikes,n);}} style={btnStyle(ctrl.dates===n)}>{n}</button>)}
+                      <button onClick={()=>fetchChainForTicker(selectedTicker,ctrl.strikes,ctrl.dates)} style={{fontSize:8,fontFamily:"monospace",padding:"2px 9px",borderRadius:3,border:"1px solid #58a6ff30",cursor:"pointer",background:"#58a6ff14",color:"#58a6ff",marginLeft:4}}>⟳ Fetch</button>
+                      {liveChain?.fetchedAt && <span style={{fontSize:7,color:"#2a3040",fontFamily:"monospace"}}>fetched {new Date(liveChain.fetchedAt).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}</span>}
+                    </div>
+                    {allOptions.length === 0 && <div style={{padding:"12px 11px",fontSize:10,color:"#3a4050",fontFamily:"monospace"}}>Click ⟳ Fetch to load option chain</div>}
+                    {allOptions.length > 0 && (
+                    <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,marginTop:0}}>
+                    <div style={{padding:"7px 11px",fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em"}}>OPTION CHAIN — {selectedTicker}</div>
+                    {/* Calls left, Puts right — grouped by expiry */}
+                    {(() => {
+                      const expiries = [...new Set(allOptions.map(o=>o.expiryDate))].sort();
+                      const thStyle = {padding:"3px 6px",textAlign:"right",color:"#3a4050",borderBottom:"1px solid #1c2128",fontSize:8};
+                      const tdNum = (val, color="#888") => <td style={{padding:"3px 6px",textAlign:"right",fontFamily:"monospace",fontSize:9,color}}>{val!=null?(typeof val==="number"?val.toFixed(2):val):"—"}</td>;
+                      return expiries.map(exp => {
+                        const calls = allOptions.filter(o=>o.type==="Call"&&o.expiryDate===exp).sort((a,b)=>a.strike-b.strike);
+                        const puts  = allOptions.filter(o=>o.type==="Put" &&o.expiryDate===exp).sort((a,b)=>a.strike-b.strike);
+                        const strikes = [...new Set([...calls.map(o=>o.strike),...puts.map(o=>o.strike)])].sort((a,b)=>a-b);
+                        const callMap = Object.fromEntries(calls.map(o=>[o.strike,o]));
+                        const putMap  = Object.fromEntries(puts.map(o=>[o.strike,o]));
+                        return (
+                          <div key={exp} style={{marginBottom:12}}>
+                            <div style={{padding:"4px 8px",fontSize:8,color:"#58a6ff",fontFamily:"monospace",background:"#58a6ff10",borderTop:"1px solid #58a6ff20"}}>{exp}</div>
+                            <div style={{overflowX:"auto"}}>
+                              <table style={{width:"100%",borderCollapse:"collapse",fontSize:9,fontFamily:"monospace"}}>
+                                <thead><tr>
+                                  <th style={{...thStyle,color:"#00ff8870"}}>Bid</th>
+                                  <th style={{...thStyle,color:"#00ff8870"}}>Ask</th>
+                                  <th style={{...thStyle,color:"#00ff8870"}}>IV%</th>
+                                  <th style={{...thStyle,color:"#00ff8870"}}>Δ</th>
+                                  <th style={{...thStyle,color:"#00ff8870",textAlign:"right"}}>CALLS</th>
+                                  <th style={{...thStyle,color:"#ffd166",textAlign:"center",background:"#0d1117"}}>STRIKE</th>
+                                  <th style={{...thStyle,color:"#ff456070",textAlign:"left"}}>PUTS</th>
+                                  <th style={{...thStyle,color:"#ff456070"}}>Δ</th>
+                                  <th style={{...thStyle,color:"#ff456070"}}>IV%</th>
+                                  <th style={{...thStyle,color:"#ff456070"}}>Ask</th>
+                                  <th style={{...thStyle,color:"#ff456070"}}>Bid</th>
+                                </tr></thead>
+                                <tbody>
+                                  {strikes.map(strike => {
+                                    const c = callMap[strike];
+                                    const p = putMap[strike];
+                                    const itmCall = c?.inTheMoney;
+                                    const itmPut  = p?.inTheMoney;
+                                    const addCallToPlan = () => { openPlanForm(selectedTicker, {action:"STO",type:"Call",strike,expiration:exp}); setTab("plan"); };
+                                    const addPutToPlan  = () => { openPlanForm(selectedTicker, {action:"STO",type:"Put", strike,expiration:exp}); setTab("plan"); };
+                                    return (
+                                      <tr key={strike} style={{borderTop:"1px solid #0d1117",background:itmCall||itmPut?"#ffffff05":"transparent"}}>
+                                        {tdNum(c?.bid,  "#00ff88")}
+                                        {tdNum(c?.ask,  "#58a6ff")}
+                                        {tdNum(c?.iv!=null?c.iv.toFixed(1)+"%":null, "#c084fc")}
+                                        {tdNum(c?.delta!=null?c.delta.toFixed(3):null, "#58a6ff")}
+                                        <td onClick={c?addCallToPlan:undefined} style={{padding:"3px 6px",textAlign:"right",fontSize:9,color:itmCall?"#ff4560":"#00ff88",fontFamily:"monospace",cursor:c?"pointer":"default"}} title={c?"+ Plan":undefined}>{c?`${c.bid!=null?f$(c.bid):""} +`:"—"}</td>
+                                        <td style={{padding:"3px 6px",textAlign:"center",fontFamily:"monospace",fontWeight:700,color:"#ffd166",background:"#0d1117",fontSize:10}}>{f$(strike)}</td>
+                                        <td onClick={p?addPutToPlan:undefined} style={{padding:"3px 6px",textAlign:"left",fontSize:9,color:itmPut?"#ff4560":"#00ff88",fontFamily:"monospace",cursor:p?"pointer":"default"}} title={p?"+ Plan":undefined}>{p?`+ ${p.bid!=null?f$(p.bid):""}`:"—"}</td>
+                                        {tdNum(p?.delta!=null?p.delta.toFixed(3):null, "#ff4560")}
+                                        {tdNum(p?.iv!=null?p.iv.toFixed(1)+"%":null, "#c084fc")}
+                                        {tdNum(p?.ask, "#58a6ff")}
+                                        {tdNum(p?.bid, "#ff4560")}
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </>);
           }
 
           // Stocks list view
@@ -3062,27 +3534,130 @@ ${JSON.stringify(summary, null, 1)}`;
                 {etradeLastFetch && <span style={{fontSize:8,color:"#2a3040",fontFamily:"monospace",flexShrink:0}}>last sync {etradeLastFetch}</span>}
               </div>
 
-              {/* Cash + filter row */}
+              {/* Unified Positions + Tickers table */}
+              {(() => {
+                // Merge schwabPositions with sortedDisplayTickers
+                // Build a combined list keyed by symbol
+                const posMap = Object.fromEntries(schwabPositions.map(p => [p.symbol, p]));
+                // All tickers to show: schwab positions + any from displayTickers not in schwab
+                const allSymbols = [
+                  ...schwabPositions.map(p => p.symbol),
+                  ...sortedDisplayTickers.filter(t => !posMap[t.ticker]).map(t => t.ticker),
+                ];
+                const tickerMap = Object.fromEntries(sortedDisplayTickers.map(t => [t.ticker, t]));
+                return (
+                  <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8}} className="ms">
+                    <div style={{padding:"7px 11px",display:"flex",alignItems:"center",gap:8}}>
+                      <span style={{fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em"}}>POSITIONS — click to view details</span>
+                      {schwabPositions.length > 0 && <span style={{fontSize:7,color:"#00ff8870",fontFamily:"monospace"}}>● {schwabPositions.length} live from Schwab</span>}
+                    </div>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                      <thead><tr>
+                        <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Ticker</th>
+                        <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Qty</th>
+                        <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Avg Cost</th>
+                        <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Mkt Value</th>
+                        <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Gain $</th>
+                        <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Gain %</th>
+                        <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Day $</th>
+                        <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Day %</th>
+                        <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>IV %</th>
+                        <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Earnings</th>
+                        <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Premium</th>
+                        <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Profit</th>
+                        <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Open</th>
+                      </tr></thead>
+                      <tbody>
+                        {allSymbols.map(sym => {
+                          const pos = posMap[sym];
+                          const tk  = tickerMap[sym];
+                          const sd  = stocksData[sym] || {};
+                          return (
+                            <tr key={sym} className="rh" style={{borderTop:"1px solid #0d1117",cursor:"pointer"}} onClick={()=>setSelectedTicker(sym)}>
+                              <td style={{padding:"5px 8px",fontFamily:"'JetBrains Mono',monospace",fontWeight:700,color:"#e6edf3",fontSize:13}}>
+                                {sym}
+                                {pos && <span style={{fontSize:7,color:"#00ff8870",marginLeft:4}}>●</span>}
+                              </td>
+                              <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#888",fontSize:10}}>
+                                {pos ? (pos.qty % 1 === 0 ? pos.qty : pos.qty.toFixed(4)) : (sd.sharesSchwab ?? "—")}
+                              </td>
+                              <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#555",fontSize:10}}>
+                                {pos ? f$(pos.avgPrice) : "—"}
+                              </td>
+                              <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#c9d1d9",fontWeight:600}}>
+                                {pos ? f$(pos.marketValue) : (sd.currentPrice ? f$(sd.currentPrice * (sd.sharesSchwab||0)) : "—")}
+                              </td>
+                              <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontWeight:700,fontSize:10,color:pos?(pos.gainLoss>=0?"#00ff88":"#ff4560"):"#555"}}>
+                                {pos ? (pos.gainLoss>=0?"+":"")+f$(pos.gainLoss) : "—"}
+                              </td>
+                              <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:10,fontWeight:700,color:pos?(pos.gainLossPct>=0?"#00ff88":"#ff4560"):"#555"}}>
+                                {pos ? (pos.gainLossPct>=0?"+":"")+pos.gainLossPct.toFixed(2)+"%" : "—"}
+                              </td>
+                              <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:10,color:pos?(pos.currentDayGL>=0?"#00ff88":"#ff4560"):"#555"}}>
+                                {pos ? (pos.currentDayGL>=0?"+":"")+f$(pos.currentDayGL) : "—"}
+                              </td>
+                              <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:10,color:pos?(pos.currentDayGLPct>=0?"#00ff88":"#ff4560"):"#555"}}>
+                                {pos ? (pos.currentDayGLPct>=0?"+":"")+pos.currentDayGLPct.toFixed(2)+"%" : "—"}
+                              </td>
+                              <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:sd.iv>50?"#ff4560":sd.iv>30?"#ffd166":"#00ff88",fontSize:10}}>
+                                {sd.iv!=null ? sd.iv.toFixed(1)+"%" : "—"}
+                              </td>
+                              <td style={{padding:"5px 8px",fontFamily:"monospace",fontSize:10,color:sd.earningsDate&&sd.earningsDate>=TODAY?"#ffd166":"#555"}}>
+                                {sd.earningsDate||"—"}
+                              </td>
+                              <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#58a6ff"}}>
+                                {tk ? f$(tk.totalPremium) : "—"}
+                              </td>
+                              <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:tk?(tk.totalProfit>=0?"#00ff88":"#ff4560"):"#555"}}>
+                                {tk ? fSign(tk.totalProfit) : "—"}
+                              </td>
+                              <td style={{padding:"5px 8px",textAlign:"right"}}>
+                                {tk?.openCount>0 ? <Tag color="green">{tk.openCount}</Tag> : <span style={{color:"#1c2128",fontSize:10}}>—</span>}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {allSymbols.length===0 && <tr><td colSpan={13} style={{padding:20,textAlign:"center",color:"#3a4050",fontSize:11,fontFamily:"monospace"}}>No positions — click ⟳ Live Data to sync from Schwab</td></tr>}
+                      </tbody>
+                      {schwabPositions.length > 0 && (
+                        <tfoot>
+                          <tr style={{borderTop:"1px solid #21262d"}}>
+                            <td colSpan={3} style={{padding:"6px 8px",fontFamily:"monospace",fontSize:9,color:"#3a4050"}}>TOTAL</td>
+                            <td style={{padding:"6px 8px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:"#c9d1d9"}}>{f$(schwabPositions.reduce((s,p)=>s+p.marketValue,0))}</td>
+                            <td style={{padding:"6px 8px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:schwabPositions.reduce((s,p)=>s+p.gainLoss,0)>=0?"#00ff88":"#ff4560"}}>{schwabPositions.reduce((s,p)=>s+p.gainLoss,0)>=0?"+":""}{f$(schwabPositions.reduce((s,p)=>s+p.gainLoss,0))}</td>
+                            <td colSpan={8}/>
+                          </tr>
+                        </tfoot>
+                      )}
+                    </table>
+                  </div>
+                );
+              })()}
+
+              {/* Cash row — Schwab auto-populated, E*TRADE manual */}
               <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"stretch"}}>
-                {/* Schwab cash square */}
-                <div style={{background:"#0a0e14",border:"1px solid #58a6ff30",borderRadius:8,padding:"8px 12px",minWidth:110,display:"flex",flexDirection:"column",gap:4}}>
-                  <div style={{fontSize:7,color:"#58a6ff",fontFamily:"monospace",letterSpacing:"0.08em"}}>SCHWAB CASH</div>
-                  <input type="number" defaultValue={cashData.schwab||""} placeholder="0.00"
-                    onBlur={e=>updateCash("schwab",e.target.value)}
-                    style={{width:"100%",fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:"#58a6ff",background:"transparent",border:"none",borderBottom:"1px solid #58a6ff30",padding:"2px 0",outline:"none"}}/>
+                {/* Schwab cash — live from API */}
+                <div style={{background:"#0a0e14",border:"1px solid #58a6ff30",borderRadius:8,padding:"8px 12px",minWidth:120,display:"flex",flexDirection:"column",gap:4}}>
+                  <div style={{display:"flex",alignItems:"center",gap:5}}>
+                    <span style={{fontSize:7,color:"#58a6ff",fontFamily:"monospace",letterSpacing:"0.08em"}}>SCHWAB CASH</span>
+                    {cashData.schwab && <span style={{fontSize:7,color:"#00ff8870",fontFamily:"monospace"}}>live</span>}
+                  </div>
+                  <div style={{fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:"#58a6ff"}}>
+                    {cashData.schwab ? f$(+cashData.schwab) : <span style={{color:"#2a3040",fontSize:11}}>—</span>}
+                  </div>
                 </div>
-                {/* Etrade cash square */}
-                <div style={{background:"#0a0e14",border:"1px solid #ffd16630",borderRadius:8,padding:"8px 12px",minWidth:110,display:"flex",flexDirection:"column",gap:4}}>
-                  <div style={{fontSize:7,color:"#ffd166",fontFamily:"monospace",letterSpacing:"0.08em"}}>ETRADE CASH</div>
+                {/* E*TRADE cash — manual */}
+                <div style={{background:"#0a0e14",border:"1px solid #ffd16630",borderRadius:8,padding:"8px 12px",minWidth:120,display:"flex",flexDirection:"column",gap:4}}>
+                  <div style={{fontSize:7,color:"#ffd166",fontFamily:"monospace",letterSpacing:"0.08em"}}>E*TRADE CASH</div>
                   <input type="number" defaultValue={cashData.etrade||""} placeholder="0.00"
                     onBlur={e=>updateCash("etrade",e.target.value)}
                     style={{width:"100%",fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:"#ffd166",background:"transparent",border:"none",borderBottom:"1px solid #ffd16630",padding:"2px 0",outline:"none"}}/>
                 </div>
-                {/* Total cash */}
+                {/* Total */}
                 {((cashData.schwab||0)+(cashData.etrade||0))>0 && (
-                  <div style={{background:"#0a0e14",border:"1px solid #00ff8830",borderRadius:8,padding:"8px 12px",minWidth:110,display:"flex",flexDirection:"column",gap:4}}>
+                  <div style={{background:"#0a0e14",border:"1px solid #00ff8830",borderRadius:8,padding:"8px 12px",minWidth:120,display:"flex",flexDirection:"column",gap:4}}>
                     <div style={{fontSize:7,color:"#00ff88",fontFamily:"monospace",letterSpacing:"0.08em"}}>TOTAL CASH</div>
-                    <div style={{fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:"#00ff88"}}>{f$((cashData.schwab||0)+(cashData.etrade||0))}</div>
+                    <div style={{fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:"#00ff88"}}>{f$((+cashData.schwab||0)+(+cashData.etrade||0))}</div>
                   </div>
                 )}
                 {/* Filter + Add Stock */}
@@ -3118,6 +3693,8 @@ ${JSON.stringify(summary, null, 1)}`;
                   </div>
                 </div>
               )}
+
+
 
               {/* Monopoly Board */}
               {(() => {
@@ -3344,46 +3921,6 @@ ${JSON.stringify(summary, null, 1)}`;
                   </div>
                 );
               })()}
-              <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8}} className="ms">
-                <div style={{padding:"7px 11px",fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em"}}>{stocksFilter==="owned"?"OWNED TICKERS":"ALL TICKERS"} — click to view details · click column to sort</div>
-                <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
-                  <thead><tr>
-                    {sth("ticker","Ticker")}
-                    {sth("schwab","Schwab Shares",true)}
-                    {sth("etrade","Etrade Shares",true)}
-                    {sth("price","Price $",true)}
-                    {sth("iv","IV %",true)}
-                    {sth("earnings","Earnings")}
-                    {sth("premium","Total Premium",true)}
-                    {sth("profit","Total Profit",true)}
-                    {sth("contracts","Contracts",true)}
-                    {sth("open","Open",true)}
-                  </tr></thead>
-                  <tbody>
-                    {sortedDisplayTickers.length===0&&<tr><td colSpan={10} style={{padding:20,textAlign:"center",color:"#3a4050",fontSize:11,fontFamily:"monospace"}}>{stocksFilter==="owned"?"No tickers with shares entered — click a ticker to add shares":"No tickers with data — import history or add tickers to contracts"}</td></tr>}
-                    {sortedDisplayTickers.map(t=>{
-                      const sd = stocksData[t.ticker]||{};
-                      return(
-                        <tr key={t.ticker} className="rh" style={{borderTop:"1px solid #0d1117",cursor:"pointer"}} onClick={()=>setSelectedTicker(t.ticker)}>
-                          <td style={{padding:"5px 8px",fontFamily:"'JetBrains Mono',monospace",fontWeight:700,color:"#e6edf3",fontSize:13}}>{t.ticker}</td>
-                          <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#c9d1d9"}}>{sd.sharesSchwab!=null?sd.sharesSchwab:"—"}</td>
-                          <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#c9d1d9"}}>{sd.sharesEtrade!=null?sd.sharesEtrade:"—"}</td>
-                          <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:sd.lastQuoteAt?"#c9d1d9":"#888"}}>
-                            {sd.currentPrice?f$(sd.currentPrice):"—"}
-                            {sd.lastQuoteAt && <span style={{fontSize:7,color:"#00ff8870",marginLeft:4}}>●</span>}
-                          </td>
-                          <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:sd.iv>50?"#ff4560":sd.iv>30?"#ffd166":"#00ff88",fontSize:10}}>{sd.iv!=null?sd.iv.toFixed(1)+"%":"—"}</td>
-                          <td style={{padding:"5px 8px",fontFamily:"monospace",fontSize:10,color:sd.earningsDate&&sd.earningsDate>=TODAY?"#ffd166":"#555"}}>{sd.earningsDate||"—"}</td>
-                          <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#58a6ff"}}>{f$(t.totalPremium)}</td>
-                          <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:t.totalProfit>=0?"#00ff88":"#ff4560"}}>{fSign(t.totalProfit)}</td>
-                          <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#555"}}>{t.contracts.length}</td>
-                          <td style={{padding:"5px 8px",textAlign:"right"}}>{t.openCount>0?<Tag color="green">{t.openCount}</Tag>:<span style={{color:"#1c2128",fontSize:10}}>—</span>}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
             </div>
           );
         })()}
