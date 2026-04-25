@@ -6,6 +6,8 @@
 //   POST /api/notify
 //   Body: { contracts: [...], quotes: {...}, chains: {...} }
 
+const APP_URL = "https://options-tracker-five.vercel.app";
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -38,8 +40,10 @@ export default async function handler(req, res) {
           user:     PUSHOVER_USER,
           title:    msg.title,
           message:  msg.body,
-          priority: msg.priority ?? 0,  // 0=normal, 1=high, 2=emergency
+          priority: msg.priority ?? 0,
           sound:    msg.priority >= 1 ? "cashregister" : "pushover",
+          url:      msg.url,
+          url_title: msg.urlTitle,
         }),
       });
 
@@ -60,25 +64,33 @@ export default async function handler(req, res) {
 }
 
 function buildMessage(signal) {
-  const { contract, type, gainPct, gainDollar, targetClose, qty, partialQty } = signal;
+  const { contract, type, gainPct, gainDollar, targetClose, qty, partialQty, ticker, contractId } = signal;
+  const planUrl   = ticker ? `${APP_URL}/?action=plan&ticker=${ticker}` : null;
+  const closeUrl  = contractId ? `${APP_URL}/?action=close&id=${contractId}` : planUrl;
   switch (type) {
     case "TARGET_HIT":
       return {
-        title: "CLOSE SIGNAL: " + contract,
-        body:  "Gain " + (gainPct >= 0 ? "+" : "") + gainPct.toFixed(1) + "% ($" + gainDollar.toFixed(0) + ") has hit your target of $" + targetClose.toFixed(0) + ". Consider closing now.",
+        title:    "CLOSE SIGNAL: " + contract,
+        body:     "Gain " + (gainPct >= 0 ? "+" : "") + gainPct.toFixed(1) + "% ($" + gainDollar.toFixed(0) + ") has hit your target of $" + targetClose.toFixed(0) + ". Consider closing now.",
         priority: 1,
+        url:      closeUrl,
+        urlTitle: "→ Close in App",
       };
     case "PARTIAL_CLOSE":
       return {
-        title: "LOCK IN PROFIT: " + contract,
-        body:  "Up " + gainPct.toFixed(0) + "% - sell " + partialQty + " of " + qty + " contracts to recover cost basis and let the rest ride.",
+        title:    "LOCK IN PROFIT: " + contract,
+        body:     "Up " + gainPct.toFixed(0) + "% - sell " + partialQty + " of " + qty + " contracts to recover cost basis and let the rest ride.",
         priority: 1,
+        url:      closeUrl,
+        urlTitle: "→ Close in App",
       };
     case "APPROACHING_TARGET":
       return {
-        title: "APPROACHING TARGET: " + contract,
-        body:  "Gain " + gainPct.toFixed(1) + "% ($" + gainDollar.toFixed(0) + ") - getting close to your target of $" + targetClose.toFixed(0) + ".",
+        title:    "APPROACHING TARGET: " + contract,
+        body:     "Gain " + gainPct.toFixed(1) + "% ($" + gainDollar.toFixed(0) + ") - getting close to your target of $" + targetClose.toFixed(0) + ".",
         priority: 0,
+        url:      planUrl,
+        urlTitle: "→ Open in App",
       };
     default:
       return null;

@@ -328,15 +328,6 @@ function CelebrationOverlay({profit, onDone}) {
 }
 
 // ── Main App ──────────────────────────────────────────────────────────────────
-
-// ── Import Tab wrapper ────────────────────────────────────────────────────────
-// Renders the ImportPage component inline within the main app shell.
-// During parallel-run week, commit is disabled — review only.
-import ImportPageComponent from "./ImportPage.jsx";
-function ImportTab() {
-  return <ImportPageComponent parallelRun={true} defaultDays={1} />;
-}
-
 export default function App() {
   // Auth
   const [users,setUsers]         = useState(USERS_DEFAULT);
@@ -444,6 +435,27 @@ export default function App() {
   const [celebration,setCelebration] = useState(null); // {profit}
   const [planItems,setPlanItems]   = useState([]);
   const [planForm,setPlanForm]     = useState(null);
+  // Handle deep-link from Pushover notification: ?action=plan&ticker=AAPL or ?action=close&id=123
+  useEffect(()=>{
+    const params = new URLSearchParams(window.location.search);
+    const action = params.get("action");
+    const ticker = params.get("ticker");
+    const id     = params.get("id");
+    if (!action) return;
+    if (action==="plan" && ticker) {
+      setTab("plan");
+      setTimeout(()=>openPlanForm(ticker.toUpperCase()),300);
+      window.history.replaceState({},"",window.location.pathname);
+    } else if (action==="close" && id) {
+      setTab("contracts");
+      setTimeout(()=>{
+        const c = contracts.find(x=>String(x.id)===String(id));
+        if (c) setViewC(c);
+      },300);
+      window.history.replaceState({},"",window.location.pathname);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
   const [planDateFilter,setPlanDateFilter] = useState(TODAY);
 
   const menuRef = useRef(null);
@@ -819,6 +831,22 @@ export default function App() {
   const [watchlistInput, setWatchlistInput]     = useState("");
   const [stockContractFilter, setStockContractFilter] = useState("open"); // "open" | "all"
   // Option chain controls — per ticker, stored as { [ticker]: { strikes: 5, dates: 3 } }
+  // Collapsed expiry dates — set of "TICKER|YYYY-MM-DD" keys, default collapsed
+  const [collapsedChainDates, setCollapsedChainDates] = useState(new Set(["__all__"])); // __all__ = all collapsed by default
+  const toggleChainDate = (ticker, exp) => {
+    const key = `${ticker}|${exp}`;
+    setCollapsedChainDates(prev => {
+      const next = new Set(prev);
+      // Remove __all__ sentinel on first interaction
+      next.delete("__all__");
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  };
+  const isChainDateCollapsed = (ticker, exp) => {
+    if (collapsedChainDates.has("__all__")) return true; // all collapsed by default
+    return collapsedChainDates.has(`${ticker}|${exp}`);
+  };
   const [chainControls, setChainControls] = useState({});
   const getChainControl = (ticker) => ({ strikes: 5, dates: 3, ...chainControls[ticker] });
   const setChainControl = (ticker, key, val) => setChainControls(prev => ({ ...prev, [ticker]: { ...getChainControl(ticker), [key]: val } }));
@@ -1323,7 +1351,8 @@ export default function App() {
   const openPlanForm = (ticker, prefill={}) => {
     const d = tickerDefaults(ticker);
     const defQty = defaultQtyForTicker(ticker);
-    setPlanForm({ticker,action:prefill.action||"STO",type:prefill.type||"Call",qty:prefill.qty||d.qty||defQty,strike:prefill.strike||"",expiration:prefill.expiration||nextExpiry(ticker)||"",account:prefill.account||d.account||"",premium:"",stockPrice:"",bid:"",ask:"",last:"",targetPremium:"",notes:prefill.notes||""});
+    const q = quotes[ticker?.toUpperCase()] || {};
+    setPlanForm({ticker,action:prefill.action||"STO",type:prefill.type||"Call",qty:prefill.qty||d.qty||defQty,strike:prefill.strike||"",expiration:prefill.expiration||nextExpiry(ticker)||"",account:prefill.account||d.account||"",premium:"",stockPrice:prefill.stockPrice||q.lastPrice||"",bid:prefill.bid||q.bid||"",ask:prefill.ask||q.ask||"",last:"",targetPremium:"",notes:prefill.notes||""});
   };
   // Get default qty for plan based on Schwab shares (shares / 100, min 1)
   const defaultQtyForTicker = (ticker) => {
@@ -2037,7 +2066,7 @@ ${JSON.stringify(summary, null, 1)}`;
           </div>
         </div>
         <div style={{display:"flex",gap:2,flex:1,justifyContent:"center"}}>
-          {["dashboard","contracts","analytics","plan","stocks","import"].map(n=>(
+          {["dashboard","contracts","analytics","plan","stocks"].map(n=>(
             <button key={n} onClick={()=>setTab(n)} style={{background:tab===n?"#00ff8814":"transparent",color:tab===n?"#00ff88":"#444",border:tab===n?"1px solid #00ff8825":"1px solid transparent",borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"monospace",letterSpacing:"0.05em",textTransform:"uppercase",whiteSpace:"nowrap"}}>{n}</button>
           ))}
         </div>
@@ -2187,50 +2216,55 @@ ${JSON.stringify(summary, null, 1)}`;
                 </ResponsiveContainer>
               </div>
             </div>
-            {/* Open positions with ITM/OTM */}
-            {openC.length>0 && (
-              <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8}}>
-                <div style={{padding:"7px 11px",fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em"}}>OPEN POSITIONS</div>
-                <div className="ms">
-                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
-                    <thead><tr>
-                      <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Contract</th>
-                      <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Type</th>
-                      <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Strike</th>
-                      <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Qty</th>
-                      <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Expires</th>
-                      <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Premium</th>
-                      <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Acct</th>
-                      <th style={{padding:"5px 8px",textAlign:"center",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>ITM/OTM</th>
-                      <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Current $</th>
-                    </tr></thead>
-                    <tbody>
-                      {openC.map(c => {
-                        const itmStatus = getITMStatus(c);
-                        return (
-                          <tr key={c.id} className="rh" style={{borderTop:"1px solid #0d1117",cursor:"pointer",background:itmStatus==="ITM"?"#ff456005":itmStatus==="OTM"?"#00ff8803":"transparent"}} onClick={()=>setViewC(c)}>
-                            <td style={{padding:"5px 8px",fontFamily:"monospace",fontWeight:700,color:"#e6edf3",fontSize:11}}>{fTitle(c)}</td>
-                            <td style={{padding:"5px 8px"}}><Tag color={c.type==="Put"?"amber":"blue"}>{c.type}</Tag></td>
-                            <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#b0bac6"}}>${c.strike}</td>
-                            <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#2a3040"}}>{c.qty}</td>
-                            <td style={{padding:"5px 8px",fontFamily:"monospace",fontSize:10,color:"#2a3040"}}>{c.expires||"—"}</td>
-                            <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#58a6ff"}}>{f$(c.premium)}</td>
-                            <td style={{padding:"5px 8px"}}><Tag color={c.account==="Schwab"?"blue":"amber"}>{c.account}</Tag></td>
-                            <td style={{padding:"5px 8px",textAlign:"center"}}>
-                              {itmStatus ? <Tag color={itmStatus==="ITM"?"red":"green"}>{itmStatus==="ITM"?"🔴 ITM":"🟢 OTM"}</Tag> : <span style={{color:"#2a3040",fontSize:10,fontFamily:"monospace"}}>—</span>}
-                            </td>
-                            <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#888",fontSize:10}} onClick={e=>e.stopPropagation()}>
-                              <input type="number" defaultValue={c.currentPrice||""} placeholder="—" onBlur={e=>updatePrice(c.id,e.target.value)}
-                                style={{width:70,padding:"2px 4px",fontSize:10,background:"transparent",border:"1px solid #21262d",textAlign:"right"}}/>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+            {/* Open positions — stats summary replacing the table */}
+            {openC.length>0 && (() => {
+              const today3 = new Date(); today3.setHours(0,0,0,0);
+              const endOfWeek = new Date(today3); endOfWeek.setDate(today3.getDate()+(6-today3.getDay())); // Saturday
+              const endOfNextWeek = new Date(endOfWeek); endOfNextWeek.setDate(endOfWeek.getDate()+7);
+              const fmt = d => d.toISOString().slice(0,10);
+              const openCalls = openC.filter(c=>c.type==="Call");
+              const openPuts  = openC.filter(c=>c.type==="Put");
+              const openSTOs  = openC.filter(c=>c.optType==="STO");
+              const openBTOs  = openC.filter(c=>c.optType==="BTO");
+              const premColl  = openSTOs.reduce((s,c)=>s+(c.premium||0),0);
+              const premPaid  = openBTOs.reduce((s,c)=>s+Math.abs(c.premium||0),0);
+              // Current value from live chain data
+              const currVal   = openC.reduce((s,c)=>{const o=getOptionData(c);return s+(o?.mark!=null?(o.mark*(c.qty||1)*100):0);},0);
+              const unrealPL  = premColl - currVal;
+              // Expiry buckets
+              const thisWeek  = openC.filter(c=>c.expires&&c.expires<=fmt(endOfWeek));
+              const nextWeek  = openC.filter(c=>c.expires&&c.expires>fmt(endOfWeek)&&c.expires<=fmt(endOfNextWeek));
+              const later     = openC.filter(c=>c.expires&&c.expires>fmt(endOfNextWeek));
+              const bucketRow = (label, arr, color) => arr.length===0 ? null : (
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"5px 0",borderBottom:"1px solid #1c2128"}}>
+                  <span style={{fontSize:9,fontFamily:"monospace",color}}>{label}</span>
+                  <span style={{fontSize:9,fontFamily:"monospace",color:"#8b949e"}}>{arr.length} contracts · {arr.filter(c=>c.type==="Call").length}C {arr.filter(c=>c.type==="Put").length}P · {f$(arr.reduce((s,c)=>s+(c.premium||0),0))}</span>
                 </div>
-              </div>
-            )}
+              );
+              const statBox = (label, val, sub, col="#e6edf3") => (
+                <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:6,padding:"8px 12px",flex:1,minWidth:90}}>
+                  <div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",letterSpacing:"0.07em",marginBottom:4}}>{label}</div>
+                  <div style={{fontSize:13,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:col}}>{val}</div>
+                  {sub && <div style={{fontSize:8,color:"#2a3040",fontFamily:"monospace",marginTop:2}}>{sub}</div>}
+                </div>
+              );
+              return (
+                <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:"10px 12px"}}>
+                  <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:8}}>OPEN POSITIONS SUMMARY</div>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
+                    {statBox("OPEN CALLS",openCalls.length,openCalls.length+" positions","#58a6ff")}
+                    {statBox("OPEN PUTS",openPuts.length,openPuts.length+" positions","#ffd166")}
+                    {statBox("PREM COLLECTED",f$(premColl),"STO positions","#00ff88")}
+                    {statBox("CURRENT VALUE",f$(currVal),"live mark","#c084fc")}
+                    {statBox("UNREALIZED P/L",fSign0(unrealPL),"collected − current",unrealPL>=0?"#00ff88":"#ff4560")}
+                  </div>
+                  <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.07em",marginBottom:5}}>BY EXPIRY</div>
+                  {bucketRow("THIS WEEK",thisWeek,"#ff4560")}
+                  {bucketRow("NEXT WEEK",nextWeek,"#ffd166")}
+                  {bucketRow("LATER",later,"#00ff88")}
+                </div>
+              );
+            })()}
             {/* Weekly Highlights */}
             {(() => {
               const now4 = new Date();
@@ -2789,6 +2823,119 @@ ${JSON.stringify(summary, null, 1)}`;
         )}
 
         {/* ══ STRATEGIES ══ */}
+        {/* Balance history — injected into analytics tab */}
+        {tab==="analytics" && (() => {
+          // Balance history stored in col_prefs under "balance_history"
+          // Shape: { "2025-01": { schwab: 12000, etrade: 8000 }, ... }
+          const [balHistory, setBalHistory] = React.useState(null);
+          const [balEditMode, setBalEditMode] = React.useState(false);
+          const [balEdits, setBalEdits] = React.useState({});
+
+          React.useEffect(()=>{
+            supabase.from("col_prefs").select("cols").eq("id","balance_history").single()
+              .then(({data})=>{ if(data?.cols) setBalHistory(data.cols); else setBalHistory({}); });
+          },[]);
+
+          const saveBalHistory = async (updated) => {
+            await supabase.from("col_prefs").upsert({id:"balance_history",cols:updated,updated_at:new Date().toISOString()},{onConflict:"id"});
+            setBalHistory(updated);
+          };
+
+          // Generate month keys for last 13 months + current
+          const monthKeys = [];
+          const now5 = new Date();
+          for (let i=12; i>=0; i--) {
+            const d = new Date(now5.getFullYear(), now5.getMonth()-i, 1);
+            monthKeys.push(d.toISOString().slice(0,7));
+          }
+          const thisMonthKey = now5.toISOString().slice(0,7);
+
+          // Auto-populate current month from live Schwab data
+          const currentBal = balHistory?.[thisMonthKey] || {};
+          const liveSchwab = cashData.schwab ? +cashData.schwab : null;
+          if (liveSchwab && !currentBal.schwabAuto) {
+            // Will be set on first save
+          }
+
+          const rows = monthKeys.map(mk => {
+            const b = balHistory?.[mk] || {};
+            const schwab = b.schwab ?? (mk===thisMonthKey&&liveSchwab ? liveSchwab : null);
+            const etrade = b.etrade ?? null;
+            const total  = (schwab||0)+(etrade||0);
+            return { mk, schwab, etrade, total, isLive: mk===thisMonthKey&&liveSchwab&&!b.schwab };
+          });
+
+          // MoM and YTD calcs
+          const withChanges = rows.map((r,i) => {
+            const prev = rows[i-1];
+            const mom  = prev?.total>0 && r.total>0 ? ((r.total-prev.total)/prev.total*100) : null;
+            const janKey = r.mk.slice(0,4)+"-01";
+            const janRow = rows.find(x=>x.mk===janKey);
+            const ytd  = janRow?.total>0 && r.total>0 ? ((r.total-janRow.total)/janRow.total*100) : null;
+            return {...r, mom, ytd};
+          });
+
+          if (!balHistory) return <div style={{padding:20,color:"#3a4050",fontFamily:"monospace",fontSize:10}}>Loading balance history…</div>;
+
+          return (
+            <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:"12px",marginTop:9}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em"}}>ACCOUNT BALANCE HISTORY</div>
+                <button onClick={()=>{
+                  if(balEditMode){
+                    // Save edits
+                    const updated = {...balHistory};
+                    Object.entries(balEdits).forEach(([mk,vals])=>{ updated[mk]={...(updated[mk]||{}),...vals}; });
+                    // Auto-save current month Schwab if live
+                    if(liveSchwab) { updated[thisMonthKey]={...(updated[thisMonthKey]||{}),schwab:liveSchwab,schwabAuto:true}; }
+                    saveBalHistory(updated);
+                    setBalEdits({});
+                  }
+                  setBalEditMode(v=>!v);
+                }} style={{background:balEditMode?"#00ff8814":"transparent",border:"1px solid "+(balEditMode?"#00ff8844":"#21262d"),borderRadius:4,color:balEditMode?"#00ff88":"#3a4050",fontFamily:"monospace",fontSize:9,padding:"3px 10px",cursor:"pointer"}}>
+                  {balEditMode?"💾 Save":"✎ Edit"}
+                </button>
+              </div>
+              <div style={{overflowX:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:10,fontFamily:"monospace"}}>
+                  <thead>
+                    <tr style={{borderBottom:"1px solid #1c2128"}}>
+                      <th style={{padding:"4px 8px",textAlign:"left",color:"#3a4050",fontWeight:400}}>Month</th>
+                      <th style={{padding:"4px 8px",textAlign:"right",color:"#58a6ff",fontWeight:400}}>Schwab</th>
+                      <th style={{padding:"4px 8px",textAlign:"right",color:"#ffd166",fontWeight:400}}>ETrade</th>
+                      <th style={{padding:"4px 8px",textAlign:"right",color:"#00ff88",fontWeight:400}}>Total</th>
+                      <th style={{padding:"4px 8px",textAlign:"right",color:"#c084fc",fontWeight:400}}>MoM%</th>
+                      <th style={{padding:"4px 8px",textAlign:"right",color:"#ff9f1c",fontWeight:400}}>YTD%</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {withChanges.map(r=>(
+                      <tr key={r.mk} style={{borderBottom:"1px solid #0d1117",background:r.mk===thisMonthKey?"#00ff8806":"transparent"}}>
+                        <td style={{padding:"4px 8px",color:r.mk===thisMonthKey?"#00ff88":"#8b949e"}}>{r.mk}{r.isLive&&<span style={{fontSize:7,color:"#00ff8870",marginLeft:4}}>live</span>}</td>
+                        <td style={{padding:"4px 8px",textAlign:"right"}}>
+                          {balEditMode && r.mk!==thisMonthKey ? (
+                            <input type="number" defaultValue={r.schwab||""} placeholder="—" onBlur={e=>setBalEdits(p=>({...p,[r.mk]:{...(p[r.mk]||{}),schwab:e.target.value?+e.target.value:null}}))}
+                              style={{width:80,background:"transparent",border:"1px solid #21262d",borderRadius:3,color:"#58a6ff",fontFamily:"monospace",fontSize:10,padding:"2px 4px",textAlign:"right"}}/>
+                          ) : <span style={{color:"#58a6ff"}}>{r.schwab!=null?"$"+(+r.schwab).toLocaleString("en-US",{maximumFractionDigits:0}):"—"}</span>}
+                        </td>
+                        <td style={{padding:"4px 8px",textAlign:"right"}}>
+                          {balEditMode ? (
+                            <input type="number" defaultValue={r.etrade||""} placeholder="—" onBlur={e=>setBalEdits(p=>({...p,[r.mk]:{...(p[r.mk]||{}),etrade:e.target.value?+e.target.value:null}}))}
+                              style={{width:80,background:"transparent",border:"1px solid #21262d",borderRadius:3,color:"#ffd166",fontFamily:"monospace",fontSize:10,padding:"2px 4px",textAlign:"right"}}/>
+                          ) : <span style={{color:"#ffd166"}}>{r.etrade!=null?"$"+(+r.etrade).toLocaleString("en-US",{maximumFractionDigits:0}):"—"}</span>}
+                        </td>
+                        <td style={{padding:"4px 8px",textAlign:"right",color:"#00ff88",fontWeight:700}}>{r.total>0?"$"+(r.total).toLocaleString("en-US",{maximumFractionDigits:0}):"—"}</td>
+                        <td style={{padding:"4px 8px",textAlign:"right",color:r.mom>0?"#00ff88":r.mom<0?"#ff4560":"#3a4050"}}>{r.mom!=null?(r.mom>0?"+":"")+r.mom.toFixed(1)+"%":"—"}</td>
+                        <td style={{padding:"4px 8px",textAlign:"right",color:r.ytd>0?"#ff9f1c":r.ytd<0?"#ff4560":"#3a4050"}}>{r.ytd!=null?(r.ytd>0?"+":"")+r.ytd.toFixed(1)+"%":"—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })()}
+
         {tab==="strategies" && (
           <div style={{display:"flex",flexDirection:"column",gap:9}}>
             {/* Header + new button */}
@@ -3004,8 +3151,11 @@ ${JSON.stringify(summary, null, 1)}`;
                             const pm = Object.fromEntries(ps.map(o=>[o.strike,o]));
                             return (
                               <div key={exp} style={{marginBottom:8}}>
-                                <div style={{padding:"3px 6px",fontSize:8,color:"#58a6ff",fontFamily:"monospace",background:"#58a6ff10"}}>{exp}</div>
-                                <div style={{overflowX:"auto"}}>
+                                <div onClick={()=>toggleChainDate(selectedWatchTicker,exp)} style={{padding:"3px 6px",fontSize:8,color:"#58a6ff",fontFamily:"monospace",background:"#58a6ff10",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",userSelect:"none"}}>
+                                  <span>{exp}</span>
+                                  <span style={{fontSize:9,color:"#3a4050"}}>{isChainDateCollapsed(selectedWatchTicker,exp)?"▶":"▼"}</span>
+                                </div>
+                                {!isChainDateCollapsed(selectedWatchTicker,exp) && <div style={{overflowX:"auto"}}>
                                   <table style={{width:"100%",borderCollapse:"collapse",fontSize:8,fontFamily:"monospace"}}>
                                     <thead><tr>
                                       <th style={{...thS,color:"#00ff8870"}}>Bid</th><th style={{...thS,color:"#00ff8870"}}>Ask</th><th style={{...thS,color:"#00ff8870"}}>Δ</th>
@@ -3029,7 +3179,7 @@ ${JSON.stringify(summary, null, 1)}`;
                                       })}
                                     </tbody>
                                   </table>
-                                </div>
+                                </div>}
                               </div>
                             );
                           });
@@ -3119,6 +3269,27 @@ ${JSON.stringify(summary, null, 1)}`;
                   <div><FL>Ask</FL><input type="number" value={planForm.ask} onChange={e=>pf("ask",e.target.value)}/></div>
                 </div>
                 <div style={{marginBottom:9}}><FL>Notes</FL><input type="text" value={planForm.notes} onChange={e=>pf("notes",e.target.value)}/></div>
+                {/* Estimated premium + cash required */}
+                {(planForm.bid||planForm.ask) && planForm.qty && (() => {
+                  const mid = ((+planForm.bid||0)+(+planForm.ask||0))/2;
+                  const estPrem = mid*(+planForm.qty)*100;
+                  const isPut   = planForm.type==="Put" && (planForm.action==="STO"||planForm.action==="BTO");
+                  const cashReq = isPut ? (+planForm.strike||0)*(+planForm.qty)*100 : 0;
+                  const schwabAvailForPuts = (+cashData.schwab||0) - openC.filter(c=>c.optType==="STO"&&c.type==="Put"&&c.account==="Schwab").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
+                  const etradeAvailForPuts = (+cashData.etrade||0) - openC.filter(c=>c.optType==="STO"&&c.type==="Put"&&c.account==="Etrade").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
+                  const acctAvail = planForm.account==="Schwab"?schwabAvailForPuts:planForm.account==="Etrade"?etradeAvailForPuts:null;
+                  const afterTrade = acctAvail!=null ? acctAvail - cashReq : null;
+                  return (
+                    <div style={{background:"#0a0e14",border:"1px solid #c084fc30",borderRadius:6,padding:"8px 10px",marginBottom:9,fontSize:9,fontFamily:"monospace"}}>
+                      <div style={{color:"#c084fc",letterSpacing:"0.07em",marginBottom:5}}>ESTIMATES</div>
+                      <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+                        <div><span style={{color:"#3a4050"}}>Est Premium: </span><span style={{color:"#58a6ff",fontWeight:700}}>{f$(estPrem)}</span><span style={{color:"#3a4050"}}> (mid {f$(mid)} × {planForm.qty} × 100)</span></div>
+                        {isPut && cashReq>0 && <div><span style={{color:"#3a4050"}}>Cash Required: </span><span style={{color:"#ffd166",fontWeight:700}}>{f$(cashReq)}</span></div>}
+                        {afterTrade!=null && <div><span style={{color:"#3a4050"}}>Avail After: </span><span style={{color:afterTrade>=0?"#00ff88":"#ff4560",fontWeight:700}}>{f$(afterTrade)}</span></div>}
+                      </div>
+                    </div>
+                  );
+                })()}
                 {/* Earnings warning */}
                 {(() => {
                   const sd = stocksData[planForm.ticker] || {};
@@ -3418,8 +3589,11 @@ ${JSON.stringify(summary, null, 1)}`;
                         const putMap  = Object.fromEntries(puts.map(o=>[o.strike,o]));
                         return (
                           <div key={exp} style={{marginBottom:12}}>
-                            <div style={{padding:"4px 8px",fontSize:8,color:"#58a6ff",fontFamily:"monospace",background:"#58a6ff10",borderTop:"1px solid #58a6ff20"}}>{exp}</div>
-                            <div style={{overflowX:"auto"}}>
+                            <div onClick={()=>toggleChainDate(selectedTicker,exp)} style={{padding:"4px 8px",fontSize:8,color:"#58a6ff",fontFamily:"monospace",background:"#58a6ff10",borderTop:"1px solid #58a6ff20",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",userSelect:"none"}}>
+                              <span>{exp}</span>
+                              <span style={{fontSize:9,color:"#3a4050"}}>{isChainDateCollapsed(selectedTicker,exp)?"▶ collapsed":"▼"}</span>
+                            </div>
+                            {!isChainDateCollapsed(selectedTicker,exp) && <div style={{overflowX:"auto"}}>
                               <table style={{width:"100%",borderCollapse:"collapse",fontSize:9,fontFamily:"monospace"}}>
                                 <thead><tr>
                                   <th style={{...thStyle,color:"#00ff8870"}}>Bid</th>
@@ -3460,7 +3634,7 @@ ${JSON.stringify(summary, null, 1)}`;
                                   })}
                                 </tbody>
                               </table>
-                            </div>
+                            </div>}
                           </div>
                         );
                       });
@@ -3669,6 +3843,25 @@ ${JSON.stringify(summary, null, 1)}`;
                     <div style={{fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:"#00ff88"}}>{f$((+cashData.schwab||0)+(+cashData.etrade||0))}</div>
                   </div>
                 )}
+                {/* Committed funds + available to write puts */}
+                {(() => {
+                  const schwabCommitted = openC.filter(c=>c.optType==="STO"&&c.type==="Put"&&c.account==="Schwab").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
+                  const etradeCommitted = openC.filter(c=>c.optType==="STO"&&c.type==="Put"&&c.account==="Etrade").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
+                  const schwabAvail = (+cashData.schwab||0) - schwabCommitted;
+                  const etradeAvail = (+cashData.etrade||0) - etradeCommitted;
+                  return (<>
+                    <div style={{background:"#0a0e14",border:"1px solid #c084fc30",borderRadius:8,padding:"8px 12px",minWidth:140,display:"flex",flexDirection:"column",gap:3}}>
+                      <div style={{fontSize:7,color:"#c084fc",fontFamily:"monospace",letterSpacing:"0.08em"}}>SCHWAB AVAILABLE</div>
+                      <div style={{fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:schwabAvail>=0?"#00ff88":"#ff4560"}}>{f$(schwabAvail)}</div>
+                      <div style={{fontSize:8,color:"#3a4050",fontFamily:"monospace"}}>cash {f$(+cashData.schwab||0)} − committed {f$(schwabCommitted)}</div>
+                    </div>
+                    <div style={{background:"#0a0e14",border:"1px solid #c084fc30",borderRadius:8,padding:"8px 12px",minWidth:140,display:"flex",flexDirection:"column",gap:3}}>
+                      <div style={{fontSize:7,color:"#c084fc",fontFamily:"monospace",letterSpacing:"0.08em"}}>ETRADE AVAILABLE</div>
+                      <div style={{fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:etradeAvail>=0?"#00ff88":"#ff4560"}}>{f$(etradeAvail)}</div>
+                      <div style={{fontSize:8,color:"#3a4050",fontFamily:"monospace"}}>cash {f$(+cashData.etrade||0)} − committed {f$(etradeCommitted)}</div>
+                    </div>
+                  </>);
+                })()}
                 {/* Filter + Add Stock */}
                 <div style={{marginLeft:"auto",display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
                   <button onClick={()=>setStocksFilter("all")} style={{background:stocksFilter==="all"?"#00ff8814":"transparent",color:stocksFilter==="all"?"#00ff88":"#444",border:stocksFilter==="all"?"1px solid #00ff8825":"1px solid #1c2128",borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"monospace"}}>All</button>
@@ -3934,9 +4127,6 @@ ${JSON.stringify(summary, null, 1)}`;
           );
         })()}
 
-
-        {/* ══ IMPORT ══ */}
-        {tab==="import" && <ImportTab />}
 
       </div>
     </div>
