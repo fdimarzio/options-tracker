@@ -53,7 +53,7 @@ const pill = (label, color) => ({
 });
 
 const OPT_COLORS = { BTO: C.blue, STO: C.green, BTC: C.orange, STC: C.yellow };
-const MATCH_COLORS = { exact: C.green, partial: C.yellow, unmatched: C.red };
+const MATCH_COLORS = { exact: C.green, partial: C.yellow, unmatched: C.red, manual: C.blue };
 
 // ── toDB mapper (mirrors main app) ───────────────────────────────────────────
 function contractToDB(c) {
@@ -116,9 +116,10 @@ export default function ImportPage() {
   const [days,         setDays]         = useState(30);
   const [startDate,    setStartDate]    = useState("");
   const [endDate,      setEndDate]      = useState("");
-  const [transactions, setTransactions] = useState([]);
-  const [checked,      setChecked]      = useState(new Set());
-  const [meta,         setMeta]         = useState(null);
+  const [transactions,   setTransactions]   = useState([]);
+  const [openContracts,  setOpenContracts]  = useState([]);  // from DB, for manual match dropdown
+  const [checked,        setChecked]        = useState(new Set());
+  const [meta,           setMeta]           = useState(null);
   const [error,        setError]        = useState(null);
   const [committing,   setCommitting]   = useState(false);
   const [committed,    setCommitted]    = useState([]);
@@ -142,6 +143,7 @@ export default function ImportPage() {
       // Add UI state to each transaction
       const txs = (data.transactions || []).map((t, i) => ({ ...t, _idx: i }));
       setTransactions(txs);
+      setOpenContracts(data.openContracts || []);
       setMeta(data.meta);
       setChecked(new Set()); // nothing checked by default
       setMode("review");
@@ -593,13 +595,59 @@ export default function ImportPage() {
                       />
                     </td>
 
-                    {/* Match status */}
-                    <td style={{ padding: "8px 10px" }}>
-                      {t.matchConfidence ? (
-                        <span style={pill(t.matchConfidence, MATCH_COLORS[t.matchConfidence] || C.muted)}
-                          title={t.parentId ? `Linked to ID ${t.parentId}` : "No opener found"}>
-                          {t.matchConfidence}
-                        </span>
+                    {/* Match status — dropdown for unmatched BTC/STC */}
+                    <td style={{ padding: "6px 10px", minWidth: 160 }} onClick={e => e.stopPropagation()}>
+                      {(t.optType === "BTC" || t.optType === "STC") ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                          {t.matchConfidence !== "unmatched" ? (
+                            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                              <span style={pill(t.matchConfidence, MATCH_COLORS[t.matchConfidence] || C.muted)}>
+                                {t.matchConfidence}
+                              </span>
+                              <span style={{ fontSize: 10, color: C.dimText }}>
+                                #{t.parentId} · {t.matchedContract?.stock} {t.matchedContract?.strike} {t.matchedContract?.expires?.slice(5)}
+                              </span>
+                            </div>
+                          ) : (
+                            <span style={pill("unmatched", C.red)}>unmatched</span>
+                          )}
+                          {/* Always show override dropdown for BTC/STC */}
+                          <select
+                            value={t.parentId ?? ""}
+                            onChange={e => {
+                              const val = e.target.value;
+                              const matched = openContracts.find(o => String(o.id) === val);
+                              updateTx(t._idx, "parentId", val ? +val : null);
+                              if (matched) {
+                                updateTx(t._idx, "matchConfidence", "manual");
+                                updateTx(t._idx, "matchedContract", matched);
+                              }
+                            }}
+                            onClick={e => e.stopPropagation()}
+                            style={{ fontSize: 10, background: "#0a1018", border: `1px solid ${C.border2}`, borderRadius: 4, color: C.muted, fontFamily: "monospace", padding: "2px 4px", cursor: "pointer" }}>
+                            <option value="">— override match —</option>
+                            {openContracts
+                              .filter(o => o.stock?.toUpperCase() === t.stock?.toUpperCase())
+                              .map(o => (
+                                <option key={o.id} value={o.id}>
+                                  #{o.id} · {o.opt_type} {o.strike} {o.expires?.slice(5)} ×{o.qty}
+                                </option>
+                              ))
+                            }
+                            {/* Also show other stocks in case of mismatch */}
+                            {openContracts.filter(o => o.stock?.toUpperCase() !== t.stock?.toUpperCase()).length > 0 && (
+                              <option disabled>── other stocks ──</option>
+                            )}
+                            {openContracts
+                              .filter(o => o.stock?.toUpperCase() !== t.stock?.toUpperCase())
+                              .map(o => (
+                                <option key={`other-${o.id}`} value={o.id}>
+                                  #{o.id} · {o.stock} {o.opt_type} {o.strike} {o.expires?.slice(5)}
+                                </option>
+                              ))
+                            }
+                          </select>
+                        </div>
                       ) : (
                         <span style={{ color: C.dimText, fontSize: 11 }}>—</span>
                       )}

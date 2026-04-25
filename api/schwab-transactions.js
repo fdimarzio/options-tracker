@@ -165,46 +165,54 @@ async function fetchLivePrice(symbol, token) {
   }
 }
 
-// ── Load existing open contracts from Supabase for auto-linking ──────────────
+// ── Load existing open Schwab contracts from Supabase for auto-linking ─────────
+// Fetches BTO/STO contracts from Schwab account (Open or manually-closed)
+// We include all statuses so we can match even if the user marked it closed manually
 async function loadExistingOpens() {
   const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/contracts?select=id,stock,opt_type,strike,expires,qty,account,status&status=eq.Open`,
+    `${SUPABASE_URL}/rest/v1/contracts?select=id,stock,opt_type,strike,expires,qty,account,status&account=eq.Schwab&order=id.desc&limit=1000`,
     { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
   );
-  return await res.json();
+  const rows = await res.json();
+  // Only want openers (BTO/STO) for matching purposes
+  return rows.filter(r => r.opt_type === "BTO" || r.opt_type === "STO");
 }
 
 // ── Auto-match a closing trade to its opener ─────────────────────────────────
-// Returns { parentId, confidence } or null
-function autoMatch(closer, openers, batchOpeners = []) {
+// Returns { parentId, matchedContract, confidence }
+function autoMatch(closer, dbOpeners, batchOpeners = []) {
   const oppositeType = { BTC: "BTO", STC: "STO" };
   const targetOptType = oppositeType[closer.optType];
   if (!targetOptType) return null;
 
+  // Combine batch openers (same import) and DB openers
+  // Normalize to a common shape for comparison
   const candidates = [
-    ...batchOpeners.filter(o => o.optType === targetOptType),
-    ...openers.filter(o => o.opt_type === targetOptType),
+    ...batchOpeners
+      .filter(o => o.optType === targetOptType)
+      .map(o => ({ id: o._batchIdx, stock: o.stock, opt_type: o.optType, strike: o.strike, expires: o.expires, qty: o.qty, account: o.account, _isBatch: true })),
+    ...dbOpeners.filter(o => o.opt_type === targetOptType),
   ];
 
+  // Match on stock + strike + expiry (drop account filter — some older records may vary)
   const matches = candidates.filter(o => {
-    const stock   = (o.stock   || o.stock)?.toUpperCase()   === closer.stock?.toUpperCase();
-    const strike  = Number(o.strike  ?? o.strike)  === Number(closer.strike);
-    const expires = (o.expires ?? o.expires)?.slice(0, 10)  === closer.expires;
-    const account = (o.account ?? o.account)?.toLowerCase() === closer.account?.toLowerCase();
-    return stock && strike && expires && account;
+    const stock  = o.stock?.toUpperCase()  === closer.stock?.toUpperCase();
+    const strike = Number(o.strike)        === Number(closer.strike);
+    const exp    = o.expires?.slice(0, 10) === closer.expires;
+    return stock && strike && exp;
   });
 
-  if (!matches.length) return { parentId: null, confidence: "unmatched" };
+  if (!matches.length) return { parentId: null, matchedContract: null, confidence: "unmatched" };
 
-  // If qty matches exactly, high confidence
+  // Prefer exact qty match
   const exactQty = matches.find(o => Number(o.qty) === Number(closer.qty));
-  if (exactQty) return { parentId: exactQty.id ?? exactQty._batchIdx, confidence: "exact" };
+  if (exactQty) return { parentId: exactQty.id, matchedContract: exactQty, confidence: "exact" };
 
-  // Otherwise, pick the best candidate (closest qty)
+  // Otherwise pick closest qty — mark as partial
   const best = matches.reduce((a, b) =>
     Math.abs(Number(a.qty) - Number(closer.qty)) < Math.abs(Number(b.qty) - Number(closer.qty)) ? a : b
   );
-  return { parentId: best.id ?? best._batchIdx, confidence: "partial" };
+  return { parentId: best.id, matchedContract: best, confidence: "partial" };
 }
 
 // ── Main handler ─────────────────────────────────────────────────────────────
@@ -312,15 +320,22 @@ export default async function handler(req, res) {
       if (c.optType === "BTC" || c.optType === "STC") {
         const match = autoMatch(c, existingOpens, batchOpeners);
         c.parentId         = match?.parentId ?? null;
+        c.matchedContract  = match?.matchedContract ?? null; // for display in review UI
         c.matchConfidence  = match?.confidence ?? "unmatched";
       } else {
         c.parentId        = null;
+        c.matchedContract = null;
         c.matchConfidence = null;
       }
     }
 
+    // Also send the full list of open DB contracts to the UI
+    // so the manual-match dropdown can be populated
+    const allOpenContracts = existingOpens;
+
     res.status(200).json({
       transactions: parsed,
+      openContracts: allOpenContracts,
       meta: { startDate, endDate, total: parsed.length, rawTotal: allRaw.length },
     });
   } catch (err) {
