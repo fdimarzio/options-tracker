@@ -2322,26 +2322,7 @@ ${JSON.stringify(summary, null, 1)}`;
               {["executed","closed"].map(v=>(
                 <button key={v} onClick={()=>setChartDate(v)} style={{background:chartDate===v?"#58a6ff14":"transparent",color:chartDate===v?"#58a6ff":"#2a3040",border:chartDate===v?"1px solid #58a6ff25":"1px solid #1c2128",borderRadius:4,padding:"2px 8px",fontSize:8,fontFamily:"monospace",textTransform:"uppercase"}}>{v}</button>
               ))}
-              <button onClick={async()=>{
-                if(spxOverlay){setSpxOverlay(false);return;}
-                try {
-                  const end = Date.now();
-                  const start = end - 365*2*24*60*60*1000;
-                  const url = "/api/schwab-proxy?path=/marketdata/v1/pricehistory&symbol=%24SPX&periodType=month&frequencyType=monthly&frequency=1&startDate="+start+"&endDate="+end+"&needExtendedHoursData=false";
-                  const res = await fetch(url);
-                  const d = await res.json();
-                  if(d?.candles?.length){
-                    const spx = d.candles.map((c,i,arr)=>({
-                      label: new Date(c.datetime).toISOString().slice(0,7),
-                      spxPct: i>0 ? +((c.close-arr[i-1].close)/arr[i-1].close*100).toFixed(2) : 0
-                    }));
-                    setSpxData(spx);
-                    setSpxOverlay(true);
-                  }
-                } catch(e){console.warn("SPX fetch failed:",e.message);}
-              }} style={{background:spxOverlay?"#ff9f1c14":"transparent",color:spxOverlay?"#ff9f1c":"#3a4050",border:spxOverlay?"1px solid #ff9f1c25":"1px solid #1c2128",borderRadius:4,padding:"2px 8px",fontSize:8,fontFamily:"monospace",marginLeft:8}}>
-                S&P 500
-              </button>
+
 
             </div>
             {/* Charts */}
@@ -2349,23 +2330,14 @@ ${JSON.stringify(summary, null, 1)}`;
               <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:11}}>
                 <div style={{fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em",marginBottom:7}}>PREMIUM & PROFIT — {chartView.toUpperCase()} BY DATE {chartDate.toUpperCase()}</div>
                 <ResponsiveContainer width="100%" height={140}>
-                  {(()=>{
-                    const spxMap = Object.fromEntries(spxData.map(s=>[s.label,s.spxPct]));
-                    const merged = chartData.map(d=>({...d,spxPct:spxMap[d.label]??null}));
-                    const Comp = spxOverlay ? ComposedChart : BarChart;
-                    return (
-                      <Comp data={merged} barGap={2} barSize={chartView==="monthly"?20:chartView==="weekly"?12:6}>
-                        <CartesianGrid strokeDasharray="2 4" stroke="#0d1117" vertical={false}/>
-                        <XAxis dataKey="label" tick={{fill:"#2a3040",fontSize:8,fontFamily:"monospace"}} axisLine={false} tickLine={false}/>
-                        <YAxis yAxisId="left" tick={{fill:"#2a3040",fontSize:8,fontFamily:"monospace"}} axisLine={false} tickLine={false} tickFormatter={v=>"$"+(v/1000).toFixed(0)+"k"}/>
-                        {spxOverlay&&<YAxis yAxisId="right" orientation="right" tick={{fill:"#ff9f1c60",fontSize:7,fontFamily:"monospace"}} axisLine={false} tickLine={false} tickFormatter={v=>(v>0?"+":"")+v.toFixed(0)+"%"}/>}
-                        <Tooltip content={<ChartTip/>}/>
-                        <Bar yAxisId="left" dataKey="premium" name="Premium" fill="#58a6ff" radius={[2,2,0,0]} opacity={0.7}/>
-                        <Bar yAxisId="left" dataKey="profit" name="Profit" radius={[2,2,0,0]}>{merged.map((e,i)=><Cell key={i} fill={e.profit>=0?"#00ff88":"#ff4560"} opacity={0.8}/>)}</Bar>
-                        {spxOverlay&&<Line yAxisId="right" type="monotone" dataKey="spxPct" name="S&P500%" stroke="#ff9f1c" strokeWidth={2} dot={false} connectNulls/>}
-                      </Comp>
-                    );
-                  })()}
+                  <BarChart data={chartData} barGap={2} barSize={chartView==="monthly"?20:chartView==="weekly"?12:6}>
+                    <CartesianGrid strokeDasharray="2 4" stroke="#0d1117" vertical={false}/>
+                    <XAxis dataKey="label" tick={{fill:"#2a3040",fontSize:8,fontFamily:"monospace"}} axisLine={false} tickLine={false}/>
+                    <YAxis tick={{fill:"#2a3040",fontSize:8,fontFamily:"monospace"}} axisLine={false} tickLine={false} tickFormatter={v=>"$"+(v/1000).toFixed(0)+"k"}/>
+                    <Tooltip content={<ChartTip/>}/>
+                    <Bar dataKey="premium" name="Premium" fill="#58a6ff" radius={[2,2,0,0]} opacity={0.7}/>
+                    <Bar dataKey="profit"  name="Profit"  radius={[2,2,0,0]}>{chartData.map((e,i)=><Cell key={i} fill={e.profit>=0?"#00ff88":"#ff4560"} opacity={0.8}/>)}</Bar>
+                  </BarChart>
                 </ResponsiveContainer>
               </div>
               <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:11}}>
@@ -2942,6 +2914,63 @@ ${JSON.stringify(summary, null, 1)}`;
                 </tbody>
               </table>
             </div>
+
+            {/* S&P 500 vs Portfolio Balance Chart */}
+            {analyticsView==="monthly" && (
+              <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:11}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+                  <div style={{fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em"}}>PORTFOLIO BALANCE vs S&P 500 — MONTHLY</div>
+                  <button onClick={async()=>{
+                    if(spxOverlay){setSpxOverlay(false);return;}
+                    try {
+                      const end = Date.now();
+                      const start = end - 365*3*24*60*60*1000;
+                      const url = "/api/schwab-proxy?path=/marketdata/v1/pricehistory&symbol=%24SPX&periodType=month&frequencyType=monthly&frequency=1&startDate="+start+"&endDate="+end+"&needExtendedHoursData=false";
+                      const res = await fetch(url);
+                      const d = await res.json();
+                      if(d?.candles?.length){
+                        const spx = d.candles.map((c,i,arr)=>({
+                          label: new Date(c.datetime).toISOString().slice(0,7),
+                          spxClose: c.close,
+                          spxPct: i>0 ? +((c.close-arr[0].close)/arr[0].close*100).toFixed(2) : 0
+                        }));
+                        setSpxData(spx);
+                        setSpxOverlay(true);
+                      }
+                    } catch(e){console.warn("SPX fetch failed:",e.message);}
+                  }} style={{background:spxOverlay?"#ff9f1c14":"transparent",color:spxOverlay?"#ff9f1c":"#3a4050",border:spxOverlay?"1px solid #ff9f1c25":"1px solid #21262d",borderRadius:4,padding:"3px 10px",fontSize:8,fontFamily:"monospace",cursor:"pointer"}}>
+                    {spxOverlay?"✓ S&P 500 ON":"+ Compare S&P 500"}
+                  </button>
+                </div>
+                {(()=>{
+                  // Build chart data: one point per month with total balance + S&P % change from first month
+                  const months = Object.keys(balHistoryInline).sort();
+                  if(months.length < 2) return <div style={{padding:"20px 0",textAlign:"center",color:"#3a4050",fontSize:10,fontFamily:"monospace"}}>Enter balance data above to see chart</div>;
+                  // Normalize both series to % change from first data point
+                  const firstB = months[0];
+                  const firstTotal = (+balHistoryInline[firstB]?.schwab||0)+(+balHistoryInline[firstB]?.etrade||0);
+                  const spxMap = Object.fromEntries(spxData.map(s=>[s.label,s.spxPct]));
+                  const chartBalData = months.map(mk=>{
+                    const b = balHistoryInline[mk]||{};
+                    const total = (+b.schwab||0)+(+b.etrade||0);
+                    const portPct = firstTotal>0 ? +((total-firstTotal)/firstTotal*100).toFixed(2) : null;
+                    return {label:mk.slice(5), fullLabel:mk, portPct, spxPct:spxMap[mk]??null, total};
+                  });
+                  return (
+                    <ResponsiveContainer width="100%" height={180}>
+                      <ComposedChart data={chartBalData}>
+                        <CartesianGrid strokeDasharray="2 4" stroke="#0d1117" vertical={false}/>
+                        <XAxis dataKey="label" tick={{fill:"#2a3040",fontSize:8,fontFamily:"monospace"}} axisLine={false} tickLine={false}/>
+                        <YAxis tick={{fill:"#2a3040",fontSize:8,fontFamily:"monospace"}} axisLine={false} tickLine={false} tickFormatter={v=>(v>0?"+":"")+v.toFixed(0)+"%"}/>
+                        <Tooltip formatter={(val,name)=>[val!=null?(val>0?"+":"")+val.toFixed(1)+"%":"—",name]} labelFormatter={l=>l}/>
+                        <Line type="monotone" dataKey="portPct" name="Portfolio" stroke="#00ff88" strokeWidth={2} dot={{fill:"#00ff88",r:3}} connectNulls/>
+                        {spxOverlay&&<Line type="monotone" dataKey="spxPct" name="S&P 500" stroke="#ff9f1c" strokeWidth={2} dot={{fill:"#ff9f1c",r:3}} connectNulls/>}
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  );
+                })()}
+              </div>
+            )}
 
             {/* Account + Call/Put breakdown */}
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7}}>
