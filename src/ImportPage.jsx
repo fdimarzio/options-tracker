@@ -108,6 +108,142 @@ function EditCell({ value, onChange, type = "text", options = null, placeholder 
   );
 }
 
+
+// ── Match Modal ───────────────────────────────────────────────────────────────
+function MatchModal({ closer, openContracts, onSelect, onClose }) {
+  const [search, setSearch] = useState("");
+
+  const filtered = openContracts.filter(o => {
+    if (!search) return true;
+    const q = search.toLowerCase();
+    return (
+      o.stock?.toLowerCase().includes(q) ||
+      String(o.strike).includes(q) ||
+      o.expires?.includes(q) ||
+      o.opt_type?.toLowerCase().includes(q) ||
+      String(o.id).includes(q)
+    );
+  });
+
+  // Sort: same stock first
+  const sorted = [...filtered].sort((a, b) => {
+    const aMatch = a.stock?.toUpperCase() === closer.stock?.toUpperCase();
+    const bMatch = b.stock?.toUpperCase() === closer.stock?.toUpperCase();
+    if (aMatch && !bMatch) return -1;
+    if (!aMatch && bMatch) return 1;
+    return 0;
+  });
+
+  const overlay = {
+    position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)",
+    display: "flex", alignItems: "center", justifyContent: "center",
+    zIndex: 1000,
+  };
+  const modal = {
+    background: "#0d1117", border: `1px solid #2a3040`, borderRadius: 10,
+    width: "min(680px, 95vw)", maxHeight: "80vh",
+    display: "flex", flexDirection: "column", fontFamily: "monospace",
+    boxShadow: "0 24px 80px rgba(0,0,0,0.6)",
+  };
+
+  return (
+    <div style={overlay} onClick={onClose}>
+      <div style={modal} onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div style={{ padding: "16px 20px", borderBottom: "1px solid #1c2128" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#e6edf3", marginBottom: 4 }}>
+                Link Opener for{" "}
+                <span style={{ color: OPT_COLORS[closer.optType] }}>{closer.optType}</span>
+                {" "}{closer.stock} {closer.strike} {closer.expires} ×{closer.qty}
+              </div>
+              <div style={{ fontSize: 11, color: "#6e7681" }}>
+                {closer.dateExec} · premium {closer.premium >= 0 ? "+" : ""}${Math.abs(closer.premium).toFixed(2)}
+              </div>
+            </div>
+            <button onClick={onClose}
+              style={{ background: "none", border: "none", color: "#6e7681", fontSize: 18, cursor: "pointer", padding: "0 4px" }}>
+              ✕
+            </button>
+          </div>
+          <input
+            autoFocus
+            placeholder="Search by stock, strike, expiry, ID…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            style={{
+              marginTop: 12, width: "100%", background: "#0a1018",
+              border: "1px solid #2a3040", borderRadius: 6, color: "#e6edf3",
+              fontFamily: "monospace", fontSize: 13, padding: "8px 12px", outline: "none",
+              boxSizing: "border-box",
+            }}
+          />
+        </div>
+
+        {/* Results */}
+        <div style={{ overflowY: "auto", flex: 1 }}>
+          {sorted.length === 0 ? (
+            <div style={{ padding: 24, textAlign: "center", color: "#6e7681", fontSize: 12 }}>
+              No contracts match "{search}"
+            </div>
+          ) : (
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead style={{ position: "sticky", top: 0, background: "#0d1117" }}>
+                <tr style={{ borderBottom: "1px solid #1c2128" }}>
+                  {["ID","Stock","Type","Strike","Expiry","Qty","Date","Premium","Status"].map(h => (
+                    <th key={h} style={{ padding: "8px 12px", textAlign: "left", color: "#6e7681", fontWeight: 400 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map(o => {
+                  const isSameStock = o.stock?.toUpperCase() === closer.stock?.toUpperCase();
+                  return (
+                    <tr key={o.id}
+                      onClick={() => { onSelect(o); onClose(); }}
+                      style={{
+                        borderBottom: "1px solid #1c2128",
+                        cursor: "pointer",
+                        background: isSameStock ? "#00ff8806" : "transparent",
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.background = "#58a6ff12"}
+                      onMouseLeave={e => e.currentTarget.style.background = isSameStock ? "#00ff8806" : "transparent"}
+                    >
+                      <td style={{ padding: "9px 12px", color: "#6e7681" }}>#{o.id}</td>
+                      <td style={{ padding: "9px 12px", fontWeight: 700, color: isSameStock ? "#00ff88" : "#e6edf3" }}>{o.stock}</td>
+                      <td style={{ padding: "9px 12px" }}>
+                        <span style={{ ...pill(o.opt_type, OPT_COLORS[o.opt_type] || "#8b949e") }}>{o.opt_type}</span>
+                      </td>
+                      <td style={{ padding: "9px 12px", color: "#e6edf3" }}>{o.strike}</td>
+                      <td style={{ padding: "9px 12px", color: "#8b949e" }}>{o.expires}</td>
+                      <td style={{ padding: "9px 12px", color: "#e6edf3" }}>{o.qty}</td>
+                      <td style={{ padding: "9px 12px", color: "#8b949e" }}>{o.date_exec}</td>
+                      <td style={{ padding: "9px 12px", color: o.premium >= 0 ? "#00ff88" : "#ff6b6b" }}>
+                        {o.premium != null ? `${o.premium >= 0 ? "+" : ""}$${Math.abs(o.premium).toFixed(2)}` : "—"}
+                      </td>
+                      <td style={{ padding: "9px 12px", color: o.status === "Open" ? "#00ff88" : "#6e7681" }}>{o.status}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div style={{ padding: "12px 20px", borderTop: "1px solid #1c2128", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ fontSize: 11, color: "#6e7681" }}>{sorted.length} contracts · click a row to link</span>
+          <button onClick={() => { onSelect(null); onClose(); }}
+            style={{ background: "transparent", border: "1px solid #2a3040", borderRadius: 4, color: "#6e7681", fontFamily: "monospace", fontSize: 12, padding: "5px 12px", cursor: "pointer" }}>
+            Clear Link
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 export default function ImportPage() {
   const [mode,         setMode]         = useState("config");   // config | loading | review | done
@@ -124,6 +260,7 @@ export default function ImportPage() {
   const [committing,   setCommitting]   = useState(false);
   const [committed,    setCommitted]    = useState([]);
   const [filterOptType, setFilterOptType] = useState("ALL");
+  const [matchModal,    setMatchModal]    = useState(null);  // { txIdx } when open
 
   // ── Fetch transactions ──────────────────────────────────────────────────────
   const fetchTransactions = useCallback(async () => {
@@ -595,58 +732,33 @@ export default function ImportPage() {
                       />
                     </td>
 
-                    {/* Match status — dropdown for unmatched BTC/STC */}
-                    <td style={{ padding: "6px 10px", minWidth: 160 }} onClick={e => e.stopPropagation()}>
+                    {/* Match status — button opens modal for BTC/STC */}
+                    <td style={{ padding: "6px 10px", minWidth: 150 }} onClick={e => e.stopPropagation()}>
                       {(t.optType === "BTC" || t.optType === "STC") ? (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                          {t.matchConfidence !== "unmatched" ? (
-                            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                              <span style={pill(t.matchConfidence, MATCH_COLORS[t.matchConfidence] || C.muted)}>
-                                {t.matchConfidence}
-                              </span>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                          {/* Status pill */}
+                          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                            <span style={pill(t.matchConfidence, MATCH_COLORS[t.matchConfidence] || C.muted)}>
+                              {t.matchConfidence}
+                            </span>
+                            {t.parentId && (
                               <span style={{ fontSize: 10, color: C.dimText }}>
-                                #{t.parentId} · {t.matchedContract?.stock} {t.matchedContract?.strike} {t.matchedContract?.expires?.slice(5)}
+                                #{t.parentId}
                               </span>
-                            </div>
-                          ) : (
-                            <span style={pill("unmatched", C.red)}>unmatched</span>
-                          )}
-                          {/* Always show override dropdown for BTC/STC */}
-                          <select
-                            value={t.parentId ?? ""}
-                            onChange={e => {
-                              const val = e.target.value;
-                              const matched = openContracts.find(o => String(o.id) === val);
-                              updateTx(t._idx, "parentId", val ? +val : null);
-                              if (matched) {
-                                updateTx(t._idx, "matchConfidence", "manual");
-                                updateTx(t._idx, "matchedContract", matched);
-                              }
-                            }}
-                            onClick={e => e.stopPropagation()}
-                            style={{ fontSize: 10, background: "#0a1018", border: `1px solid ${C.border2}`, borderRadius: 4, color: C.muted, fontFamily: "monospace", padding: "2px 4px", cursor: "pointer" }}>
-                            <option value="">— override match —</option>
-                            {openContracts
-                              .filter(o => o.stock?.toUpperCase() === t.stock?.toUpperCase())
-                              .map(o => (
-                                <option key={o.id} value={o.id}>
-                                  #{o.id} · {o.opt_type} {o.strike} {o.expires?.slice(5)} ×{o.qty}
-                                </option>
-                              ))
-                            }
-                            {/* Also show other stocks in case of mismatch */}
-                            {openContracts.filter(o => o.stock?.toUpperCase() !== t.stock?.toUpperCase()).length > 0 && (
-                              <option disabled>── other stocks ──</option>
                             )}
-                            {openContracts
-                              .filter(o => o.stock?.toUpperCase() !== t.stock?.toUpperCase())
-                              .map(o => (
-                                <option key={`other-${o.id}`} value={o.id}>
-                                  #{o.id} · {o.stock} {o.opt_type} {o.strike} {o.expires?.slice(5)}
-                                </option>
-                              ))
-                            }
-                          </select>
+                          </div>
+                          {/* Matched contract summary */}
+                          {t.matchedContract && (
+                            <div style={{ fontSize: 10, color: C.muted }}>
+                              {t.matchedContract.stock} {t.matchedContract.strike} {t.matchedContract.expires?.slice(5)} ×{t.matchedContract.qty}
+                            </div>
+                          )}
+                          {/* Link / Change button */}
+                          <button
+                            onClick={e => { e.stopPropagation(); setMatchModal({ txIdx: t._idx }); }}
+                            style={{ fontSize: 10, background: "transparent", border: `1px solid ${C.border2}`, borderRadius: 3, color: C.muted, fontFamily: "monospace", padding: "2px 7px", cursor: "pointer", alignSelf: "flex-start" }}>
+                            {t.matchConfidence === "unmatched" ? "🔗 Link" : "✎ Change"}
+                          </button>
                         </div>
                       ) : (
                         <span style={{ color: C.dimText, fontSize: 11 }}>—</span>
@@ -659,6 +771,30 @@ export default function ImportPage() {
           </table>
         </div>
       )}
+
+      {/* Match Modal */}
+      {matchModal && (() => {
+        const tx = transactions.find(t => t._idx === matchModal.txIdx);
+        if (!tx) return null;
+        return (
+          <MatchModal
+            closer={tx}
+            openContracts={openContracts}
+            onSelect={matched => {
+              if (matched) {
+                updateTx(matchModal.txIdx, "parentId", matched.id);
+                updateTx(matchModal.txIdx, "matchConfidence", "manual");
+                updateTx(matchModal.txIdx, "matchedContract", matched);
+              } else {
+                updateTx(matchModal.txIdx, "parentId", null);
+                updateTx(matchModal.txIdx, "matchConfidence", "unmatched");
+                updateTx(matchModal.txIdx, "matchedContract", null);
+              }
+            }}
+            onClose={() => setMatchModal(null)}
+          />
+        );
+      })()}
 
       {/* Bottom action bar */}
       <div style={{ position: "sticky", bottom: 0, background: C.surface, borderTop: `1px solid ${C.border}`, padding: "12px 0", marginTop: 16, display: "flex", alignItems: "center", justifyContent: "space-between" }}>

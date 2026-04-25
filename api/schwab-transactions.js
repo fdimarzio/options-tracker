@@ -104,7 +104,11 @@ function parseTransaction(tx) {
 
   return {
     schwabTransactionId: tx.activityId ?? tx.transactionId ?? null,
-    stock:               inst.underlyingSymbol?.toUpperCase() ?? null,
+    // underlyingSymbol is most reliable; fall back to parsing the OCC symbol
+    // e.g. "AAPL  260424C00272500" → first 6 chars trimmed = "AAPL"
+    stock:               (inst.underlyingSymbol?.toUpperCase()
+                          ?? inst.symbol?.trim().split(/\s+/)[0]?.replace(/\d.*$/, "").trim().toUpperCase()
+                          ?? null),
     type:                callOrPut === "PUT" ? "Put" : "Call",
     optType,
     strike:              inst.strikePrice ?? null,
@@ -125,26 +129,34 @@ function parseTransaction(tx) {
 // ── Fetch historical closing price for a stock on a given date ───────────────
 async function fetchClosingPrice(symbol, date, token) {
   try {
-    // Schwab pricehistory: get 1-day candle around the target date
-    const start = new Date(date);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(date);
-    end.setHours(23, 59, 59, 999);
+    // Schwab pricehistory: periodType=month + frequencyType=daily is the correct
+    // combination for daily OHLC candles. Use startDate/endDate epoch ms to pin
+    // to the exact trade date (add a 2-day window to handle weekends/holidays).
+    const target = new Date(date);
+    const start  = new Date(target);
+    start.setDate(start.getDate() - 1); // 1 day before in case of gaps
+    const end = new Date(target);
+    end.setDate(end.getDate() + 1);     // 1 day after for same reason
 
     const data = await schwabFetch("/marketdata/v1/pricehistory", {
       symbol,
-      periodType:         "day",
-      period:             1,
-      frequencyType:      "daily",
-      frequency:          1,
-      startDate:          start.getTime(),
-      endDate:            end.getTime(),
+      periodType:            "month",
+      frequencyType:         "daily",
+      frequency:             1,
+      startDate:             start.getTime(),
+      endDate:               end.getTime(),
       needExtendedHoursData: false,
     }, token);
 
     const candles = data?.candles;
-    if (candles?.length) return candles[candles.length - 1].close ?? null;
-    return null;
+    if (!candles?.length) return null;
+
+    // Find the candle closest to our target date
+    const targetMs = target.getTime();
+    const closest  = candles.reduce((best, c) =>
+      Math.abs(c.datetime - targetMs) < Math.abs(best.datetime - targetMs) ? c : best
+    );
+    return closest.close ?? null;
   } catch (err) {
     console.warn(`[schwab-transactions] closing price fetch failed for ${symbol} on ${date}:`, err.message);
     return null;
