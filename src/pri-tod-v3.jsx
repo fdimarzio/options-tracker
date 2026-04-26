@@ -2817,8 +2817,8 @@ ${JSON.stringify(summary, null, 1)}`;
                   {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#ffd166",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>ETrade $</th>}
                   {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#00ff88",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Total $</th>}
                   {analyticsView==="monthly" && <th style={{padding:"5px 8px",textAlign:"right",color:"#c084fc",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>MoM%</th>}
-                  {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#ff4560",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Distrib</th>}
                   {analyticsView==="monthly" && <th style={{padding:"5px 8px",textAlign:"right",color:"#ff9f1c",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>YTD%</th>}
+                  {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#ff4560",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Distrib $</th>}
                   {analyticsView!=="daily" && <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Notes</th>}
                 </tr></thead>
                 <tbody>
@@ -2879,16 +2879,6 @@ ${JSON.stringify(summary, null, 1)}`;
                                 style={{width:80,background:"transparent",border:"1px solid #ffd16630",borderRadius:3,color:"#ffd166",fontFamily:"monospace",fontSize:11,padding:"2px 4px",textAlign:"right",outline:"none"}}/>
                             </td>
                             <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:"#00ff88",fontWeight:700}}>{fBal(total)}</td>
-                            <td style={{padding:"4px 6px",textAlign:"right"}} onClick={e=>e.stopPropagation()}>
-                              <input type="number" value={b.distrib??""} placeholder="0"
-                                onChange={e=>{
-                                  const val = e.target.value ? +e.target.value : null;
-                                  const updated = {...balHistoryInline,[m.key]:{...(balHistoryInline[m.key]||{}),distrib:val}};
-                                  setBalHistoryInline(updated);
-                                  supabase.from("col_prefs").upsert({id:"balance_history",cols:updated,updated_at:new Date().toISOString()},{onConflict:"id"}).then(r=>{if(r.error)console.error("[bal save]",r.error.message);});
-                                }}
-                                style={{width:75,background:"transparent",border:"1px solid #ff456030",borderRadius:3,color:"#ff4560",fontFamily:"monospace",fontSize:11,padding:"2px 4px",textAlign:"right",outline:"none"}}/>
-                            </td>
                           </>);
                         })()}
                         {analyticsView==="monthly" && (() => {
@@ -2903,6 +2893,21 @@ ${JSON.stringify(summary, null, 1)}`;
                           const prevTM=prevBm.schwab||prevBm.etrade?(+prevBm.schwab||0)+(+prevBm.etrade||0):null;
                           const momM=totalM&&prevTM?((totalM-prevTM)/prevTM*100):null;
                           return <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:momM>0?"#00ff88":momM<0?"#ff4560":"#3a4050"}}>{momM!=null?(momM>0?"+":"")+momM.toFixed(1)+"%":"—"}</td>;
+                        })()}
+                        {analyticsView==="monthly" && showBalCols && (() => {
+                          const bd = balHistoryInline?.[m.key] || {};
+                          return (
+                            <td style={{padding:"4px 6px",textAlign:"right"}} onClick={e=>e.stopPropagation()}>
+                              <input type="number" value={bd.distrib??""} placeholder="—"
+                                onChange={e=>{
+                                  const val = e.target.value ? +e.target.value : null;
+                                  const updated = {...balHistoryInline,[m.key]:{...(balHistoryInline[m.key]||{}),distrib:val}};
+                                  setBalHistoryInline(updated);
+                                  supabase.from("col_prefs").upsert({id:"balance_history",cols:updated,updated_at:new Date().toISOString()},{onConflict:"id"}).then(r=>{if(r.error)console.error("[bal save]",r.error.message);});
+                                }}
+                                style={{width:80,background:"transparent",border:"1px solid #ff456030",borderRadius:3,color:"#ff4560",fontFamily:"monospace",fontSize:11,padding:"2px 4px",textAlign:"right",outline:"none"}}/>
+                            </td>
+                          );
                         })()}
                         {analyticsView==="monthly" && (() => {
                           const b2 = balHistoryInline?.[m.key] || {};
