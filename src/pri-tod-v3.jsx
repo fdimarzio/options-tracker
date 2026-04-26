@@ -1169,13 +1169,13 @@ export default function App() {
       const gainPct = prem > 0 ? (gain/prem)*100 : 0;
       const target  = bd.targetClose;
       if (gain >= target) {
-        signals.push({ contract:`${c.stock} ${c.expires} $${c.strike} ${c.type}`, type:"TARGET_HIT", gainPct, gainDollar:gain, targetClose:target, mktValue:mv, qty:c.qty });
+        signals.push({ contract:`${c.stock} ${c.expires} $${c.strike} ${c.type}`, type:"TARGET_HIT", gainPct, gainDollar:gain, targetClose:target, mktValue:mv, qty:c.qty, ticker:c.stock, contractId:c.id });
       } else if (gainPct >= 90 && c.qty > 1) {
         const perC = prem/(c.qty||1), gainPerU = gain/(c.qty||1);
         const pq   = gainPerU > 0 ? Math.ceil(perC/gainPerU) : null;
-        if (pq && pq < c.qty) signals.push({ contract:`${c.stock} ${c.expires} $${c.strike} ${c.type}`, type:"PARTIAL_CLOSE", gainPct, gainDollar:gain, targetClose:target, mktValue:mv, qty:c.qty, partialQty:pq });
+        if (pq && pq < c.qty) signals.push({ contract:`${c.stock} ${c.expires} $${c.strike} ${c.type}`, type:"PARTIAL_CLOSE", gainPct, gainDollar:gain, targetClose:target, mktValue:mv, qty:c.qty, partialQty:pq, ticker:c.stock, contractId:c.id });
       } else if (gain >= target * 0.75) {
-        signals.push({ contract:`${c.stock} ${c.expires} $${c.strike} ${c.type}`, type:"APPROACHING_TARGET", gainPct, gainDollar:gain, targetClose:target, mktValue:mv, qty:c.qty });
+        signals.push({ contract:`${c.stock} ${c.expires} $${c.strike} ${c.type}`, type:"APPROACHING_TARGET", gainPct, gainDollar:gain, targetClose:target, mktValue:mv, qty:c.qty, ticker:c.stock, contractId:c.id });
       }
     }
     if (!signals.length) return;
@@ -1486,8 +1486,8 @@ export default function App() {
   const openPlanForm = (ticker, prefill={}) => {
     const d = tickerDefaults(ticker);
     const defQty = defaultQtyForTicker(ticker);
-    const q = quotes[ticker?.toUpperCase()] || {};
-    setPlanForm({ticker,action:prefill.action||"STO",type:prefill.type||"Call",qty:prefill.qty||d.qty||defQty,strike:prefill.strike||"",expiration:prefill.expiration||nextExpiry(ticker)||"",account:prefill.account||d.account||"",premium:"",stockPrice:prefill.stockPrice||q.lastPrice||"",bid:prefill.bid||q.bid||"",ask:prefill.ask||q.ask||"",last:"",targetPremium:"",notes:prefill.notes||""});
+    const sd = stocksData[ticker?.toUpperCase()] || {};
+    setPlanForm({ticker,action:prefill.action||"STO",type:prefill.type||"Call",qty:prefill.qty||d.qty||defQty,strike:prefill.strike||"",expiration:prefill.expiration||nextExpiry(ticker)||"",account:prefill.account||d.account||"",premium:"",stockPrice:prefill.stockPrice||sd.currentPrice||"",bid:prefill.bid||"",ask:prefill.ask||"",last:"",targetPremium:"",notes:prefill.notes||""});
   };
   // Get default qty for plan based on Schwab shares (shares / 100, min 1)
   const defaultQtyForTicker = (ticker) => {
@@ -3477,25 +3477,28 @@ ${JSON.stringify(summary, null, 1)}`;
                 </div>
                 <div style={{marginBottom:9}}><FL>Notes</FL><input type="text" value={planForm.notes} onChange={e=>pf("notes",e.target.value)}/></div>
                 {/* Estimated premium + cash required */}
-                {(planForm.bid||planForm.ask) && planForm.qty && (() => {
-                  const mid = ((+planForm.bid||0)+(+planForm.ask||0))/2;
-                  const estPrem = mid*(+planForm.qty)*100;
-                  const isPut   = planForm.type==="Put" && (planForm.action==="STO"||planForm.action==="BTO");
-                  const cashReq = isPut ? (+planForm.strike||0)*(+planForm.qty)*100 : 0;
-                  const schwabAvailForPuts = (+cashData.schwab||0) - openC.filter(c=>c.optType==="STO"&&c.type==="Put"&&c.account==="Schwab").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
-                  const etradeAvailForPuts = (+cashData.etrade||0) - openC.filter(c=>c.optType==="STO"&&c.type==="Put"&&c.account==="Etrade").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
-                  const acctAvail = planForm.account==="Schwab"?schwabAvailForPuts:planForm.account==="Etrade"?etradeAvailForPuts:null;
-                  const afterTrade = acctAvail!=null ? acctAvail - cashReq : null;
-                  return (
-                    <div style={{background:"#0a0e14",border:"1px solid #c084fc30",borderRadius:6,padding:"8px 10px",marginBottom:9,fontSize:9,fontFamily:"monospace"}}>
-                      <div style={{color:"#c084fc",letterSpacing:"0.07em",marginBottom:5}}>ESTIMATES</div>
-                      <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
-                        <div><span style={{color:"#3a4050"}}>Est Premium: </span><span style={{color:"#58a6ff",fontWeight:700}}>{f$(estPrem)}</span><span style={{color:"#3a4050"}}> (mid {f$(mid)} × {planForm.qty} × 100)</span></div>
-                        {isPut && cashReq>0 && <div><span style={{color:"#3a4050"}}>Cash Required: </span><span style={{color:"#ffd166",fontWeight:700}}>{f$(cashReq)}</span></div>}
-                        {afterTrade!=null && <div><span style={{color:"#3a4050"}}>Avail After: </span><span style={{color:afterTrade>=0?"#00ff88":"#ff4560",fontWeight:700}}>{f$(afterTrade)}</span></div>}
+                {!!(planForm.bid||planForm.ask) && !!planForm.qty && (() => {
+                  try {
+                    const mid = ((+planForm.bid||0)+(+planForm.ask||0))/2;
+                    const estPrem = mid*(+planForm.qty)*100;
+                    const isPut   = planForm.type==="Put" && (planForm.action==="STO"||planForm.action==="BTO");
+                    const cashReq = isPut ? (+planForm.strike||0)*(+planForm.qty)*100 : 0;
+                    const cd = cashData || {};
+                    const schwabAvailForPuts = (+cd.schwab||0) - openC.filter(c=>c.optType==="STO"&&c.type==="Put"&&c.account==="Schwab").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
+                    const etradeAvailForPuts = (+cd.etrade||0) - openC.filter(c=>c.optType==="STO"&&c.type==="Put"&&c.account==="Etrade").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
+                    const acctAvail = planForm.account==="Schwab"?schwabAvailForPuts:planForm.account==="Etrade"?etradeAvailForPuts:null;
+                    const afterTrade = acctAvail!=null ? acctAvail - cashReq : null;
+                    return (
+                      <div style={{background:"#0a0e14",border:"1px solid #c084fc30",borderRadius:6,padding:"8px 10px",marginBottom:9,fontSize:9,fontFamily:"monospace"}}>
+                        <div style={{color:"#c084fc",letterSpacing:"0.07em",marginBottom:5}}>ESTIMATES</div>
+                        <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+                          <div><span style={{color:"#3a4050"}}>Est Premium: </span><span style={{color:"#58a6ff",fontWeight:700}}>{f$(estPrem)}</span><span style={{color:"#3a4050"}}> (mid {f$(mid)} × {planForm.qty} × 100)</span></div>
+                          {isPut && cashReq>0 && <div><span style={{color:"#3a4050"}}>Cash Required: </span><span style={{color:"#ffd166",fontWeight:700}}>{f$(cashReq)}</span></div>}
+                          {afterTrade!=null && <div><span style={{color:"#3a4050"}}>Avail After: </span><span style={{color:afterTrade>=0?"#00ff88":"#ff4560",fontWeight:700}}>{f$(afterTrade)}</span></div>}
+                        </div>
                       </div>
-                    </div>
-                  );
+                    );
+                  } catch(e) { return null; }
                 })()}
                 {/* Earnings warning */}
                 {(() => {
