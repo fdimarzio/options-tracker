@@ -2949,7 +2949,8 @@ ${JSON.stringify(summary, null, 1)}`;
                       const end = Date.now();
                       const start = end - 365*3*24*60*60*1000;
                       // Schwab uses $SPX.X for S&P 500 index — encoded as %24SPX.X
-                      const url = "/api/schwab-proxy?path=/marketdata/v1/pricehistory&symbol=%24SPX.X&periodType=month&frequencyType=monthly&frequency=1&startDate="+start+"&endDate="+end+"&needExtendedHoursData=false";
+                      // periodType=year + frequencyType=monthly = monthly candles
+                      const url = "/api/schwab-proxy?path=/marketdata/v1/pricehistory&symbol=%24SPX.X&periodType=year&period=3&frequencyType=monthly&frequency=1&needExtendedHoursData=false";
                       const res = await fetch(url);
                       const d = await res.json();
                       console.log("[SPX] response:", JSON.stringify(d).slice(0,300));
