@@ -2882,16 +2882,21 @@ ${JSON.stringify(summary, null, 1)}`;
                           </>);
                         })()}
                         {analyticsView==="monthly" && (() => {
-                          // MoM% — always visible regardless of showBalCols
-                          const bm=balHistoryInline?.[m.key]||{};
-                          const sm=bm.schwab??(m.key===nowMonthKey&&liveSchwabInline?liveSchwabInline:null);
-                          const em=bm.etrade??null;
-                          const totalM=sm||em?(+sm||0)+(+em||0):null;
-                          const allKeysM=[...periodData].reverse().map(x=>x.key);
-                          const prevKM=allKeysM[allKeysM.indexOf(m.key)-1];
-                          const prevBm=prevKM?(balHistoryInline?.[prevKM]||{}):{};
-                          const prevTM=prevBm.schwab||prevBm.etrade?(+prevBm.schwab||0)+(+prevBm.etrade||0):null;
-                          const momM=totalM&&prevTM?((totalM-prevTM)/prevTM*100):null;
+                          // MoM%: this month total vs previous calendar month total
+                          const bm = balHistoryInline?.[m.key]||{};
+                          const sm = bm.schwab??(m.key===nowMonthKey&&liveSchwabInline?liveSchwabInline:null);
+                          const em = bm.etrade??null;
+                          const totalM = (sm||em) ? (+sm||0)+(+em||0) : null;
+                          // Find previous calendar month key (m.key is YYYY-MM)
+                          const [yr,mo] = m.key.split("-").map(Number);
+                          const prevMo = mo===1 ? 12 : mo-1;
+                          const prevYr = mo===1 ? yr-1 : yr;
+                          const prevKM = prevYr+"-"+(prevMo<10?"0":"")+prevMo;
+                          const prevBm = balHistoryInline?.[prevKM]||{};
+                          const prevSM = prevBm.schwab??(prevKM===nowMonthKey&&liveSchwabInline?liveSchwabInline:null);
+                          const prevEM = prevBm.etrade??null;
+                          const prevTM = (prevSM||prevEM) ? (+prevSM||0)+(+prevEM||0) : null;
+                          const momM = totalM&&prevTM ? ((totalM-prevTM)/prevTM*100) : null;
                           return <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:momM>0?"#00ff88":momM<0?"#ff4560":"#3a4050"}}>{momM!=null?(momM>0?"+":"")+momM.toFixed(1)+"%":"—"}</td>;
                         })()}
                         {analyticsView==="monthly" && showBalCols && (() => {
@@ -2910,16 +2915,20 @@ ${JSON.stringify(summary, null, 1)}`;
                           );
                         })()}
                         {analyticsView==="monthly" && (() => {
-                          const b2 = balHistoryInline?.[m.key] || {};
-                          const s2 = b2.schwab ?? (m.key===nowMonthKey&&liveSchwabInline ? liveSchwabInline : null);
-                          const e2 = b2.etrade ?? null;
-                          const total2 = s2||e2 ? (s2||0)+(e2||0) : null;
-                          const janKey2 = m.key.slice(0,4)+"-01";
-                          const janB2 = balHistoryInline?.[janKey2] || {};
-                          const janTotal2 = janB2.schwab||janB2.etrade ? (+janB2.schwab||0)+(+janB2.etrade||0) : null;
-                          const ytd2 = total2&&janTotal2&&m.key!==janKey2 ? ((total2-janTotal2)/janTotal2*100) : null;
-                          const fPct2 = (v,c1,c2) => v!=null ? <span style={{color:v>0?c1:v<0?c2:"#3a4050"}}>{v>0?"+":""}{v.toFixed(1)}%</span> : "—";
-                          return <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11}}>{fPct2(ytd2,"#ff9f1c","#ff4560")}</td>;
+                          // YTD%: vs Dec of prior year (or Jan if Dec not available)
+                          const b2 = balHistoryInline?.[m.key]||{};
+                          const s2 = b2.schwab??(m.key===nowMonthKey&&liveSchwabInline?liveSchwabInline:null);
+                          const e2 = b2.etrade??null;
+                          const total2 = (s2||e2) ? (+s2||0)+(+e2||0) : null;
+                          const yr2 = m.key.slice(0,4);
+                          // Use Dec of prior year as base, fallback to Jan of same year
+                          const decPrior = (Number(yr2)-1)+"-12";
+                          const janSame  = yr2+"-01";
+                          const baseKey2 = balHistoryInline?.[decPrior]?.schwab||balHistoryInline?.[decPrior]?.etrade ? decPrior : janSame;
+                          const baseB2 = balHistoryInline?.[baseKey2]||{};
+                          const baseTotal2 = (baseB2.schwab||baseB2.etrade) ? (+baseB2.schwab||0)+(+baseB2.etrade||0) : null;
+                          const ytd2 = total2&&baseTotal2&&m.key!==baseKey2 ? ((total2-baseTotal2)/baseTotal2*100) : null;
+                          return <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:ytd2>0?"#ff9f1c":ytd2<0?"#ff4560":"#3a4050"}}>{ytd2!=null?(ytd2>0?"+":"")+ytd2.toFixed(1)+"%":"—"}</td>;
                         })()}
                         {analyticsView!=="daily" && (
                           <td style={{padding:"5px 8px",minWidth:180}} onClick={e=>e.stopPropagation()}>
@@ -2953,9 +2962,8 @@ ${JSON.stringify(summary, null, 1)}`;
                     try {
                       const end = Date.now();
                       const start = end - 365*3*24*60*60*1000;
-                      // Schwab uses $SPX.X for S&P 500 index — encoded as %24SPX.X
-                      // periodType=year + frequencyType=monthly = monthly candles
-                      const url = "/api/schwab-proxy?path=/marketdata/v1/pricehistory&symbol=%24SPX.X&periodType=year&period=3&frequencyType=monthly&frequency=1&needExtendedHoursData=false";
+                      // Use SPY ETF as S&P 500 proxy — $SPX index not available via Schwab price history
+                      const url = "/api/schwab-proxy?path=/marketdata/v1/pricehistory&symbol=SPY&periodType=year&period=3&frequencyType=monthly&frequency=1&needExtendedHoursData=false";
                       const res = await fetch(url);
                       const d = await res.json();
                       console.log("[SPX] response:", JSON.stringify(d).slice(0,300));
