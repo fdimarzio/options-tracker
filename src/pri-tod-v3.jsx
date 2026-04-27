@@ -1327,7 +1327,9 @@ export default function App() {
   const allActivePlan = planItems.filter(p=>p.status==="open");
   const planOpen = originals.filter(c => {
     if (c.status !== "Open") return false;
-    // Only hide if there's an active (not done) plan item for this contract
+    // Always show contracts expiring today — they need action regardless
+    if (c.expires === planToday) return true;
+    // For future contracts, hide if there's an active plan item already
     const alreadyPlanned = allActivePlan.some(p =>
       p.ticker?.toUpperCase() === c.stock?.toUpperCase() &&
       String(p.strike) === String(c.strike) &&
@@ -1336,7 +1338,6 @@ export default function App() {
     );
     return !alreadyPlanned;
   }).sort((a,b)=>(a.expires||"").localeCompare(b.expires||""));
-  // expToday includes ALL open contracts expiring today regardless of plan status
   const expToday = originals.filter(c=>c.status==="Open"&&c.expires===planToday);
 
   const sf = (k,v) => setForm(p=>({...p,[k]:v}));
@@ -3429,6 +3430,7 @@ ${JSON.stringify(summary, null, 1)}`;
                     <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>$/share</th>
                     <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Tgt Close</th>
                     <th style={{padding:"5px 8px",textAlign:"center",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>ITM/OTM</th>
+                    <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Signal</th>
                     <th style={{padding:"5px 8px",borderBottom:"1px solid #1c2128",width:60}}></th>
                   </tr></thead>
                   <tbody>
@@ -3447,6 +3449,20 @@ ${JSON.stringify(summary, null, 1)}`;
                         <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:"#00ff88",fontWeight:700}}>{bd?"$"+bd.targetPerShare.toFixed(2):"—"}</td>
                         <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:"#00ff88"}}>{bd?f$(bd.targetClose):"—"}</td>
                         <td style={{padding:"5px 8px",textAlign:"center"}}>{itmStatus?<Tag color={itmStatus==="ITM"?"red":"green"}>{itmStatus==="ITM"?"🔴":"🟢"}</Tag>:<span style={{color:"#2a3040",fontSize:10}}>—</span>}</td>
+                        <td style={{padding:"5px 8px"}}>
+                          {(() => {
+                            const opt = findOptionForContract(etradeChains, c);
+                            const last = opt?.mark ?? opt?.last ?? null;
+                            if (!bd||last==null||!c.premium) return <span style={{color:"#2a3040",fontSize:9,fontFamily:"monospace"}}>—</span>;
+                            const gainDollar = Math.abs(c.premium) - last*(c.qty||1)*100;
+                            const gainPct = gainDollar/Math.abs(c.premium)*100;
+                            const target = bd.targetClose;
+                            if (gainDollar>=target) return <span style={{fontSize:9,fontFamily:"monospace",background:"#00ff8820",color:"#00ff88",border:"1px solid #00ff8840",borderRadius:3,padding:"1px 5px",whiteSpace:"nowrap"}}>CLOSE NOW</span>;
+                            if (gainPct>=50&&(c.qty||1)>1) return <span style={{fontSize:9,fontFamily:"monospace",background:"#ffd16620",color:"#ffd166",border:"1px solid #ffd16640",borderRadius:3,padding:"1px 5px"}}>PARTIAL</span>;
+                            if (gainDollar>=target*0.8) return <span style={{fontSize:9,fontFamily:"monospace",background:"#ff9f1c20",color:"#ff9f1c",border:"1px solid #ff9f1c40",borderRadius:3,padding:"1px 5px",whiteSpace:"nowrap"}}>APPROACHING</span>;
+                            return <span style={{color:"#2a3040",fontSize:9,fontFamily:"monospace"}}>hold</span>;
+                          })()}
+                        </td>
                         <td style={{padding:"5px 8px"}}>
                           <button onClick={()=>openPlanForm(c.stock||"",{action:"BTC",qty:c.qty,strike:c.strike,expiration:c.expires,account:c.account})} style={{background:"#58a6ff18",color:"#58a6ff",border:"1px solid #58a6ff30",borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"monospace"}}>+ Add</button>
                         </td>
