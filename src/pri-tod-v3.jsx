@@ -1320,7 +1320,8 @@ export default function App() {
   const ptm = {};
   originals.forEach(c => { if (!c.stock) return; const t=c.stock.toUpperCase(); if (!ptm[t]) ptm[t]={ticker:t,open:0}; if (c.status==="Open") ptm[t].open++; });
   const knownTickers = Object.values(ptm).sort((a,b)=>a.ticker.localeCompare(b.ticker));
-  const filteredPlan = planItems.filter(p => !planDateFilter || (p.createdAt||"").startsWith(planDateFilter));
+  // Always show open items + items from selected date. Open items may have been created on a different day.
+  const filteredPlan = planItems.filter(p => p.status==="open" || !planDateFilter || (p.createdAt||"").startsWith(planDateFilter));
   const activePlan = filteredPlan.filter(p=>p.status==="open");
   const donePlan   = filteredPlan.filter(p=>p.status==="done");
   // Hide open contracts already added to any active plan item (regardless of date filter)
@@ -1502,16 +1503,17 @@ export default function App() {
 
   const savePlan = () => {
     if (!planForm?.action) return;
-    // Dedupe: don't add if identical ticker+action+strike+expiration+account already exists as open
+    // Dedupe: only block if an identical open item was created today
     const isDupe = planItems.some(p =>
       p.status==="open" &&
+      (p.createdAt||"").startsWith(TODAY) &&
       p.ticker?.toUpperCase()===planForm.ticker?.toUpperCase() &&
       p.action===planForm.action &&
       String(p.strike)===String(planForm.strike) &&
       p.expiration===planForm.expiration &&
       p.account===planForm.account
     );
-    if (isDupe) { alert(`${planForm.ticker} ${planForm.action} ${planForm.strike} ${planForm.expiration} is already in your plan.`); return; }
+    if (isDupe) { alert(`${planForm.ticker} ${planForm.action} ${planForm.strike} ${planForm.expiration} is already in today's plan.`); return; }
     const i={...planForm,id:Date.now(),status:"open",createdAt:new Date().toISOString()};
     persistPlan([i,...planItems]);
     setPlanForm(null);
