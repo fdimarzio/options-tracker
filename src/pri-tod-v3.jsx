@@ -2397,9 +2397,24 @@ ${JSON.stringify(summary, null, 1)}`;
               const openBTOs  = openC.filter(c=>c.optType==="BTO");
               const premColl  = openSTOs.reduce((s,c)=>s+(c.premium||0),0);
               const premPaid  = openBTOs.reduce((s,c)=>s+Math.abs(c.premium||0),0);
-              // Current value from live chain data
-              const currVal   = openC.reduce((s,c)=>{const o=findOptionForContract(etradeChains,c);return s+(o?.mark!=null?(o.mark*(c.qty||1)*100):0);},0);
-              const unrealPL  = premColl - currVal;
+              // Unrealized P&L: same calc as contracts tab gain$ column
+              // STO: premium collected - current cost to buy back
+              // BTO: current market value - premium paid
+              const unrealPL = openC.reduce((s,c) => {
+                if (!c.premium) return s;
+                const lo   = findOptionForContract(etradeChains, c);
+                const last = lo?.last ?? lo?.bid ?? null;
+                if (last == null) return s;
+                const mv   = (c.qty||1) * last * 100;
+                const prem = Math.abs(c.premium);
+                const gain = c.optType==="BTO" ? mv - prem : prem - mv;
+                return s + gain;
+              }, 0);
+              const currVal = openC.reduce((s,c) => {
+                const lo   = findOptionForContract(etradeChains, c);
+                const last = lo?.last ?? lo?.bid ?? null;
+                return last != null ? s + (c.qty||1)*last*100 : s;
+              }, 0);
               // Expiry buckets
               const thisWeek  = openC.filter(c=>c.expires&&c.expires<=fmt(endOfWeek));
               const nextWeek  = openC.filter(c=>c.expires&&c.expires>fmt(endOfWeek)&&c.expires<=fmt(endOfNextWeek));
