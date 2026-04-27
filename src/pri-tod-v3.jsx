@@ -1169,15 +1169,19 @@ export default function App() {
       const gainPct = prem > 0 ? (gain/prem)*100 : 0;
       const tgtPct  = bd.tgtPct; // e.g. 65 means target is 65% profit on premium
       const target  = bd.targetClose; // dollar value of profit at tgtPct
-      // Close Now: gainPct has hit or exceeded the OTM/DTE target %
-      if (gainPct >= tgtPct) {
-        signals.push({ contract:`${c.stock} ${c.expires} $${c.strike} ${c.type}`, type:"TARGET_HIT", gainPct, gainDollar:gain, targetClose:target, mktValue:mv, qty:c.qty, ticker:c.stock, contractId:c.id });
-      // Partial Close: at 90% of target, more than 1 contract
-      } else if (gainPct >= tgtPct * 0.9 && c.qty > 1) {
+      // Partial Close: at target with multiple contracts — sell enough to recover cost basis, let rest ride
+      if (gainPct >= tgtPct && c.qty > 1) {
         const perC = prem/(c.qty||1), gainPerU = gain/(c.qty||1);
         const pq   = gainPerU > 0 ? Math.ceil(perC/gainPerU) : null;
-        if (pq && pq < c.qty) signals.push({ contract:`${c.stock} ${c.expires} $${c.strike} ${c.type}`, type:"PARTIAL_CLOSE", gainPct, gainDollar:gain, targetClose:target, mktValue:mv, qty:c.qty, partialQty:pq, ticker:c.stock, contractId:c.id });
-      // Approaching: within 15% of target (e.g. target=65%, approaching fires at 50%+)
+        if (pq && pq < c.qty) {
+          signals.push({ contract:`${c.stock} ${c.expires} $${c.strike} ${c.type}`, type:"PARTIAL_CLOSE", gainPct, gainDollar:gain, targetClose:target, mktValue:mv, qty:c.qty, partialQty:pq, ticker:c.stock, contractId:c.id });
+        } else {
+          signals.push({ contract:`${c.stock} ${c.expires} $${c.strike} ${c.type}`, type:"TARGET_HIT", gainPct, gainDollar:gain, targetClose:target, mktValue:mv, qty:c.qty, ticker:c.stock, contractId:c.id });
+        }
+      // Close Now: at target, single contract
+      } else if (gainPct >= tgtPct) {
+        signals.push({ contract:`${c.stock} ${c.expires} $${c.strike} ${c.type}`, type:"TARGET_HIT", gainPct, gainDollar:gain, targetClose:target, mktValue:mv, qty:c.qty, ticker:c.stock, contractId:c.id });
+      // Approaching: within 25% of target
       } else if (gainPct >= tgtPct * 0.75) {
         signals.push({ contract:`${c.stock} ${c.expires} $${c.strike} ${c.type}`, type:"APPROACHING_TARGET", gainPct, gainDollar:gain, targetClose:target, mktValue:mv, qty:c.qty, ticker:c.stock, contractId:c.id });
       }
@@ -2743,13 +2747,13 @@ ${JSON.stringify(summary, null, 1)}`;
                               const tgtPct  = bd.tgtPct;
                               const target  = bd.targetClose;
                               let label, color, bg;
-                              if (gainPct >= tgtPct) {
-                                label = "Close Now"; color = "#00ff88"; bg = "#00ff8820";
-                              } else if (gainPct >= tgtPct*0.9 && c.qty > 1) {
+                              if (gainPct >= tgtPct && c.qty > 1) {
                                 const perC = prem/(c.qty||1), gainPerU = gain/(c.qty||1);
                                 const pq   = gainPerU > 0 ? Math.ceil(perC/gainPerU) : null;
-                                label = pq ? "Sell "+pq+" of "+c.qty : "Partial Close";
+                                label = pq && pq < c.qty ? "Sell "+pq+" of "+c.qty : "Close Now";
                                 color = "#ffd166"; bg = "#ffd16620";
+                              } else if (gainPct >= tgtPct) {
+                                label = "Close Now"; color = "#00ff88"; bg = "#00ff8820";
                               } else if (gainPct >= tgtPct*0.75) {
                                 label = "Approaching"; color = "#58a6ff"; bg = "#58a6ff20";
                               } else {
@@ -3467,8 +3471,8 @@ ${JSON.stringify(summary, null, 1)}`;
                             const gainPct = prem>0 ? (gain/prem)*100 : 0;
                             const tgtPct  = bd.tgtPct;
                             let label, color, bg;
-                            if (gainPct>=tgtPct) { label="Close Now"; color="#00ff88"; bg="#00ff8820"; }
-                            else if (gainPct>=tgtPct*0.9&&c.qty>1) { const pq=Math.ceil((prem/(c.qty||1))/((gain/(c.qty||1))||1)); label=pq?"Sell "+pq+" of "+c.qty:"Partial"; color="#ffd166"; bg="#ffd16620"; }
+                            if (gainPct>=tgtPct&&c.qty>1) { const pq=Math.ceil((prem/(c.qty||1))/((gain/(c.qty||1))||1)); label=pq&&pq<c.qty?"Sell "+pq+" of "+c.qty:"Close Now"; color="#ffd166"; bg="#ffd16620"; }
+                            else if (gainPct>=tgtPct) { label="Close Now"; color="#00ff88"; bg="#00ff8820"; }
                             else if (gainPct>=tgtPct*0.75) { label="Approaching"; color="#58a6ff"; bg="#58a6ff20"; }
                             else return <span style={{color:"#2a3040",fontSize:9,fontFamily:"monospace"}}>hold</span>;
                             return <span style={{fontSize:9,fontFamily:"monospace",background:bg,color,border:`1px solid ${color}40`,borderRadius:4,padding:"2px 7px",whiteSpace:"nowrap"}}>{label}</span>;
