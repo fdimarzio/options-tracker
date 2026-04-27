@@ -2983,6 +2983,8 @@ ${JSON.stringify(summary, null, 1)}`;
                           const ytd2 = total2&&adjBase&&m.key!==baseKey2 ? ((total2-baseTotal2)/adjBase*100) : null;
                           return <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:ytd2>0?"#ff9f1c":ytd2<0?"#ff4560":"#3a4050"}}>{ytd2!=null?(ytd2>0?"+":"")+ytd2.toFixed(1)+"%":"—"}</td>;
                         })()}
+                        {analyticsView!=="daily" && (
+                          <td style={{padding:"5px 8px",minWidth:180}} onClick={e=>e.stopPropagation()}>
                             {editingNote===m.key ? (
                               <input type="text" defaultValue={note} autoFocus
                                 onBlur={e=>{const n={...periodNotes,[m.key]:e.target.value};persistNotes(n);setEditingNote(null);}}
