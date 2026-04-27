@@ -2289,8 +2289,8 @@ ${JSON.stringify(summary, null, 1)}`;
             <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
               <KPI label="Total Premium" value={f$0(totalPrem)}      sub={allF.length+" contracts"}/>
               <KPI label="Realized P/L"  value={fSign0(totalProfit)} sub={winRate+"% win"} color={totalProfit>=0?"#00ff88":"#ff4560"}/>
-              <KPI label="Open Exposure" value={f$0(openPrem)}       sub={openC.length+" open"} color="#ffd166"/>
-              <KPI label="Open Contract Value" value={f$0(openContractValue)} sub={"BTO (asset) − STO (liability) at market"} color="#c084fc"/>
+              <KPI label="Open Contract Value" value={f$0(openContractValue)} sub={openC.length+" contracts at market"} color="#ffd166"/>
+              <KPI label="Net Exposure" value={f$0(committedFunds)} sub={"STO puts $"+f$0(stoLiability)+" − BTO assets $"+f$0(btoAssetVal)} color="#c084fc"/>
               <KPI label="Avg Profit"    value={fSign0(avgProfit)}    sub="per close" color={avgProfit>=0?"#58a6ff":"#ff4560"}/>
               <KPI label="Profit MTD"    value={fSign0(profitMTD)}    sub={mLabel+" · "+(profitDateMode==="exec"?"opened":"closed")} color={profitMTD>=0?"#00ff88":"#ff4560"}/>
               <KPI label="Profit YTD"    value={fSign0(profitYTD)}    sub={thisYear+" · "+(profitDateMode==="exec"?"opened":"closed")} color={profitYTD>=0?"#00ff88":"#ff4560"}/>
