@@ -2864,9 +2864,9 @@ ${JSON.stringify(summary, null, 1)}`;
                   {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#58a6ff",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Schwab $</th>}
                   {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#ffd166",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>ETrade $</th>}
                   {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#00ff88",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Total $</th>}
+                  {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#ff4560",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Distrib $</th>}
                   {analyticsView==="monthly" && <th style={{padding:"5px 8px",textAlign:"right",color:"#c084fc",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>MoM%</th>}
                   {analyticsView==="monthly" && <th style={{padding:"5px 8px",textAlign:"right",color:"#ff9f1c",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>YTD%</th>}
-                  {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#ff4560",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Distrib $</th>}
                   {analyticsView!=="daily" && <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Notes</th>}
                 </tr></thead>
                 <tbody>
@@ -2929,24 +2929,7 @@ ${JSON.stringify(summary, null, 1)}`;
                             <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:"#00ff88",fontWeight:700}}>{fBal(total)}</td>
                           </>);
                         })()}
-                        {analyticsView==="monthly" && (() => {
-                          // MoM%: this month total vs previous calendar month total
-                          const bm = balHistoryInline?.[m.key]||{};
-                          const sm = bm.schwab??(m.key===nowMonthKey&&liveSchwabInline?liveSchwabInline:null);
-                          const em = bm.etrade??null;
-                          const totalM = (sm||em) ? (+sm||0)+(+em||0) : null;
-                          // Find previous calendar month key (m.key is YYYY-MM)
-                          const [yr,mo] = m.key.split("-").map(Number);
-                          const prevMo = mo===1 ? 12 : mo-1;
-                          const prevYr = mo===1 ? yr-1 : yr;
-                          const prevKM = prevYr+"-"+(prevMo<10?"0":"")+prevMo;
-                          const prevBm = balHistoryInline?.[prevKM]||{};
-                          const prevSM = prevBm.schwab??(prevKM===nowMonthKey&&liveSchwabInline?liveSchwabInline:null);
-                          const prevEM = prevBm.etrade??null;
-                          const prevTM = (prevSM||prevEM) ? (+prevSM||0)+(+prevEM||0) : null;
-                          const momM = totalM&&prevTM ? ((totalM-prevTM)/prevTM*100) : null;
-                          return <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:momM>0?"#00ff88":momM<0?"#ff4560":"#3a4050"}}>{momM!=null?(momM>0?"+":"")+momM.toFixed(1)+"%":"—"}</td>;
-                        })()}
+                        {/* Distrib $ — entry field, shown when balances visible */}
                         {analyticsView==="monthly" && showBalCols && (() => {
                           const bd = balHistoryInline?.[m.key] || {};
                           return (
@@ -2962,24 +2945,44 @@ ${JSON.stringify(summary, null, 1)}`;
                             </td>
                           );
                         })()}
+                        {/* MoM%: (end - start) / (start - distributions) */}
                         {analyticsView==="monthly" && (() => {
-                          // YTD%: vs Dec of prior year (or Jan if Dec not available)
-                          const b2 = balHistoryInline?.[m.key]||{};
-                          const s2 = b2.schwab??(m.key===nowMonthKey&&liveSchwabInline?liveSchwabInline:null);
-                          const e2 = b2.etrade??null;
+                          const bm   = balHistoryInline?.[m.key]||{};
+                          const sm   = bm.schwab??(m.key===nowMonthKey&&liveSchwabInline?liveSchwabInline:null);
+                          const em   = bm.etrade??null;
+                          const totalM = (sm||em) ? (+sm||0)+(+em||0) : null;
+                          const [yr,mo] = m.key.split("-").map(Number);
+                          const prevMo = mo===1 ? 12 : mo-1;
+                          const prevYr = mo===1 ? yr-1 : yr;
+                          const prevKM = prevYr+"-"+(prevMo<10?"0":"")+prevMo;
+                          const prevBm = balHistoryInline?.[prevKM]||{};
+                          const prevSM = prevBm.schwab??(prevKM===nowMonthKey&&liveSchwabInline?liveSchwabInline:null);
+                          const prevEM = prevBm.etrade??null;
+                          const prevTM = (prevSM||prevEM) ? (+prevSM||0)+(+prevEM||0) : null;
+                          const distrib = +(bm.distrib||0);
+                          const adjDenom = prevTM ? Math.max(prevTM - distrib, 1) : null;
+                          const momM = totalM&&adjDenom ? ((totalM-prevTM)/adjDenom*100) : null;
+                          return <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:momM>0?"#00ff88":momM<0?"#ff4560":"#3a4050"}}>{momM!=null?(momM>0?"+":"")+momM.toFixed(1)+"%":"—"}</td>;
+                        })()}
+                        {/* YTD%: (end - base) / (base - cumulative distributions since base) */}
+                        {analyticsView==="monthly" && (() => {
+                          const b2   = balHistoryInline?.[m.key]||{};
+                          const s2   = b2.schwab??(m.key===nowMonthKey&&liveSchwabInline?liveSchwabInline:null);
+                          const e2   = b2.etrade??null;
                           const total2 = (s2||e2) ? (+s2||0)+(+e2||0) : null;
-                          const yr2 = m.key.slice(0,4);
-                          // Use Dec of prior year as base, fallback to Jan of same year
+                          const yr2  = m.key.slice(0,4);
                           const decPrior = (Number(yr2)-1)+"-12";
                           const janSame  = yr2+"-01";
                           const baseKey2 = balHistoryInline?.[decPrior]?.schwab||balHistoryInline?.[decPrior]?.etrade ? decPrior : janSame;
-                          const baseB2 = balHistoryInline?.[baseKey2]||{};
+                          const baseB2   = balHistoryInline?.[baseKey2]||{};
                           const baseTotal2 = (baseB2.schwab||baseB2.etrade) ? (+baseB2.schwab||0)+(+baseB2.etrade||0) : null;
-                          const ytd2 = total2&&baseTotal2&&m.key!==baseKey2 ? ((total2-baseTotal2)/baseTotal2*100) : null;
+                          const cumDistrib = Object.keys(balHistoryInline).sort()
+                            .filter(mk => mk > baseKey2 && mk <= m.key)
+                            .reduce((s,mk) => s + (+(balHistoryInline[mk]?.distrib)||0), 0);
+                          const adjBase = baseTotal2 ? Math.max(baseTotal2 - cumDistrib, 1) : null;
+                          const ytd2 = total2&&adjBase&&m.key!==baseKey2 ? ((total2-baseTotal2)/adjBase*100) : null;
                           return <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:ytd2>0?"#ff9f1c":ytd2<0?"#ff4560":"#3a4050"}}>{ytd2!=null?(ytd2>0?"+":"")+ytd2.toFixed(1)+"%":"—"}</td>;
                         })()}
-                        {analyticsView!=="daily" && (
-                          <td style={{padding:"5px 8px",minWidth:180}} onClick={e=>e.stopPropagation()}>
                             {editingNote===m.key ? (
                               <input type="text" defaultValue={note} autoFocus
                                 onBlur={e=>{const n={...periodNotes,[m.key]:e.target.value};persistNotes(n);setEditingNote(null);}}
