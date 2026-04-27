@@ -947,14 +947,18 @@ export default function App() {
   const [etradeStatus, setEtradeStatus]       = useState("idle"); // idle | loading | ok | error
   const [etradeMsg, setEtradeMsg]             = useState("");
   const [etradeChains, setEtradeChains]       = useState({}); // { "TICKER|YYYY-MM-DD": {calls,puts} }
-  // Net exposure: STO Puts are liabilities, BTO options are assets (uses etradeChains so must be after it)
-  const stoLiability = openC.filter(c=>c.optType==="STO"&&c.type==="Put").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
-  const btoAssetVal  = openC.filter(c=>c.optType==="BTO").reduce((s,c)=>{
-    const chains = etradeChains || {};
-    const lo = findOptionForContract(chains,c);
-    const mktVal = lo?.mark!=null ? lo.mark*(c.qty||1)*100 : Math.abs(c.premium||0);
-    return s+mktVal;
-  },0);
+  // Open Contract Value: STO = negative (liability at market), BTO = positive (asset at market)
+  const openContractValue = openC.reduce((s,c) => {
+    const lo = findOptionForContract(etradeChains || {}, c);
+    const mktVal = lo?.mark!=null ? lo.mark*(c.qty||1)*100
+                 : lo?.last!=null ? lo.last*(c.qty||1)*100
+                 : null; // no market data — exclude
+    if (mktVal==null) return s;
+    return s + (c.optType==="BTO" ? mktVal : -mktVal);
+  }, 0);
+  // Keep committedFunds for plan tab available-to-write calculation (still uses strike-based for puts)
+  const stoLiability   = openC.filter(c=>c.optType==="STO"&&c.type==="Put").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
+  const btoAssetVal    = openC.filter(c=>c.optType==="BTO").reduce((s,c)=>{const lo=findOptionForContract(etradeChains||{},c);return s+(lo?.mark!=null?lo.mark*(c.qty||1)*100:Math.abs(c.premium||0));},0);
   const committedFunds = stoLiability - btoAssetVal;
   const [etradeLastFetch, setEtradeLastFetch] = useState(null);
   const [schwabPositions, setSchwabPositions]   = useState([]);
@@ -2286,7 +2290,7 @@ ${JSON.stringify(summary, null, 1)}`;
               <KPI label="Total Premium" value={f$0(totalPrem)}      sub={allF.length+" contracts"}/>
               <KPI label="Realized P/L"  value={fSign0(totalProfit)} sub={winRate+"% win"} color={totalProfit>=0?"#00ff88":"#ff4560"}/>
               <KPI label="Open Exposure" value={f$0(openPrem)}       sub={openC.length+" open"} color="#ffd166"/>
-              <KPI label="Net Exposure" value={f$0(committedFunds)} sub={"STO puts $"+f$0(stoLiability)+" − BTO assets $"+f$0(btoAssetVal)} color="#c084fc"/>
+              <KPI label="Open Contract Value" value={f$0(openContractValue)} sub={"BTO (asset) − STO (liability) at market"} color="#c084fc"/>
               <KPI label="Avg Profit"    value={fSign0(avgProfit)}    sub="per close" color={avgProfit>=0?"#58a6ff":"#ff4560"}/>
               <KPI label="Profit MTD"    value={fSign0(profitMTD)}    sub={mLabel+" · "+(profitDateMode==="exec"?"opened":"closed")} color={profitMTD>=0?"#00ff88":"#ff4560"}/>
               <KPI label="Profit YTD"    value={fSign0(profitYTD)}    sub={thisYear+" · "+(profitDateMode==="exec"?"opened":"closed")} color={profitYTD>=0?"#00ff88":"#ff4560"}/>
