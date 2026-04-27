@@ -2204,7 +2204,7 @@ ${JSON.stringify(summary, null, 1)}`;
       )}
 
       {/* ── TOPBAR ── */}
-      <div style={{background:"#0a0e14",borderBottom:"1px solid #1c2128",padding:"0 10px",display:"flex",alignItems:"center",gap:8,height:50,position:"sticky",top:0,zIndex:100,minWidth:0,overflow:"hidden"}}>
+      <div style={{background:"#0a0e14",borderBottom:"1px solid #1c2128",padding:"0 10px",display:"flex",alignItems:"center",gap:8,height:50,position:"sticky",top:0,zIndex:100,minWidth:0}}>
         <div style={{display:"flex",alignItems:"center",gap:7,flexShrink:0}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"center",width:30,height:30,borderRadius:7,background:"linear-gradient(135deg,#0d1f12,#0a1a1f)",border:"1px solid #00ff8830",boxShadow:"0 0 12px #00ff8812"}}>
             <span style={{fontFamily:"monospace",fontWeight:700,fontSize:10,color:"#00ff88"}}>PRI</span>
@@ -2231,7 +2231,7 @@ ${JSON.stringify(summary, null, 1)}`;
               {[0,1,2].map(i=><div key={i} style={{width:12,height:1.5,background:"#555",borderRadius:1}}/>)}
             </button>
             {showMenu && (
-              <div style={{position:"absolute",top:"calc(100% + 5px)",right:0,background:"#0d1117",border:"1px solid #21262d",borderRadius:8,minWidth:160,animation:"sd .15s ease",zIndex:200,overflow:"hidden"}}>
+              <div style={{position:"fixed",top:50,right:10,background:"#0d1117",border:"1px solid #21262d",borderRadius:8,minWidth:180,animation:"sd .15s ease",zIndex:9999,overflow:"hidden",boxShadow:"0 8px 32px rgba(0,0,0,0.8)"}}>
                 {[
                   {label:"Profile",      icon:"👤", fn:()=>{setShowProfile(true);setShowMenu(false);}},
                   {label:"Team",         icon:"👥", fn:()=>{setShowTeam(true);setShowMenu(false);}},
