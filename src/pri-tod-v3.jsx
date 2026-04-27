@@ -3451,16 +3451,20 @@ ${JSON.stringify(summary, null, 1)}`;
                         <td style={{padding:"5px 8px",textAlign:"center"}}>{itmStatus?<Tag color={itmStatus==="ITM"?"red":"green"}>{itmStatus==="ITM"?"🔴":"🟢"}</Tag>:<span style={{color:"#2a3040",fontSize:10}}>—</span>}</td>
                         <td style={{padding:"5px 8px"}}>
                           {(() => {
-                            const opt = findOptionForContract(etradeChains, c);
-                            const last = opt?.mark ?? opt?.last ?? null;
-                            if (!bd||last==null||!c.premium) return <span style={{color:"#2a3040",fontSize:9,fontFamily:"monospace"}}>—</span>;
-                            const gainDollar = Math.abs(c.premium) - last*(c.qty||1)*100;
-                            const gainPct = gainDollar/Math.abs(c.premium)*100;
-                            const target = bd.targetClose;
-                            if (gainDollar>=target) return <span style={{fontSize:9,fontFamily:"monospace",background:"#00ff8820",color:"#00ff88",border:"1px solid #00ff8840",borderRadius:3,padding:"1px 5px",whiteSpace:"nowrap"}}>CLOSE NOW</span>;
-                            if (gainPct>=50&&(c.qty||1)>1) return <span style={{fontSize:9,fontFamily:"monospace",background:"#ffd16620",color:"#ffd166",border:"1px solid #ffd16640",borderRadius:3,padding:"1px 5px"}}>PARTIAL</span>;
-                            if (gainDollar>=target*0.8) return <span style={{fontSize:9,fontFamily:"monospace",background:"#ff9f1c20",color:"#ff9f1c",border:"1px solid #ff9f1c40",borderRadius:3,padding:"1px 5px",whiteSpace:"nowrap"}}>APPROACHING</span>;
-                            return <span style={{color:"#2a3040",fontSize:9,fontFamily:"monospace"}}>hold</span>;
+                            const lo   = getLiveOption(c);
+                            const last = lo?.last ?? lo?.bid ?? null;
+                            if (!bd||last==null||!c.premium) return <span style={{color:"#1c2128",fontSize:9,fontFamily:"monospace"}}>—</span>;
+                            const mv      = (c.qty||1)*last*100;
+                            const prem    = Math.abs(c.premium);
+                            const gain    = c.optType==="BTO" ? mv-prem : prem-mv;
+                            const gainPct = prem>0 ? (gain/prem)*100 : 0;
+                            const target  = bd.targetClose;
+                            let label, color, bg;
+                            if (gain>=target) { label="Close Now"; color="#00ff88"; bg="#00ff8820"; }
+                            else if (gainPct>=90&&c.qty>1) { const pq=Math.ceil((prem/(c.qty||1))/((gain/(c.qty||1))||1)); label=pq?"Sell "+pq+" of "+c.qty:"Partial"; color="#ffd166"; bg="#ffd16620"; }
+                            else if (gain>=target*0.75) { label="Approaching"; color="#58a6ff"; bg="#58a6ff20"; }
+                            else return <span style={{color:"#2a3040",fontSize:9,fontFamily:"monospace"}}>hold</span>;
+                            return <span style={{fontSize:9,fontFamily:"monospace",background:bg,color,border:`1px solid ${color}40`,borderRadius:4,padding:"2px 7px",whiteSpace:"nowrap"}}>{label}</span>;
                           })()}
                         </td>
                         <td style={{padding:"5px 8px"}}>
