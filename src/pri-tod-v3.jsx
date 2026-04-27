@@ -1712,6 +1712,11 @@ ${JSON.stringify(summary, null, 1)}`;
         *{box-sizing:border-box;margin:0;padding:0}
         ::-webkit-scrollbar{width:3px;height:3px}::-webkit-scrollbar-track{background:#080c12}::-webkit-scrollbar-thumb{background:#21262d;border-radius:3px}
         input,select,textarea{background:#0d1219;color:#e6edf3;border:1px solid #2a3550;border-radius:4px;padding:6px 8px;font-family:inherit;font-size:12px;width:100%;outline:none;transition:border .15s}
+        @media(max-width:600px){
+          .hm{display:none!important}
+          input,select{font-size:16px!important}
+          .ms{overflow-x:auto;-webkit-overflow-scrolling:touch}
+        }
         input:focus,select:focus,textarea:focus{border-color:#00ff8880;background:#0f1820}
         input.err{border-color:#ff456060!important}
         button{cursor:pointer;font-family:inherit}
@@ -2199,13 +2204,13 @@ ${JSON.stringify(summary, null, 1)}`;
       )}
 
       {/* ── TOPBAR ── */}
-      <div style={{background:"#0a0e14",borderBottom:"1px solid #1c2128",padding:"0 10px",display:"flex",alignItems:"center",gap:8,height:50,position:"sticky",top:0,zIndex:100}}>
+      <div style={{background:"#0a0e14",borderBottom:"1px solid #1c2128",padding:"0 10px",display:"flex",alignItems:"center",gap:8,height:50,position:"sticky",top:0,zIndex:100,minWidth:0,overflow:"hidden"}}>
         <div style={{display:"flex",alignItems:"center",gap:7,flexShrink:0}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"center",width:30,height:30,borderRadius:7,background:"linear-gradient(135deg,#0d1f12,#0a1a1f)",border:"1px solid #00ff8830",boxShadow:"0 0 12px #00ff8812"}}>
             <span style={{fontFamily:"monospace",fontWeight:700,fontSize:10,color:"#00ff88"}}>PRI</span>
           </div>
-          <div className="hm">
-            <div style={{fontSize:10,fontWeight:700,fontFamily:"monospace",letterSpacing:"0.03em",lineHeight:1.1}}>
+          <div className="hm" style={{overflow:"hidden",minWidth:0,flexShrink:1}}>
+            <div style={{fontSize:10,fontWeight:700,fontFamily:"monospace",letterSpacing:"0.03em",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
               <span style={{color:"#00ff88"}}>P</span><span style={{color:"#c9d1d9"}}>remium </span><span style={{color:"#00ff88"}}>R</span><span style={{color:"#c9d1d9"}}>ecurring </span><span style={{color:"#00ff88"}}>I</span><span style={{color:"#c9d1d9"}}>ncome</span>
             </div>
             <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.05em",marginTop:1}}>
@@ -2213,12 +2218,12 @@ ${JSON.stringify(summary, null, 1)}`;
             </div>
           </div>
         </div>
-        <div style={{display:"flex",gap:2,flex:1,justifyContent:"center"}}>
+        <div style={{display:"flex",gap:2,flex:1,overflowX:"auto",WebkitOverflowScrolling:"touch",scrollbarWidth:"none",msOverflowStyle:"none",justifyContent:"flex-start",padding:"0 4px"}}>
           {["dashboard","contracts","analytics","plan","stocks","import"].map(n=>(
-            <button key={n} onClick={()=>setTab(n)} style={{background:tab===n?"#00ff8814":"transparent",color:tab===n?"#00ff88":"#444",border:tab===n?"1px solid #00ff8825":"1px solid transparent",borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"monospace",letterSpacing:"0.05em",textTransform:"uppercase",whiteSpace:"nowrap"}}>{n}</button>
+            <button key={n} onClick={()=>setTab(n)} style={{background:tab===n?"#00ff8814":"transparent",color:tab===n?"#00ff88":"#444",border:tab===n?"1px solid #00ff8825":"1px solid transparent",borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"monospace",letterSpacing:"0.05em",textTransform:"uppercase",whiteSpace:"nowrap",flexShrink:0}}>{n}</button>
           ))}
         </div>
-        <div style={{display:"flex",alignItems:"center",gap:5,flexShrink:0}}>
+        <div style={{display:"flex",alignItems:"center",gap:5,flexShrink:0,marginLeft:"auto"}}>
           <Tag color="green">{openC.length}</Tag>
           <div onClick={()=>setShowProfile(true)} style={{width:26,height:26,borderRadius:"50%",background:`${authUser.color}20`,border:`2px solid ${authUser.color}50`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"monospace",fontWeight:700,color:authUser.color,fontSize:9,flexShrink:0,cursor:"pointer"}} title={authUser.name}>{authUser.initials}</div>
           <div ref={menuRef} style={{position:"relative"}}>
