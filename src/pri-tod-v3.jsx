@@ -868,14 +868,7 @@ export default function App() {
   const totalPrem   = allF.reduce((s,c) => s+(c.premium||0), 0);
   const totalProfit = closedC.reduce((s,c) => s+(c.profit||0), 0);
   const openPrem    = openC.reduce((s,c) => s+Math.abs(c.premium||0), 0);
-  // Net exposure: STO Puts are liabilities (strike × qty × 100), BTO options are assets (current market value or premium paid)
-  const stoLiability = openC.filter(c=>c.optType==="STO"&&c.type==="Put").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
-  const btoAssetVal  = openC.filter(c=>c.optType==="BTO").reduce((s,c)=>{
-    const lo = findOptionForContract(etradeChains,c);
-    const mktVal = lo?.mark!=null ? lo.mark*(c.qty||1)*100 : Math.abs(c.premium||0);
-    return s+mktVal;
-  },0);
-  const committedFunds = stoLiability - btoAssetVal;
+  // committedFunds moved below etradeChains declaration
   const winRate  = closedC.length ? (closedC.filter(c=>c.profit>0).length/closedC.length*100).toFixed(0) : 0;
   const avgProfit = closedC.length ? totalProfit/closedC.length : 0;
   const allTickers = [...new Set(originals.map(c=>c.stock?.toUpperCase()).filter(Boolean))].sort();
@@ -929,6 +922,7 @@ export default function App() {
   const aiEndRef = useRef(null);
 
   // Watchlist helpers
+  const [selectedWatchTicker, setSelectedWatchTicker] = useState(null);
   const addToWatchlist = async (ticker) => {
     const t = ticker.toUpperCase().trim();
     if (!t || watchlist.includes(t)) return;
@@ -953,6 +947,15 @@ export default function App() {
   const [etradeStatus, setEtradeStatus]       = useState("idle"); // idle | loading | ok | error
   const [etradeMsg, setEtradeMsg]             = useState("");
   const [etradeChains, setEtradeChains]       = useState({}); // { "TICKER|YYYY-MM-DD": {calls,puts} }
+  // Net exposure: STO Puts are liabilities, BTO options are assets (uses etradeChains so must be after it)
+  const stoLiability = openC.filter(c=>c.optType==="STO"&&c.type==="Put").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
+  const btoAssetVal  = openC.filter(c=>c.optType==="BTO").reduce((s,c)=>{
+    const chains = etradeChains || {};
+    const lo = findOptionForContract(chains,c);
+    const mktVal = lo?.mark!=null ? lo.mark*(c.qty||1)*100 : Math.abs(c.premium||0);
+    return s+mktVal;
+  },0);
+  const committedFunds = stoLiability - btoAssetVal;
   const [etradeLastFetch, setEtradeLastFetch] = useState(null);
   const [schwabPositions, setSchwabPositions]   = useState([]);
   const [watchlist, setWatchlist]               = useState([]); // array of ticker strings
@@ -978,7 +981,7 @@ export default function App() {
   const [chainControls, setChainControls] = useState({});
   const getChainControl = (ticker) => ({ strikes: 5, dates: 3, ...chainControls[ticker] });
   const setChainControl = (ticker, key, val) => setChainControls(prev => ({ ...prev, [ticker]: { ...getChainControl(ticker), [key]: val } }));
-  const [selectedWatchTicker, setSelectedWatchTicker] = useState(null); // live stock positions from Schwab
+  // selectedWatchTicker declared above near watchlist helpers
   // Load notifiedToday from localStorage (persists across reloads, resets daily)
   const [notifiedToday, setNotifiedToday] = useState(() => {
     try {
