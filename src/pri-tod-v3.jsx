@@ -1327,15 +1327,17 @@ export default function App() {
   const allActivePlan = planItems.filter(p=>p.status==="open");
   const planOpen = originals.filter(c => {
     if (c.status !== "Open") return false;
+    // Only hide if there's an active (not done) plan item for this contract
     const alreadyPlanned = allActivePlan.some(p =>
       p.ticker?.toUpperCase() === c.stock?.toUpperCase() &&
       String(p.strike) === String(c.strike) &&
-      p.expiration === c.expires &&
-      p.account === c.account
+      (p.expiration === c.expires || p.expiration === c.expires?.slice(0,10)) &&
+      (p.account||"")===(c.account||"")
     );
     return !alreadyPlanned;
   }).sort((a,b)=>(a.expires||"").localeCompare(b.expires||""));
-  const expToday = planOpen.filter(c=>c.expires===planToday);
+  // expToday includes ALL open contracts expiring today regardless of plan status
+  const expToday = originals.filter(c=>c.status==="Open"&&c.expires===planToday);
 
   const sf = (k,v) => setForm(p=>({...p,[k]:v}));
   const pf = (k,v) => setPlanForm(p=>({...p,[k]:v}));
@@ -3556,6 +3558,7 @@ ${JSON.stringify(summary, null, 1)}`;
                       <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>$/share</th>
                       <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Tgt Close</th>
                       <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Acct</th>
+                      <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Signal</th>
                       <th style={{padding:"5px 8px",width:36,borderBottom:"1px solid #1c2128"}}></th>
                     </tr></thead>
                     <tbody>
@@ -3591,6 +3594,24 @@ ${JSON.stringify(summary, null, 1)}`;
                           <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:"#00ff88",fontWeight:700}}>{bd?"$"+bd.targetPerShare.toFixed(2):"—"}</td>
                           <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:"#00ff88"}}>{bd?f$(bd.targetClose):"—"}</td>
                           <td style={{padding:"5px 8px"}}>{p.account?<Tag color={p.account==="Schwab"?"blue":"amber"}>{p.account}</Tag>:<span style={{color:"#2a3040",fontSize:10}}>—</span>}</td>
+                          <td style={{padding:"5px 8px"}}>
+                            {matchedContract && (() => {
+                              if (!bd) return <span style={{color:"#2a3040",fontSize:9,fontFamily:"monospace"}}>—</span>;
+                              const opt = findOptionForContract(etradeChains, matchedContract);
+                              const last = opt?.mark ?? opt?.last ?? null;
+                              if (last==null||!matchedContract.premium) return <span style={{color:"#2a3040",fontSize:9,fontFamily:"monospace"}}>—</span>;
+                              const gainPct = (Math.abs(matchedContract.premium)-last*matchedContract.qty*100)/Math.abs(matchedContract.premium)*100;
+                              const target  = bd.targetClose;
+                              const gainDollar = Math.abs(matchedContract.premium) - last*matchedContract.qty*100;
+                              if (gainDollar >= target)
+                                return <span style={{fontSize:9,fontFamily:"monospace",background:"#00ff8820",color:"#00ff88",border:"1px solid #00ff8840",borderRadius:3,padding:"1px 5px"}}>CLOSE NOW</span>;
+                              if (gainPct >= 50 && matchedContract.qty > 1)
+                                return <span style={{fontSize:9,fontFamily:"monospace",background:"#ffd16620",color:"#ffd166",border:"1px solid #ffd16640",borderRadius:3,padding:"1px 5px"}}>PARTIAL</span>;
+                              if (gainDollar >= target*0.8)
+                                return <span style={{fontSize:9,fontFamily:"monospace",background:"#ff9f1c20",color:"#ff9f1c",border:"1px solid #ff9f1c40",borderRadius:3,padding:"1px 5px"}}>APPROACHING</span>;
+                              return <span style={{color:"#2a3040",fontSize:9,fontFamily:"monospace"}}>hold</span>;
+                            })()}
+                          </td>
                           <td style={{padding:"4px 4px"}}><button onClick={()=>delPlan(p.id)} style={{background:"transparent",color:"#ff456030",border:"none",fontSize:11,cursor:"pointer",padding:"1px 4px"}}>✕</button></td>
                         </tr>
                         );
