@@ -868,7 +868,14 @@ export default function App() {
   const totalPrem   = allF.reduce((s,c) => s+(c.premium||0), 0);
   const totalProfit = closedC.reduce((s,c) => s+(c.profit||0), 0);
   const openPrem    = openC.reduce((s,c) => s+Math.abs(c.premium||0), 0);
-  const committedFunds = openC.filter(c=>c.optType==="STO"&&c.type==="Put").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
+  // Net exposure: STO Puts are liabilities (strike × qty × 100), BTO options are assets (current market value or premium paid)
+  const stoLiability = openC.filter(c=>c.optType==="STO"&&c.type==="Put").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
+  const btoAssetVal  = openC.filter(c=>c.optType==="BTO").reduce((s,c)=>{
+    const lo = findOptionForContract(etradeChains,c);
+    const mktVal = lo?.mark!=null ? lo.mark*(c.qty||1)*100 : Math.abs(c.premium||0);
+    return s+mktVal;
+  },0);
+  const committedFunds = stoLiability - btoAssetVal;
   const winRate  = closedC.length ? (closedC.filter(c=>c.profit>0).length/closedC.length*100).toFixed(0) : 0;
   const avgProfit = closedC.length ? totalProfit/closedC.length : 0;
   const allTickers = [...new Set(originals.map(c=>c.stock?.toUpperCase()).filter(Boolean))].sort();
@@ -2276,7 +2283,7 @@ ${JSON.stringify(summary, null, 1)}`;
               <KPI label="Total Premium" value={f$0(totalPrem)}      sub={allF.length+" contracts"}/>
               <KPI label="Realized P/L"  value={fSign0(totalProfit)} sub={winRate+"% win"} color={totalProfit>=0?"#00ff88":"#ff4560"}/>
               <KPI label="Open Exposure" value={f$0(openPrem)}       sub={openC.length+" open"} color="#ffd166"/>
-              <KPI label="Committed Funds" value={f$0(committedFunds)} sub="STO Put × strike" color="#c084fc"/>
+              <KPI label="Net Exposure" value={f$0(committedFunds)} sub={"STO puts $"+f$0(stoLiability)+" − BTO assets $"+f$0(btoAssetVal)} color="#c084fc"/>
               <KPI label="Avg Profit"    value={fSign0(avgProfit)}    sub="per close" color={avgProfit>=0?"#58a6ff":"#ff4560"}/>
               <KPI label="Profit MTD"    value={fSign0(profitMTD)}    sub={mLabel+" · "+(profitDateMode==="exec"?"opened":"closed")} color={profitMTD>=0?"#00ff88":"#ff4560"}/>
               <KPI label="Profit YTD"    value={fSign0(profitYTD)}    sub={thisYear+" · "+(profitDateMode==="exec"?"opened":"closed")} color={profitYTD>=0?"#00ff88":"#ff4560"}/>
@@ -3522,8 +3529,12 @@ ${JSON.stringify(summary, null, 1)}`;
                     const isPut   = planForm.type==="Put" && (planForm.action==="STO"||planForm.action==="BTO");
                     const cashReq = isPut ? (+planForm.strike||0)*(+planForm.qty)*100 : 0;
                     const cd = cashData || {};
-                    const schwabAvailForPuts = (+cd.schwab||0) - openC.filter(c=>c.optType==="STO"&&c.type==="Put"&&c.account==="Schwab").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
-                    const etradeAvailForPuts = (+cd.etrade||0) - openC.filter(c=>c.optType==="STO"&&c.type==="Put"&&c.account==="Etrade").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
+                    const schwabSTO = openC.filter(c=>c.optType==="STO"&&c.type==="Put"&&c.account==="Schwab").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
+                    const schwabBTO = openC.filter(c=>c.optType==="BTO"&&c.account==="Schwab").reduce((s,c)=>{const lo=findOptionForContract(etradeChains,c);return s+(lo?.mark!=null?lo.mark*(c.qty||1)*100:Math.abs(c.premium||0));},0);
+                    const schwabAvailForPuts = (+cd.schwab||0) - schwabSTO + schwabBTO;
+                    const etradeSTO = openC.filter(c=>c.optType==="STO"&&c.type==="Put"&&c.account==="Etrade").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
+                    const etradeBTO = openC.filter(c=>c.optType==="BTO"&&c.account==="Etrade").reduce((s,c)=>{const lo=findOptionForContract(etradeChains,c);return s+(lo?.mark!=null?lo.mark*(c.qty||1)*100:Math.abs(c.premium||0));},0);
+                    const etradeAvailForPuts = (+cd.etrade||0) - etradeSTO + etradeBTO;
                     const acctAvail = planForm.account==="Schwab"?schwabAvailForPuts:planForm.account==="Etrade"?etradeAvailForPuts:null;
                     const afterTrade = acctAvail!=null ? acctAvail - cashReq : null;
                     return (
@@ -4113,19 +4124,21 @@ ${JSON.stringify(summary, null, 1)}`;
                 {/* Committed funds + available to write puts */}
                 {(() => {
                   const schwabCommitted = openC.filter(c=>c.optType==="STO"&&c.type==="Put"&&c.account==="Schwab").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
+                  const schwabBTOAssets = openC.filter(c=>c.optType==="BTO"&&c.account==="Schwab").reduce((s,c)=>{const lo=findOptionForContract(etradeChains,c);return s+(lo?.mark!=null?lo.mark*(c.qty||1)*100:Math.abs(c.premium||0));},0);
                   const etradeCommitted = openC.filter(c=>c.optType==="STO"&&c.type==="Put"&&c.account==="Etrade").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
-                  const schwabAvail = (+cashData.schwab||0) - schwabCommitted;
-                  const etradeAvail = (+cashData.etrade||0) - etradeCommitted;
+                  const etradeBTOAssets = openC.filter(c=>c.optType==="BTO"&&c.account==="Etrade").reduce((s,c)=>{const lo=findOptionForContract(etradeChains,c);return s+(lo?.mark!=null?lo.mark*(c.qty||1)*100:Math.abs(c.premium||0));},0);
+                  const schwabAvail = (+cashData.schwab||0) - schwabCommitted + schwabBTOAssets;
+                  const etradeAvail = (+cashData.etrade||0) - etradeCommitted + etradeBTOAssets;
                   return (<>
                     <div style={{background:"#0a0e14",border:"1px solid #c084fc30",borderRadius:8,padding:"8px 12px",minWidth:140,display:"flex",flexDirection:"column",gap:3}}>
                       <div style={{fontSize:7,color:"#c084fc",fontFamily:"monospace",letterSpacing:"0.08em"}}>SCHWAB AVAILABLE</div>
                       <div style={{fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:schwabAvail>=0?"#00ff88":"#ff4560"}}>{f$(schwabAvail)}</div>
-                      <div style={{fontSize:8,color:"#3a4050",fontFamily:"monospace"}}>cash {f$(+cashData.schwab||0)} − committed {f$(schwabCommitted)}</div>
+                      <div style={{fontSize:8,color:"#3a4050",fontFamily:"monospace"}}>cash {f$(+cashData.schwab||0)} − STO {f$(schwabCommitted)} + BTO {f$(schwabBTOAssets)}</div>
                     </div>
                     <div style={{background:"#0a0e14",border:"1px solid #c084fc30",borderRadius:8,padding:"8px 12px",minWidth:140,display:"flex",flexDirection:"column",gap:3}}>
                       <div style={{fontSize:7,color:"#c084fc",fontFamily:"monospace",letterSpacing:"0.08em"}}>ETRADE AVAILABLE</div>
                       <div style={{fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:etradeAvail>=0?"#00ff88":"#ff4560"}}>{f$(etradeAvail)}</div>
-                      <div style={{fontSize:8,color:"#3a4050",fontFamily:"monospace"}}>cash {f$(+cashData.etrade||0)} − committed {f$(etradeCommitted)}</div>
+                      <div style={{fontSize:8,color:"#3a4050",fontFamily:"monospace"}}>cash {f$(+cashData.etrade||0)} − STO {f$(etradeCommitted)} + BTO {f$(etradeBTOAssets)}</div>
                     </div>
                   </>);
                 })()}
