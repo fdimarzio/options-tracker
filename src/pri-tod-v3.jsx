@@ -545,6 +545,26 @@ export default function App() {
   const [celebration,setCelebration] = useState(null); // {profit}
   const [planItems,setPlanItems]   = useState([]);
   const [planForm,setPlanForm]     = useState(null);
+  // Auto-reload when a new version is deployed
+  useEffect(() => {
+    let currentVersion = null;
+    const check = async () => {
+      try {
+        const res  = await fetch("/version.json?t=" + Date.now());
+        const data = await res.json();
+        if (!currentVersion) {
+          currentVersion = data.v;           // first load — store current version
+        } else if (data.v !== currentVersion) {
+          window.location.reload();          // new version detected — silent reload
+        }
+      } catch { /* network hiccup — ignore */ }
+    };
+    check(); // check immediately on mount
+    const interval = setInterval(check, 5 * 60 * 1000); // then every 5 minutes
+    return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Handle deep-link from Pushover notification: ?action=plan&ticker=AAPL or ?action=close&id=123
   useEffect(()=>{
     const params = new URLSearchParams(window.location.search);
