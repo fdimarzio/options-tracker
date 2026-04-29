@@ -223,7 +223,7 @@ function playLoss() {
 }
 
 // ── Default form states ───────────────────────────────────────────────────────
-const EMPTY_NEW = {stock:"",type:"Call",optType:"STO",strike:"",qty:"",expires:"",premium:"",priceAtExecution:"",dateExec:TODAY,account:"",notes:"",strategy:"",createdVia:"Manual",currentPrice:null};
+const EMPTY_NEW = {stock:"",type:"Call",optType:"STO",strike:"",qty:"",expires:"",premium:"",priceAtExecution:"",dateExec:TODAY,account:"",notes:"",strategy:"OTM Covered Call Strategy",createdVia:"Manual",currentPrice:null};
 const EMPTY_CLOSE = {costToClose:"",closeDate:TODAY,exercised:"No",rolledOver:"No",notes:""};
 
 // ── Default column config ─────────────────────────────────────────────────────
@@ -2557,8 +2557,8 @@ ${JSON.stringify(summary, null, 1)}`;
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(125px,1fr))",gap:7}}>
                   <div><FL req>Ticker</FL><input type="text" value={form.stock||""} autoComplete="off" spellCheck="false" className={formErrors.stock?"err":""} style={{textTransform:"uppercase"}} onChange={e=>{const t=e.target.value.toUpperCase();const d=tickerDefaults(t);setForm(p=>({...p,stock:t,expires:nextExpiry(t)||p.expires||"",account:d.account||p.account||"",qty:d.qty||p.qty||""}));}} placeholder=""/></div>
-                  <div><FL req>Option Type</FL><select value={form.type} onChange={e=>sf("type",e.target.value)} className={formErrors.type?"err":""}><option>Call</option><option>Put</option></select></div>
-                  <div><FL req>Opt Type</FL><select value={form.optType} onChange={e=>sf("optType",e.target.value)} className={formErrors.optType?"err":""}><option>STO</option><option>BTO</option></select></div>
+                  <div><FL req>Option Type</FL><select value={form.type} onChange={e=>{sf("type",e.target.value);if(form.optType==="STO"&&e.target.value==="Call")sf("strategy","OTM Covered Call Strategy");else if(form.strategy==="OTM Covered Call Strategy")sf("strategy","");}} className={formErrors.type?"err":""}><option>Call</option><option>Put</option></select></div>
+                  <div><FL req>Opt Type</FL><select value={form.optType} onChange={e=>{sf("optType",e.target.value);if(e.target.value==="STO"&&form.type==="Call")sf("strategy","OTM Covered Call Strategy");else if(form.strategy==="OTM Covered Call Strategy")sf("strategy","");}} className={formErrors.optType?"err":""}><option>STO</option><option>BTO</option></select></div>
                   <div><FL req>Strike</FL><input type="number" value={form.strike} onChange={e=>sf("strike",e.target.value)} className={formErrors.strike?"err":""}/></div>
                   <div><FL req>Quantity</FL><input type="number" value={form.qty} onChange={e=>sf("qty",e.target.value)} className={formErrors.qty?"err":""}/></div>
                   <div><FL req>Premium $</FL><input type="number" value={form.premium} onChange={e=>sf("premium",e.target.value)} className={formErrors.premium?"err":""}/></div>
