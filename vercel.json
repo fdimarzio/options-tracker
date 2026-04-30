@@ -21,6 +21,10 @@
   ],
   "crons": [
     {
+      "path": "/api/market-refresh",
+      "schedule": "* 14-21 * * 1-5"
+    },
+    {
       "path": "/api/etrade-refresh",
       "schedule": "50 3 * * *"
     }

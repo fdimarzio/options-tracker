@@ -29,6 +29,7 @@ function toApp(row) {
     status:           row.status,
     costToClose:      row.cost_to_close != null ? +row.cost_to_close : null,
     closeDate:        row.close_date,
+    stockPriceAtClose: row.stock_price_at_close != null ? +row.stock_price_at_close : null,
     profit:           row.profit != null ? +row.profit : null,
     profitPct:        row.profit_pct != null ? +row.profit_pct : null,
     daysHeld:         row.days_held,
@@ -59,6 +60,7 @@ function toDB(c) {
     status:             c.status || "Open",
     cost_to_close:      c.costToClose != null ? +c.costToClose : null,
     close_date:         c.closeDate || null,
+    stock_price_at_close: c.stockPriceAtClose != null ? +c.stockPriceAtClose : null,
     profit:             c.profit != null ? +c.profit : null,
     profit_pct:         c.profitPct != null ? +c.profitPct : null,
     days_held:          c.daysHeld != null ? +c.daysHeld : null,
@@ -223,8 +225,8 @@ function playLoss() {
 }
 
 // ── Default form states ───────────────────────────────────────────────────────
-const EMPTY_NEW = {stock:"",type:"Call",optType:"STO",strike:"",qty:"",expires:"",premium:"",priceAtExecution:"",dateExec:TODAY,account:"",notes:"",strategy:"OTM Covered Call Strategy",createdVia:"Manual",currentPrice:null};
-const EMPTY_CLOSE = {costToClose:"",closeDate:TODAY,exercised:"No",rolledOver:"No",notes:""};
+const EMPTY_NEW = {stock:"",type:"Call",optType:"STO",strike:"",qty:"",expires:"",premium:"",priceAtExecution:"",dateExec:TODAY,account:"",notes:"",strategy:"OTM Covered Call Strategy",tradeRule:"",createdVia:"Manual",currentPrice:null};
+const EMPTY_CLOSE = {costToClose:"",closeDate:TODAY,exercised:"No",rolledOver:"No",notes:"",stockPriceAtClose:""};
 
 // ── Default column config ─────────────────────────────────────────────────────
 const DEFAULT_COLS = [
@@ -545,6 +547,55 @@ export default function App() {
   const [celebration,setCelebration] = useState(null); // {profit}
   const [planItems,setPlanItems]   = useState([]);
   const [planForm,setPlanForm]     = useState(null);
+  // Poll Supabase for background refresh data (quotes updated by server cron)
+  useEffect(() => {
+    let lastRefreshSeen = null;
+
+    const pollRefresh = async () => {
+      try {
+        const { data } = await supabase
+          .from("col_prefs")
+          .select("cols,updated_at")
+          .eq("id", "last_market_refresh")
+          .single();
+
+        if (!data?.cols?.lastRefresh) return;
+        if (data.cols.lastRefresh === lastRefreshSeen) return;
+        lastRefreshSeen = data.cols.lastRefresh;
+
+        // Apply fresh quotes to stocksData
+        const freshQuotes = data.cols.quotes || {};
+        if (Object.keys(freshQuotes).length > 0) {
+          await applyQuotesToStocksData(freshQuotes);
+          setEtradeMsg("Auto-refreshed " + new Date(data.cols.lastRefresh).toLocaleTimeString());
+        }
+      } catch { /* ignore */ }
+    };
+
+    // Determine interval based on visibility + time of day
+    const getInterval = () => {
+      const now = new Date();
+      const et  = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+      const mins = et.getHours() * 60 + et.getMinutes();
+      const day  = et.getDay();
+      if (day === 0 || day === 6) return 5 * 60 * 1000;
+      if (mins >= 570 && mins < 630) return 60 * 1000;   // 9:30-10:30: 1 min
+      if (mins >= 630 && mins < 960) return 5 * 60 * 1000; // 10:30-4pm: 5 min
+      return 10 * 60 * 1000; // outside hours: 10 min
+    };
+
+    pollRefresh(); // immediate check on mount
+    let timer = setInterval(() => {
+      pollRefresh();
+      // Reschedule with updated interval
+      clearInterval(timer);
+      timer = setInterval(pollRefresh, getInterval());
+    }, getInterval());
+
+    return () => clearInterval(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Auto-reload when a new version is deployed
   useEffect(() => {
     let currentVersion = null;
@@ -1469,6 +1520,7 @@ export default function App() {
       status:"Closed", costToClose:ctc, closeDate:closeForm.closeDate,
       profit, profitPct, daysHeld, exercised:closeForm.exercised, rolledOver:closeForm.rolledOver,
       notes:closeForm.notes||orig.notes, createdVia:"Manual", createdBy:authUser?.id||null, currentPrice:null,
+      stockPriceAtClose: closeForm.stockPriceAtClose ? +closeForm.stockPriceAtClose : null,
     };
     let u;
     if (isPartial) {
@@ -1492,7 +1544,7 @@ export default function App() {
       await persistOne(cr);
       await persistOne(updatedOrig);
     }
-    setCloseForm({...EMPTY_CLOSE}); setClosingId(null); setShowForm(false);
+    setCloseForm({...EMPTY_CLOSE, stockPriceAtClose: stocksData[viewC?.stock?.toUpperCase()]?.currentPrice || ""}); setClosingId(null); setShowForm(false);
     setCelebration({profit});
     if (profit > 0) playCashRegister(); else playLoss();
   };
@@ -2571,6 +2623,7 @@ ${JSON.stringify(summary, null, 1)}`;
                   </div>
                   <div><FL req>Account</FL><select value={form.account||""} onChange={e=>sf("account",e.target.value)} className={formErrors.account?"err":""}><option value="">—</option><option>Schwab</option><option>Etrade</option></select></div>
                   <div><FL>Strategy</FL><select value={form.strategy||""} onChange={e=>sf("strategy",e.target.value)}><option value="">— none —</option>{strategies.map(s=><option key={s.id} value={s.name}>{s.name}</option>)}</select></div>
+                  <div><FL>Trade Rule</FL><select value={form.tradeRule||""} onChange={e=>sf("tradeRule",e.target.value)}><option value="">— none —</option>{tradeRules.map((r,i)=><option key={i} value={r.name||r.title||r.rule||JSON.stringify(r)}>{r.name||r.title||r.rule||("Rule "+(i+1))}</option>)}</select></div>
                 </div>
                 <div style={{marginTop:7}}><FL>Notes</FL><textarea rows={2} value={form.notes||""} onChange={e=>sf("notes",e.target.value)} style={{resize:"vertical"}}/></div>
                 {editing && contracts.find(x=>x.id===editing)?.status==="Closed" && (
@@ -2618,6 +2671,7 @@ ${JSON.stringify(summary, null, 1)}`;
                     <div><FL>Exercised?</FL><select value={closeForm.exercised} onChange={e=>setCloseForm(p=>({...p,exercised:e.target.value}))}><option>No</option><option>Yes</option></select></div>
                     <div><FL>Rolled Over?</FL><select value={closeForm.rolledOver} onChange={e=>setCloseForm(p=>({...p,rolledOver:e.target.value}))}><option>No</option><option>Yes</option></select></div>
                   </div>
+                  <div style={{marginBottom:9}}><FL>Stock Price at Close</FL><input type="number" value={closeForm.stockPriceAtClose||""} placeholder={stocksData[viewC?.stock?.toUpperCase()]?.currentPrice ? "~"+stocksData[viewC?.stock?.toUpperCase()]?.currentPrice : "enter price"} onChange={e=>setCloseForm(p=>({...p,stockPriceAtClose:e.target.value}))}/></div>
                   <div style={{marginBottom:9}}><FL>Notes</FL><textarea rows={2} value={closeForm.notes||""} onChange={e=>setCloseForm(p=>({...p,notes:e.target.value}))} style={{resize:"vertical"}}/></div>
                   {orig && ctc>0 && (
                     <div style={{display:"flex",gap:14,padding:"7px 11px",background:"#080c12",borderRadius:6,marginBottom:9,fontFamily:"monospace",fontSize:11}}>
