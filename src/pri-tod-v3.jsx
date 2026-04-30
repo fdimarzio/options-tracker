@@ -547,55 +547,6 @@ export default function App() {
   const [celebration,setCelebration] = useState(null); // {profit}
   const [planItems,setPlanItems]   = useState([]);
   const [planForm,setPlanForm]     = useState(null);
-  // Poll Supabase for background refresh data (quotes updated by server cron)
-  useEffect(() => {
-    let lastRefreshSeen = null;
-
-    const pollRefresh = async () => {
-      try {
-        const { data } = await supabase
-          .from("col_prefs")
-          .select("cols,updated_at")
-          .eq("id", "last_market_refresh")
-          .single();
-
-        if (!data?.cols?.lastRefresh) return;
-        if (data.cols.lastRefresh === lastRefreshSeen) return;
-        lastRefreshSeen = data.cols.lastRefresh;
-
-        // Apply fresh quotes to stocksData
-        const freshQuotes = data.cols.quotes || {};
-        if (Object.keys(freshQuotes).length > 0) {
-          await applyQuotesToStocksData(freshQuotes);
-          setEtradeMsg("Auto-refreshed " + new Date(data.cols.lastRefresh).toLocaleTimeString());
-        }
-      } catch { /* ignore */ }
-    };
-
-    // Determine interval based on visibility + time of day
-    const getInterval = () => {
-      const now = new Date();
-      const et  = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
-      const mins = et.getHours() * 60 + et.getMinutes();
-      const day  = et.getDay();
-      if (day === 0 || day === 6) return 5 * 60 * 1000;
-      if (mins >= 570 && mins < 630) return 60 * 1000;   // 9:30-10:30: 1 min
-      if (mins >= 630 && mins < 960) return 5 * 60 * 1000; // 10:30-4pm: 5 min
-      return 10 * 60 * 1000; // outside hours: 10 min
-    };
-
-    pollRefresh(); // immediate check on mount
-    let timer = setInterval(() => {
-      pollRefresh();
-      // Reschedule with updated interval
-      clearInterval(timer);
-      timer = setInterval(pollRefresh, getInterval());
-    }, getInterval());
-
-    return () => clearInterval(timer);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // Auto-reload when a new version is deployed
   useEffect(() => {
     let currentVersion = null;
@@ -1205,6 +1156,52 @@ export default function App() {
       }
     }
   }, [etradeStatus, originals, contracts, stocksData, applyQuotesToStocksData]);
+
+  // Poll Supabase for background refresh data (quotes updated by server cron)
+  // Must be after applyQuotesToStocksData is declared
+  useEffect(() => {
+    let lastRefreshSeen = null;
+
+    const pollRefresh = async () => {
+      try {
+        const { data } = await supabase
+          .from("col_prefs")
+          .select("cols")
+          .eq("id", "last_market_refresh")
+          .single();
+
+        if (!data?.cols?.lastRefresh) return;
+        if (data.cols.lastRefresh === lastRefreshSeen) return;
+        lastRefreshSeen = data.cols.lastRefresh;
+
+        const freshQuotes = data.cols.quotes || {};
+        if (Object.keys(freshQuotes).length > 0) {
+          await applyQuotesToStocksData(freshQuotes);
+          const t = new Date(data.cols.lastRefresh).toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"});
+          setEtradeMsg("Auto-refreshed at " + t);
+        }
+      } catch { /* network hiccup */ }
+    };
+
+    const getInterval = () => {
+      const et   = new Date(new Date().toLocaleString("en-US",{timeZone:"America/New_York"}));
+      const mins = et.getHours()*60 + et.getMinutes();
+      const day  = et.getDay();
+      if (day===0||day===6) return 5*60*1000;
+      if (mins>=570&&mins<630) return 60*1000;    // 9:30-10:30 ET: every 1 min
+      if (mins>=630&&mins<960) return 5*60*1000;  // 10:30-4pm ET: every 5 min
+      return 10*60*1000;
+    };
+
+    pollRefresh();
+    let timer = setInterval(()=>{
+      pollRefresh();
+      clearInterval(timer);
+      timer = setInterval(pollRefresh, getInterval());
+    }, getInterval());
+
+    return () => clearInterval(timer);
+  }, [applyQuotesToStocksData]);
 
   // Get live bid/ask/last for a specific open contract from cached chains
   const getLiveOption = useCallback((contract) => {
@@ -2597,6 +2594,9 @@ ${JSON.stringify(summary, null, 1)}`;
                   : "⟳ Live Data"}
               </button>
               {etradeStatus==="error" && <span style={{fontSize:9,color:"#ff4560",fontFamily:"monospace"}}>{etradeMsg}</span>}
+              {etradeStatus==="ok" && etradeMsg?.startsWith("Auto-refreshed") && (
+                <span style={{fontSize:9,color:"#00ff8860",fontFamily:"monospace",marginLeft:4}}>{etradeMsg}</span>
+              )}
             </div>
 
             {/* New contract form */}

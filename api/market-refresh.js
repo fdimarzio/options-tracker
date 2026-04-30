@@ -169,14 +169,49 @@ async function sendPushover(title, body, url, urlTitle, priority = 0) {
   });
 }
 
-// ── Save last refresh data to Supabase for frontend to pick up ────────────────
+// ── Save refresh data to Supabase ────────────────────────────────────────────
+// 1. last_market_refresh: for frontend polling (lightweight, just quotes + timestamp)
+// 2. stocks_data: persisted across sessions so new browser loads see fresh prices
 async function saveRefreshData(quotes, lastRefresh) {
+  // Save to last_market_refresh for polling
   await fetch(`${SUPABASE_URL}/rest/v1/col_prefs`, {
     method: "POST",
     headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
     body: JSON.stringify({
-      id:  "last_market_refresh",
+      id:   "last_market_refresh",
       cols: { quotes, lastRefresh },
+      updated_at: new Date().toISOString(),
+    }),
+  });
+
+  // Also merge into stocks_data so new sessions load fresh prices immediately
+  const sdRes  = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.stocks_data`, {
+    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+  });
+  const sdRows = await sdRes.json();
+  const existing = sdRows?.[0]?.cols || {};
+
+  const updated = { ...existing };
+  for (const [ticker, q] of Object.entries(quotes)) {
+    if (q.lastPrice != null) {
+      updated[ticker] = {
+        ...(updated[ticker] || {}),
+        currentPrice: q.lastPrice,
+        bid:          q.bid,
+        ask:          q.ask,
+        changeClose:  q.changeClose,
+        changePct:    q.changePct,
+        lastQuoteAt:  lastRefresh,
+      };
+    }
+  }
+
+  await fetch(`${SUPABASE_URL}/rest/v1/col_prefs`, {
+    method: "POST",
+    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
+    body: JSON.stringify({
+      id:   "stocks_data",
+      cols: updated,
       updated_at: new Date().toISOString(),
     }),
   });
