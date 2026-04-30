@@ -128,29 +128,7 @@ function getContractBand(contract, bands, stockPrice) {
   };
 }
 
-// ── Fetch option chain for a contract ────────────────────────────────────────
-async function fetchOptionMark(contract, token) {
-  try {
-    const data = await schwabGet("/marketdata/v1/chains", {
-      symbol:       contract.stock.toUpperCase(),
-      contractType: contract.type === "Put" ? "PUT" : "CALL",
-      strikeCount:  5,
-      fromDate:     contract.expires,
-      toDate:       contract.expires,
-    }, token);
 
-    const map = contract.type === "Put" ? data?.putExpDateMap : data?.callExpDateMap;
-    for (const [, strikes] of Object.entries(map || {})) {
-      for (const [strikeKey, options] of Object.entries(strikes)) {
-        if (Math.abs(+strikeKey - +contract.strike) < 0.01) {
-          const opt = options?.[0];
-          return opt?.mark ?? opt?.last ?? opt?.bid ?? null;
-        }
-      }
-    }
-    return null;
-  } catch { return null; }
-}
 
 // ── Send Pushover notification ────────────────────────────────────────────────
 async function sendPushover(title, body, url, urlTitle, priority = 0) {
@@ -267,6 +245,50 @@ export default async function handler(req, res) {
     // Save quotes + timestamp to Supabase for frontend
     await saveRefreshData(quotes, new Date().toISOString());
 
+    // Fetch option chains for all open positions and save to Supabase
+    const chainData = {};
+    const seen = new Set();
+    for (const c of contracts) {
+      if (!c.stock || !c.expires) continue;
+      const key = c.stock.toUpperCase() + "|" + c.expires;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      try {
+        const data = await schwabGet("/marketdata/v1/chains", {
+          symbol:       c.stock.toUpperCase(),
+          contractType: "ALL",
+          strikeCount:  30,
+          fromDate:     c.expires,
+          toDate:       c.expires,
+        }, token);
+
+        const calls = [], puts = [];
+        for (const [, strikes] of Object.entries(data?.callExpDateMap || {}))
+          for (const [, opts] of Object.entries(strikes))
+            for (const o of opts) calls.push({ strikePrice: o.strikePrice, bid: o.bid, ask: o.ask, last: o.last, mark: o.mark, delta: o.delta, volatility: o.volatility, totalVolume: o.totalVolume, openInterest: o.openInterest });
+        for (const [, strikes] of Object.entries(data?.putExpDateMap || {}))
+          for (const [, opts] of Object.entries(strikes))
+            for (const o of opts) puts.push({ strikePrice: o.strikePrice, bid: o.bid, ask: o.ask, last: o.last, mark: o.mark, delta: o.delta, volatility: o.volatility, totalVolume: o.totalVolume, openInterest: o.openInterest });
+
+        chainData[key] = { calls, puts };
+      } catch (e) {
+        console.warn("[market-refresh] chain fetch failed for", key, e.message);
+      }
+    }
+
+    // Save chain data to Supabase for frontend to load
+    if (Object.keys(chainData).length > 0) {
+      await fetch(`${SUPABASE_URL}/rest/v1/col_prefs`, {
+        method: "POST",
+        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
+        body: JSON.stringify({
+          id:   "last_chain_refresh",
+          cols: { chains: chainData, lastRefresh: new Date().toISOString() },
+          updated_at: new Date().toISOString(),
+        }),
+      });
+    }
+
     // Evaluate signals
     const signals = [];
     for (const c of contracts) {
@@ -277,8 +299,12 @@ export default async function handler(req, res) {
       const bd   = getContractBand(c, bands, stockPrice);
       if (!bd)   continue;
 
-      // Fetch option mark
-      const last = await fetchOptionMark(c, token);
+      // Use chain data we already fetched
+      const chainKey = c.stock.toUpperCase() + "|" + c.expires;
+      const chain    = chainData[chainKey];
+      const options  = c.type === "Put" ? chain?.puts : chain?.calls;
+      const opt      = options?.find(o => Math.abs(o.strikePrice - +c.strike) < 0.01);
+      const last     = opt?.mark ?? opt?.last ?? opt?.bid ?? null;
       if (last == null) continue;
 
       const mv      = (c.qty || 1) * last * 100;

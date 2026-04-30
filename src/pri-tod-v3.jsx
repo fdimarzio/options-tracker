@@ -651,6 +651,9 @@ export default function App() {
 
         // Load stocks data
         const { data: sdData } = await supabase.from("col_prefs").select("*").eq("id","stocks_data").single();
+        // Load last known chains from background cron
+        const { data: chainCache } = await supabase.from("col_prefs").select("cols").eq("id","last_chain_refresh").single();
+        if (chainCache?.cols?.chains) setEtradeChains(chainCache.cols.chains);
         if (sdData?.cols) setStocksData(sdData.cols);
 
         // Load watchlist
@@ -1179,6 +1182,13 @@ export default function App() {
           await applyQuotesToStocksData(freshQuotes);
           const t = new Date(data.cols.lastRefresh).toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"});
           setEtradeMsg("Auto-refreshed at " + t);
+        }
+
+        // Also load fresh chains if available
+        const { data: chainData } = await supabase
+          .from("col_prefs").select("cols").eq("id","last_chain_refresh").single();
+        if (chainData?.cols?.chains) {
+          setEtradeChains(chainData.cols.chains);
         }
       } catch { /* network hiccup */ }
     };
