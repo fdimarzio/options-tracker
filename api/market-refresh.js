@@ -197,9 +197,17 @@ async function saveRefreshData(quotes, lastRefresh) {
 
 // ── Main handler ──────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
-  // Allow manual trigger via GET (for testing) or cron
   if (req.method !== "GET" && req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  // Verify secret to prevent unauthorized triggers
+  const secret = process.env.CRON_SECRET;
+  if (secret) {
+    const provided = req.headers["x-cron-secret"] || req.query.secret;
+    if (provided !== secret) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
   }
 
   const forceRun = req.query.force === "1";
