@@ -146,7 +146,7 @@ const fSign = v=>v==null?"—":(v>=0?"+":"-")+"$"+Math.abs(v).toLocaleString("en
 const fSign0= v=>v==null?"—":(v>=0?"+":"-")+"$"+Math.round(Math.abs(v)).toLocaleString("en-US"); // no cents
 const fMoney = v=>v==null?"—":(v<0?"-":"")+"$"+Math.abs(v).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
 const fPct  = v=>v==null?"—":(v*100).toFixed(1)+"%";
-const TODAY = new Date().toISOString().slice(0,10);
+const TODAY = new Date().toLocaleString("en-CA", { timeZone: "America/New_York" }).slice(0, 10);
 
 // ── Contract title formatter (Schwab/Etrade style) ────────────────────────────
 function fTitle(c) {
@@ -171,8 +171,13 @@ const EXPIRY_SCHEDULES = {
 function nextExpiry(ticker) {
   const days = EXPIRY_SCHEDULES[ticker?.toUpperCase()]; if (!days) return "";
   const dm = {Sun:0,Mon:1,Tue:2,Wed:3,Thu:4,Fri:5,Sat:6}; const targets = days.map(d=>dm[d]);
-  const now = new Date();
-  for (let i=1;i<=14;i++) { const d=new Date(now); d.setDate(now.getDate()+i); if (targets.includes(d.getDay())) return d.toISOString().slice(0,10); }
+  // Use ET date so after-hours entry on Friday night doesn't skip to the following week
+  const nowET = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
+  for (let i=1;i<=14;i++) {
+    const d = new Date(nowET);
+    d.setDate(nowET.getDate()+i);
+    if (targets.includes(d.getDay())) return d.toLocaleString("en-CA", { timeZone: "America/New_York" }).slice(0,10);
+  }
   return "";
 }
 
@@ -434,8 +439,8 @@ function BalanceHistory({ supabase, cashData, onSave }) {
 
 // ── Import Tab wrapper ────────────────────────────────────────────────────────
 import ImportPageComponent from "./ImportPage.jsx";
-function ImportTab({ supabase }) {
-  return <ImportPageComponent parallelRun={true} defaultDays={1} supabaseClient={supabase} />;
+function ImportTab({ supabase, tradeRules }) {
+  return <ImportPageComponent parallelRun={true} defaultDays={1} supabaseClient={supabase} tradeRules={tradeRules} />;
 }
 
 export default function App() {
@@ -457,6 +462,7 @@ export default function App() {
 
   // App core
   const [tab,setTab]             = useState("dashboard");
+  const [uiScale,setUiScale]     = useState(()=>{ try{ return +localStorage.getItem("pri_ui_scale")||1; }catch{ return 1; } });
   const [contracts,setContracts] = useState([]);
   const [dbReady,setDbReady]     = useState(false);
   const [form,setForm]           = useState({...EMPTY_NEW});
@@ -1017,7 +1023,7 @@ export default function App() {
       const stored = localStorage.getItem("notifiedToday");
       if (!stored) return {};
       const { date, keys } = JSON.parse(stored);
-      const today = new Date().toISOString().slice(0, 10);
+      const today = new Date().toLocaleString("en-CA", { timeZone: "America/New_York" }).slice(0, 10);
       return date === today ? keys : {}; // reset if it's a new day
     } catch { return {}; }
   });
@@ -1261,8 +1267,12 @@ export default function App() {
       const gainPct = prem > 0 ? (gain/prem)*100 : 0;
       const tgtPct  = bd.tgtPct; // e.g. 65 means target is 65% profit on premium
       const target  = bd.targetClose; // dollar value of profit at tgtPct
-      // Partial Close: at target with multiple contracts — sell enough to recover cost basis, let rest ride
-      if (gainPct >= tgtPct && c.qty > 1) {
+      const isBTO   = c.optType === "BTO";
+      const expiringToday = c.expires === TODAY;
+      // STO at target: always close all — limited upside, not worth holding
+      // BTO at target with multiple contracts: partial close only if NOT expiring today
+      //   (if expiring today, no time for further upside — close all)
+      if (gainPct >= tgtPct && c.qty > 1 && isBTO && !expiringToday) {
         const perC = prem/(c.qty||1), gainPerU = gain/(c.qty||1);
         const pq   = gainPerU > 0 ? Math.ceil(perC/gainPerU) : null;
         if (pq && pq < c.qty) {
@@ -1270,7 +1280,7 @@ export default function App() {
         } else {
           signals.push({ contract:`${c.stock} ${c.expires} $${c.strike} ${c.type}`, type:"TARGET_HIT", gainPct, gainDollar:gain, targetClose:target, mktValue:mv, qty:c.qty, ticker:c.stock, contractId:c.id });
         }
-      // Close Now: at target, single contract
+      // All other cases at target: close all
       } else if (gainPct >= tgtPct) {
         signals.push({ contract:`${c.stock} ${c.expires} $${c.strike} ${c.type}`, type:"TARGET_HIT", gainPct, gainDollar:gain, targetClose:target, mktValue:mv, qty:c.qty, ticker:c.stock, contractId:c.id });
       // Approaching: within 25% of target
@@ -1482,10 +1492,15 @@ export default function App() {
       ...form, id:editing??Date.now(),
       strike:+form.strike, qty:+form.qty, premium:+form.premium,
       priceAtExecution:form.priceAtExecution?+form.priceAtExecution:null,
-      costToClose:ic?(orig.costToClose??null):null, closeDate:ic?(orig.closeDate??null):null,
-      profit:ic?(orig.profit??null):null, profitPct:ic?(orig.profitPct??null):null,
-      daysHeld:ic?(orig.daysHeld??null):null, exercised:ic?(orig.exercised??null):null,
-      rolledOver:ic?(orig.rolledOver??null):null,
+      // When editing a closed contract, use the form values (user may have changed them)
+      // Fall back to orig values only if the form field is blank/null
+      costToClose: ic ? (form.costToClose!==""&&form.costToClose!=null ? +form.costToClose : (orig.costToClose??null)) : null,
+      closeDate:   ic ? (form.closeDate || orig.closeDate || null) : null,
+      profit:      ic ? (form.profit!==""&&form.profit!=null ? +form.profit : (orig.profit??null)) : null,
+      profitPct:   ic ? (form.profitPct!==""&&form.profitPct!=null ? +form.profitPct : (orig.profitPct??null)) : null,
+      daysHeld:    ic ? (form.daysHeld!==""&&form.daysHeld!=null ? +form.daysHeld : (orig.daysHeld??null)) : null,
+      exercised:   ic ? (form.exercised ?? orig.exercised ?? null) : null,
+      rolledOver:  ic ? (form.rolledOver ?? orig.rolledOver ?? null) : null,
       status:ic?"Closed":"Open", createdVia:form.createdVia||"Manual", createdBy:authUser?.id||null,
       currentPrice:form.currentPrice||null,
     };
@@ -1557,7 +1572,7 @@ export default function App() {
   };
 
   const startClose = c => { setClosingId(c.id); setCloseForm({...EMPTY_CLOSE,notes:c.notes||""}); setFormMode("close"); setShowForm(true); setTab("contracts"); setTimeout(()=>window.scrollTo({top:0,behavior:"smooth"}),50); };
-  const doEdit = c => { setForm({...c,strike:`${c.strike}`,qty:`${c.qty}`,premium:`${c.premium}`,priceAtExecution:c.priceAtExecution??"",costToClose:c.costToClose??"",profit:c.profit??"",daysHeld:c.daysHeld??""}); setEditing(c.id); setFormMode("new"); setShowForm(true); setTab("contracts"); setTimeout(()=>window.scrollTo({top:0,behavior:"smooth"}),50); };
+  const doEdit = c => { setForm({...c,strike:`${c.strike}`,qty:`${c.qty}`,premium:`${c.premium}`,priceAtExecution:c.priceAtExecution??"",costToClose:c.costToClose??"",profit:c.profit??"",daysHeld:c.daysHeld??"",closeDate:c.closeDate||"",exercised:c.exercised||"No",rolledOver:c.rolledOver||"No"}); setEditing(c.id); setFormMode("new"); setShowForm(true); setTab("contracts"); setTimeout(()=>window.scrollTo({top:0,behavior:"smooth"}),50); };
   const doDelete = async id => {
     const updated = contracts.filter(c=>c.id!==id);
     setContracts(updated); setStorageMsg(updated.length+" contracts");
@@ -1799,7 +1814,7 @@ ${JSON.stringify(summary, null, 1)}`;
 
   // ── MAIN APP ──────────────────────────────────────────────────────────────
   return (
-    <div style={{minHeight:"100vh",background:"#010409",color:"#e6edf3",fontFamily:"'Inter',sans-serif"}}>
+    <div style={{minHeight:"100vh",background:"#010409",color:"#e6edf3",fontFamily:"'Inter',sans-serif",fontSize:`${uiScale*100}%`}}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600&display=swap');
         *{box-sizing:border-box;margin:0;padding:0}
@@ -2317,6 +2332,12 @@ ${JSON.stringify(summary, null, 1)}`;
           ))}
         </div>
         <div style={{display:"flex",alignItems:"center",gap:5,flexShrink:0,marginLeft:"auto"}}>
+          {/* Zoom controls */}
+          <div style={{display:"flex",alignItems:"center",gap:1,background:"#0d1117",border:"1px solid #1c2128",borderRadius:5,padding:"2px 3px"}}>
+            <button onClick={()=>{const s=Math.max(0.7,+(uiScale-0.1).toFixed(1));setUiScale(s);try{localStorage.setItem("pri_ui_scale",s);}catch{}}} style={{background:"transparent",border:"none",color:"#555",fontSize:14,lineHeight:1,padding:"0 4px",width:20,height:20}} title="Zoom out">−</button>
+            <span style={{fontSize:8,fontFamily:"monospace",color:"#3a4050",minWidth:28,textAlign:"center"}}>{Math.round(uiScale*100)}%</span>
+            <button onClick={()=>{const s=Math.min(1.5,+(uiScale+0.1).toFixed(1));setUiScale(s);try{localStorage.setItem("pri_ui_scale",s);}catch{}}} style={{background:"transparent",border:"none",color:"#555",fontSize:14,lineHeight:1,padding:"0 4px",width:20,height:20}} title="Zoom in">+</button>
+          </div>
           <Tag color="green">{openC.length}</Tag>
           <div onClick={()=>setShowProfile(true)} style={{width:26,height:26,borderRadius:"50%",background:`${authUser.color}20`,border:`2px solid ${authUser.color}50`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"monospace",fontWeight:700,color:authUser.color,fontSize:9,flexShrink:0,cursor:"pointer"}} title={authUser.name}>{authUser.initials}</div>
           <div ref={menuRef} style={{position:"relative"}}>
@@ -2864,8 +2885,10 @@ ${JSON.stringify(summary, null, 1)}`;
                               const gainPct = prem > 0 ? (gain/prem)*100 : 0;
                               const tgtPct  = bd.tgtPct;
                               const target  = bd.targetClose;
+                              const isBTO2  = c.optType === "BTO";
+                              const expToday = c.expires === TODAY;
                               let label, color, bg;
-                              if (gainPct >= tgtPct && c.qty > 1) {
+                              if (gainPct >= tgtPct && c.qty > 1 && isBTO2 && !expToday) {
                                 const perC = prem/(c.qty||1), gainPerU = gain/(c.qty||1);
                                 const pq   = gainPerU > 0 ? Math.ceil(perC/gainPerU) : null;
                                 label = pq && pq < c.qty ? "Sell "+pq+" of "+c.qty : "Close Now";
@@ -3594,7 +3617,9 @@ ${JSON.stringify(summary, null, 1)}`;
                             const gainPct = prem>0 ? (gain/prem)*100 : 0;
                             const tgtPct  = bd.tgtPct;
                             let label, color, bg;
-                            if (gainPct>=tgtPct&&c.qty>1) { const pq=Math.ceil((prem/(c.qty||1))/((gain/(c.qty||1))||1)); label=pq&&pq<c.qty?"Sell "+pq+" of "+c.qty:"Close Now"; color="#ffd166"; bg="#ffd16620"; }
+                            const isBTO3 = c.optType==="BTO";
+                            const expToday3 = c.expires===TODAY;
+                            if (gainPct>=tgtPct&&c.qty>1&&isBTO3&&!expToday3) { const pq=Math.ceil((prem/(c.qty||1))/((gain/(c.qty||1))||1)); label=pq&&pq<c.qty?"Sell "+pq+" of "+c.qty:"Close Now"; color="#ffd166"; bg="#ffd16620"; }
                             else if (gainPct>=tgtPct) { label="Close Now"; color="#00ff88"; bg="#00ff8820"; }
                             else if (gainPct>=tgtPct*0.75) { label="Approaching"; color="#58a6ff"; bg="#58a6ff20"; }
                             else return <span style={{color:"#2a3040",fontSize:9,fontFamily:"monospace"}}>hold</span>;
@@ -4520,7 +4545,7 @@ ${JSON.stringify(summary, null, 1)}`;
 
 
         {/* ══ IMPORT ══ */}
-        {tab==="import" && <ImportTab supabase={supabase} />}
+        {tab==="import" && <ImportTab supabase={supabase} tradeRules={tradeRules} />}
 
       </div>
     </div>

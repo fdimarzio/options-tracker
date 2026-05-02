@@ -242,8 +242,13 @@ export default async function handler(req, res) {
     const token = await getValidToken();
 
     // Date range
+    // IMPORTANT: Schwab timestamps are UTC. ET is UTC-4 (EDT) or UTC-5 (EST).
+    // To capture all trades on a given ET calendar day we widen the UTC window:
+    //   start = startDate 05:00 UTC  (safe floor before market open ET)
+    //   end   = (endDate+1) 05:00 UTC (next day 1am ET — captures full ET trading day)
     const today    = new Date();
-    const todayStr = today.toISOString().slice(0, 10);
+    // Derive ET date by subtracting 5h (EST offset; 4h EDT — 5h is the safe conservative floor)
+    const todayStr = new Date(today.getTime() - 5*3600000).toISOString().slice(0,10);
     let startDate, endDate;
 
     if (req.query.startDate) {
@@ -251,11 +256,17 @@ export default async function handler(req, res) {
       endDate   = req.query.endDate || todayStr;
     } else {
       const days = parseInt(req.query.days ?? "30", 10);
-      const from = new Date(today);
-      from.setDate(from.getDate() - days);
-      startDate = from.toISOString().slice(0, 10);
+      startDate = new Date(today.getTime() - (days+1)*86400000 - 5*3600000).toISOString().slice(0,10);
       endDate   = todayStr;
     }
+
+    // Build UTC query boundaries that cover the full ET calendar day.
+    // If endDate is today, cap at now (don't pull tomorrow's trades).
+    // If endDate is a past day, extend to next day 05:00 UTC to catch late ET trades.
+    const startUTC = startDate + "T05:00:00.000Z";
+    const endUTC   = endDate === todayStr
+      ? today.toISOString()                                                          // now — cap here
+      : new Date(new Date(endDate + "T05:00:00.000Z").getTime() + 86400000).toISOString(); // past day — extend
 
     // Step 1: Get account hash
     const acctData = await schwabFetch("/trader/v1/accounts/accountNumbers", {}, token);
@@ -269,8 +280,8 @@ export default async function handler(req, res) {
       if (!hash) continue;
       const txData = await schwabFetch(`/trader/v1/accounts/${hash}/transactions`, {
         types:     "TRADE",
-        startDate: `${startDate}T00:00:00.000Z`,
-        endDate:   `${endDate}T23:59:59.000Z`,
+        startDate: startUTC,
+        endDate:   endUTC,
       }, token);
       const txList = Array.isArray(txData) ? txData : (txData?.transactions ?? []);
       allRaw.push(...txList);

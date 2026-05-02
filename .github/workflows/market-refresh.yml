@@ -2,11 +2,15 @@ name: Market Refresh
 
 on:
   schedule:
+    # Market refresh: every 5 min Mon-Fri 9:30-16:00 ET (13:30-20:00 UTC)
     - cron: '*/5 13-20 * * 1-5'
+    # Token keeper: daily at 8am ET (12:00 UTC) — resets 7-day refresh token window
+    - cron: '0 12 * * *'
   workflow_dispatch:
 
 jobs:
   refresh:
+    if: github.event.schedule == '*/5 13-20 * * 1-5' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 4
 
@@ -23,9 +27,35 @@ jobs:
 
             if [ $i -eq 1 ]; then
               echo "Fetching chains..."
-              curl -s -H "x-cron-secret: $SECRET" --max-time 55 "$BASE_URL/api/chain-refresh"
+              curl -s -H "x-cron-secret: $SECRET" --max-time 15 "$BASE_URL/api/chain-refresh"
               echo ""
             fi
 
             if [ $i -lt 4 ]; then sleep 60; fi
           done
+
+  token-keeper:
+    if: github.event.schedule == '0 12 * * *' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - name: Keep Schwab refresh token alive
+        run: |
+          echo "Refreshing Schwab token..."
+          RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            "https://options-tracker-five.vercel.app/api/schwab-token-refresh")
+
+          HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS" | cut -d: -f2)
+          BODY=$(echo "$RESPONSE" | grep -v "HTTP_STATUS")
+
+          echo "Status: $HTTP_STATUS"
+          echo "Response: $BODY"
+
+          # Fail the job if token refresh failed so GitHub sends an alert email
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "ERROR: Token refresh failed! Manual re-auth may be required at:"
+            echo "https://options-tracker-five.vercel.app/api/schwab-auth"
+            exit 1
+          fi

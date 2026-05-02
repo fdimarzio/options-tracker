@@ -1,0 +1,36 @@
+name: Market Refresh
+
+on:
+  schedule:
+    # Runs every minute Mon-Fri 9:30-16:00 ET (13:30-20:00 UTC)
+    # GitHub Actions minimum is every 5 minutes, so we run 4x per job
+    - cron: '*/5 13-20 * * 1-5'
+  workflow_dispatch: # allow manual trigger
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+
+    steps:
+      - name: Trigger market refresh (4x 1 minute apart)
+        run: |
+          BASE_URL="https://options-tracker-five.vercel.app"
+          
+          for i in 1 2 3 4; do
+            echo "--- Refresh $i of 4 ---"
+            RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+              "$BASE_URL/api/market-refresh?force=1" \
+              -H "x-cron-secret: ${{ secrets.CRON_SECRET }}")
+            
+            HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS" | cut -d: -f2)
+            BODY=$(echo "$RESPONSE" | grep -v "HTTP_STATUS")
+            
+            echo "Status: $HTTP_STATUS"
+            echo "Response: $BODY"
+            
+            # Wait 60 seconds between calls (except after last one)
+            if [ $i -lt 4 ]; then
+              sleep 60
+            fi
+          done
