@@ -1,0 +1,145 @@
+RECONCILIATION REPORT
+=====================
+DB contracts without schwab_transaction_id: 424
+Schwab transactions loaded:                  463
+
+Exact matches:   366
+Fuzzy matches:   13
+No match:        45
+Data fixes:      0
+
+FUZZY MATCHES (review):
+  id=1776721766633 BTO AMZN 2026-04-22 $250 | dbPrem=-164.66 txPrem=-493.99 diff=329.33
+  id=1776450127704 STC AMZN 2026-04-20 $247.5 | dbPrem=-421.32 txPrem=1448.64 diff=-1869.96
+  id=1776448938499 STC AMZN 2026-04-17 $250 | dbPrem=-590.34 txPrem=885.98 diff=-1476.32
+  id=1776515895388 BTC AAPL 2026-04-10 $260 | dbPrem=-58.66 txPrem=-192.66 diff=134.00
+  id=1776515895538 BTC AAPL 2026-04-13 $262.5 | dbPrem=-192.66 txPrem=-54.66 diff=-138.00
+  id=1776515894918 STC WDC 2026-03-27 $292.5 | dbPrem=0 txPrem=1169.34 diff=-1169.34
+  id=1776515893678 BTC AAPL 2026-02-23 $262.5 | dbPrem=-273 txPrem=-273.66 diff=0.66
+  id=1776516071679 STC TLRY 2026-01-30 $9.5 | dbPrem=0 txPrem=1612.04 diff=-1612.04
+  id=1776515892727 STO UPS 2026-01-30 $109 | dbPrem=644.27 txPrem=644.67 diff=-0.40
+  id=1776515891838 BTC OWL 2026-01-09 $15 | dbPrem=-292.98 txPrem=-683.63 diff=390.65
+  id=1776515892117 STO JPM 2026-01-16 $325 | dbPrem=981.31 txPrem=981.34 diff=-0.03
+  id=1776515892057 STO RBLX 2026-01-09 $71 | dbPrem=352.66 txPrem=352.67 diff=-0.01
+  id=1776515891767 BTO TLRY 2026-01-30 $9.5 | dbPrem=-495.89 txPrem=-2107.93 diff=1612.04
+
+NO MATCH (manual review needed):
+  id=1777730102000 STC AMZN 2026-05-01 $265 prem=0.34 date=2026-05-01
+    no Schwab transaction found (pre-cutover or ETrade contract)
+  id=1777638562420 STC AMZN 2026-05-01 $275 prem=1384.99 date=2026-05-01
+    no Schwab transaction found (pre-cutover or ETrade contract)
+  id=1777640866994 BTO AMZN 2026-05-01 $265 prem=-242.66 date=2026-04-30
+    no Schwab transaction found (pre-cutover or ETrade contract)
+  id=1777032212622 BTC JPM 2026-04-24 $320 prem=-83.32
+    2 fuzzy candidates — ambiguous
+    options: 117228723505 prem=-41.66, 117228723503 prem=-41.66
+  id=1776806762060 STO AMZN 2026-04-22 $257.5 prem=464.34
+    2 fuzzy candidates — ambiguous
+    options: 117078835937 prem=199.01, 117078835933 prem=265.33
+  id=1776807557779 BTC AMZN 2026-04-22 $257.5 prem=-179.63
+    2 fuzzy candidates — ambiguous
+    options: 117151866435 prem=-25.66, 117151866403 prem=-153.97
+  id=1776515895408 BTC UPS 2026-04-17 $103 prem=-813.32
+    2 fuzzy candidates — ambiguous
+    options: 116870683342 prem=-406.66, 116870683338 prem=-406.66
+  id=1776451260530 STC NFLX 2026-04-17 $110 prem=0 date=2026-04-17
+    no Schwab transaction found (pre-cutover or ETrade contract)
+  id=1776351973167 BTC AMZN 2026-04-17 $255 prem=-206.63
+    2 fuzzy candidates — ambiguous
+    options: 116727596186 prem=-28.66, 116727596180 prem=-177.97
+  id=1776270277736 STO AMZN 2026-04-17 $255 prem=590.34
+    3 fuzzy candidates — ambiguous
+    options: 116656655918 prem=84.34, 116656655916 prem=168.67, 116656655914 prem=337.33
+  id=1776515895557 STO JPM 2026-04-17 $315 prem=718.66
+    2 fuzzy candidates — ambiguous
+    options: 116292576268 prem=359.33, 116292576266 prem=359.33
+  id=1776515895407 STO UPS 2026-04-17 $103 prem=116.67
+    2 fuzzy candidates — ambiguous
+    options: 116086760905 prem=58.33, 116086760903 prem=58.34
+  id=1776515895128 STC NKE 2026-04-10 $50 prem=24.06
+    6 fuzzy candidates — ambiguous
+    options: 116009919183 prem=0.33, 116009919081 prem=2.68, 115994046929 prem=6.7, 115982002212 prem=1, 115932053551 prem=6.68, 115929796507 prem=6.67
+  id=1776515895087 STO AMZN 2026-04-01 $212.5 prem=1619.35 date=2026-04-01
+    no Schwab transaction found (pre-cutover or ETrade contract)
+  id=1776515895088 BTC AMZN 2026-04-01 $212.5 prem=-543.63 date=2026-04-01
+    no Schwab transaction found (pre-cutover or ETrade contract)
+  id=1776515895127 BTO NKE 2026-04-10 $50 prem=-583.1
+    5 fuzzy candidates — ambiguous
+    options: 115696774136 prem=-11.67, 115696774134 prem=-11.66, 115696774132 prem=-93.29, 115696774130 prem=-279.89, 115696774128 prem=-186.59
+  id=1776515894468 STC AMZN 2026-04-10 $225 prem=91
+    2 fuzzy candidates — ambiguous
+    options: 115584419731 prem=30.33, 115584419728 prem=60.67
+  id=1776515894818 BTC WDC 2026-03-20 $307.5 prem=-137.66 date=2026-03-26
+    no Schwab transaction found (pre-cutover or ETrade contract)
+  id=1776515894758 STC WDC 2026-03-27 $292.5 prem=1169.34 date=2026-03-25
+    no Schwab transaction found (pre-cutover or ETrade contract)
+  id=1776515894817 STO WDC 2026-03-20 $307.5 prem=449.34 date=2026-03-25
+    no Schwab transaction found (pre-cutover or ETrade contract)
+  id=1776515894448 BTC UPS 2026-03-20 $99 prem=-57.32
+    2 fuzzy candidates — ambiguous
+    options: 114685172840 prem=-28.66, 114685172838 prem=-28.66
+  id=1776515893518 STC AMZN 2026-03-13 $230 prem=0 date=2026-03-16
+    no Schwab transaction found (pre-cutover or ETrade contract)
+  id=1776515894297 STO AMZN 2026-03-11 $215 prem=1154.67
+    2 fuzzy candidates — ambiguous
+    options: 113936204643 prem=144.32, 113936204639 prem=1010.35
+  id=1776515894038 BTC JPM 2026-03-06 $302.5 prem=-185.32
+    2 fuzzy candidates — ambiguous
+    options: 113434659746 prem=-92.66, 113434659744 prem=-92.66
+  id=1776515894057 STO AMZN 2026-03-06 $210 prem=1842.67
+    3 fuzzy candidates — ambiguous
+    options: 113492177897 prem=230.32, 113492177895 prem=460.68, 113492177893 prem=1151.67
+  id=1776515893638 BTC AMZN 2026-02-25 $205 prem=-1613.29
+    2 fuzzy candidates — ambiguous
+    options: 112858864098 prem=-201.66, 112858864096 prem=-1411.63
+  id=1776515892848 STC AMZN 2026-02-13 $270 prem=0 date=2026-02-13
+    no Schwab transaction found (pre-cutover or ETrade contract)
+  id=1776515893167 STO AMZN 2026-02-09 $205 prem=1990.35
+    4 fuzzy candidates — ambiguous
+    options: 111837133637 prem=284.34, 111837133635 prem=568.66, 111837133633 prem=568.68, 111837133629 prem=568.67
+  id=1776515893187 STO JPM 2026-02-13 $322.5 prem=898.67
+    2 fuzzy candidates — ambiguous
+    options: 111842997420 prem=449.33, 111842997416 prem=449.34
+  id=1776515893207 STO OWL 2026-02-13 $12.5 prem=240.35
+    2 fuzzy candidates — ambiguous
+    options: 111844754224 prem=103, 111844754222 prem=137.35
+  id=1776515892828 BTC OWL 2026-01-30 $14.5 prem=-21.08
+    2 fuzzy candidates — ambiguous
+    options: 111317471774 prem=-9.04, 111317471771 prem=-12.04
+  id=1776515892867 STO UPS 2026-02-06 $106 prem=342.67
+    2 fuzzy candidates — ambiguous
+    options: 111199667578 prem=171.33, 111199667576 prem=171.34
+  id=1776515892827 STO OWL 2026-01-30 $14.5 prem=205.35
+    3 fuzzy candidates — ambiguous
+    options: 111008713634 prem=29.34, 111008713631 prem=146.67, 111008713629 prem=29.34
+  id=1776515892798 BTC OWL 2026-01-30 $15 prem=-109.63
+    3 fuzzy candidates — ambiguous
+    options: 111000542218 prem=-78.31, 111000542216 prem=-15.66, 111000542214 prem=-15.66
+  id=1776515892148 BTC RBLX 2026-01-16 $72 prem=0 date=2026-01-16
+    no Schwab transaction found (pre-cutover or ETrade contract)
+  id=1776515892248 BTC TLRY 2026-01-16 $8.5 prem=0 date=2026-01-16
+    no Schwab transaction found (pre-cutover or ETrade contract)
+  id=1776515892348 BTC AMZN 2026-01-16 $240 prem=-789.97
+    2 fuzzy candidates — ambiguous
+    options: 110322338803 prem=-526.65, 110322338801 prem=-263.32
+  id=1776515892337 STO JPM 2026-01-16 $307.5 prem=628.67
+    2 fuzzy candidates — ambiguous
+    options: 110210220115 prem=314.33, 110210220113 prem=314.34
+  id=1776515892287 STO OWL 2026-01-16 $15 prem=275.35
+    3 fuzzy candidates — ambiguous
+    options: 110202425348 prem=196.68, 110202425346 prem=39.33, 110202425342 prem=39.34
+  id=1776515892247 STO TLRY 2026-01-16 $8.5 prem=724.03
+    5 fuzzy candidates — ambiguous
+    options: 110032234370 prem=60.34, 110032234368 prem=120.67, 110032234366 prem=120.67, 110032234364 prem=120.67, 110032234362 prem=301.68
+  id=1776515891858 BTC OWL 2026-01-09 $15 prem=-390.65 date=2026-01-09
+    no Schwab transaction found (pre-cutover or ETrade contract)
+  id=1776515891937 STO RBLX 2026-01-09 $76 prem=298.67
+    2 fuzzy candidates — ambiguous
+    options: 109688538363 prem=149.33, 109688538361 prem=149.34
+  id=1776515891797 STO TLRY 2026-02-20 $9 prem=1996.04
+    2 fuzzy candidates — ambiguous
+    options: 109362013744 prem=998.03, 109362013742 prem=998.01
+  id=1776515891518 BTC RBLX 2025-12-19 $94 prem=0 date=2025-12-19
+    no Schwab transaction found (pre-cutover or ETrade contract)
+  id=1776515891528 BTC NOBL 2025-12-19 $105 prem=0 date=2025-12-19
+    no Schwab transaction found (pre-cutover or ETrade contract)

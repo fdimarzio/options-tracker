@@ -1,0 +1,221 @@
+// reconcile.js
+// Run: node reconcile.js
+// Reads tx_full.json (Schwab API) and db_contracts.json (Supabase export)
+// Outputs: reconcile_updates.sql and reconcile_report.txt
+
+const fs = require("fs");
+
+const txRaw   = JSON.parse(fs.readFileSync("tx_full.json",      "utf8"));
+const dbRaw   = JSON.parse(fs.readFileSync("db_contracts.json", "utf8"));
+
+const txList = txRaw.transactions || [];
+const dbList = Array.isArray(dbRaw) ? dbRaw : dbRaw.data || dbRaw;
+
+// ── Normalize helpers ──────────────────────────────────────────────────────
+const norm = v => v == null ? null : String(v).trim().toLowerCase();
+const normAmt = v => v == null ? null : Math.round(parseFloat(v) * 100); // cents, avoid float issues
+const normDate = v => {
+  if (!v) return null;
+  const s = String(v).trim();
+  // handle MM/DD/YYYY
+  const mmddyyyy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (mmddyyyy) return `${mmddyyyy[3]}-${mmddyyyy[1].padStart(2,"0")}-${mmddyyyy[2].padStart(2,"0")}`;
+  return s.slice(0,10); // assume YYYY-MM-DD
+};
+
+// Build Schwab tx lookup keyed by stock|optType|strike|expires|premiumCents
+// Multiple txs can share same key (e.g. two AAPL STO same day same strike) — use array
+const txByKey = {};
+for (const tx of txList) {
+  const key = [
+    norm(tx.stock),
+    norm(tx.optType),
+    normAmt(tx.strike),
+    normDate(tx.expires),
+    normAmt(tx.premium),
+  ].join("|");
+  if (!txByKey[key]) txByKey[key] = [];
+  txByKey[key].push(tx);
+}
+
+// Also build a secondary index by stock|optType|strike|expires (ignoring premium)
+// for fuzzy matching
+const txByKeyNoPrem = {};
+for (const tx of txList) {
+  const key = [
+    norm(tx.stock),
+    norm(tx.optType),
+    normAmt(tx.strike),
+    normDate(tx.expires),
+  ].join("|");
+  if (!txByKeyNoPrem[key]) txByKeyNoPrem[key] = [];
+  txByKeyNoPrem[key].push(tx);
+}
+
+const updates    = [];
+const noMatch    = [];
+const fuzzy      = [];
+const dataFixes  = [];
+const usedTxIds  = new Set();
+
+// ── Data fixes ─────────────────────────────────────────────────────────────
+for (const c of dbList) {
+  if (c.stock === "APPL") {
+    dataFixes.push(`UPDATE contracts SET stock = 'AAPL' WHERE id = ${c.id}; -- typo fix APPL->AAPL`);
+  }
+  if (c.expires && (c.expires.includes("/") || c.expires === "04/31/2026")) {
+    const fixed = normDate(c.expires);
+    dataFixes.push(`UPDATE contracts SET expires = '${fixed}' WHERE id = ${c.id}; -- date format fix`);
+  }
+}
+
+// ── Match each DB contract ─────────────────────────────────────────────────
+for (const c of dbList) {
+  if (c.schwab_transaction_id) continue; // already has one, skip
+
+  const key = [
+    norm(c.stock === "APPL" ? "AAPL" : c.stock),
+    norm(c.opt_type),
+    normAmt(c.strike),
+    normDate(c.expires),
+    normAmt(c.premium),
+  ].join("|");
+
+  const candidates = txByKey[key] || [];
+  // Filter out already-used transaction IDs
+  const available = candidates.filter(tx => !usedTxIds.has(tx.schwabTransactionId));
+
+  if (available.length > 0) {
+    const tx = available[0];
+    usedTxIds.add(tx.schwabTransactionId);
+    updates.push({
+      id:   c.id,
+      txId: tx.schwabTransactionId,
+      stock: c.stock,
+      desc: `${c.opt_type} ${c.stock} ${c.expires} $${c.strike} prem=${c.premium}`,
+      confidence: "exact",
+    });
+    continue;
+  }
+
+  // Fuzzy: same stock/type/strike/expires but different premium (rounding, fees, partial)
+  const keyNoPrem = [
+    norm(c.stock === "APPL" ? "AAPL" : c.stock),
+    norm(c.opt_type),
+    normAmt(c.strike),
+    normDate(c.expires),
+  ].join("|");
+
+  const fuzzyAvail = (txByKeyNoPrem[keyNoPrem] || []).filter(tx => !usedTxIds.has(tx.schwabTransactionId));
+
+  if (fuzzyAvail.length === 1) {
+    // Only one candidate — likely a match despite premium difference
+    const tx = fuzzyAvail[0];
+    usedTxIds.add(tx.schwabTransactionId);
+    fuzzy.push({
+      id:    c.id,
+      txId:  tx.schwabTransactionId,
+      stock: c.stock,
+      desc:  `${c.opt_type} ${c.stock} ${c.expires} $${c.strike}`,
+      dbPrem:  c.premium,
+      txPrem:  tx.premium,
+      diff:    (parseFloat(c.premium||0) - parseFloat(tx.premium||0)).toFixed(2),
+      confidence: "fuzzy",
+    });
+  } else if (fuzzyAvail.length > 1) {
+    noMatch.push({
+      id: c.id,
+      desc: `${c.opt_type} ${c.stock} ${c.expires} $${c.strike} prem=${c.premium}`,
+      reason: `${fuzzyAvail.length} fuzzy candidates — ambiguous`,
+      fuzzyOptions: fuzzyAvail.map(tx => `${tx.schwabTransactionId} prem=${tx.premium}`).join(", "),
+    });
+  } else {
+    noMatch.push({
+      id: c.id,
+      desc: `${c.opt_type} ${c.stock} ${c.expires} $${c.strike} prem=${c.premium} date=${c.date_exec}`,
+      reason: "no Schwab transaction found (pre-cutover or ETrade contract)",
+    });
+  }
+}
+
+// ── Write SQL ──────────────────────────────────────────────────────────────
+const lines = [];
+
+lines.push("-- =============================================================");
+lines.push("-- RECONCILIATION SQL — generated by reconcile.js");
+lines.push(`-- Exact matches:  ${updates.length}`);
+lines.push(`-- Fuzzy matches:  ${fuzzy.length}  (review before running)`);
+lines.push(`-- No match:       ${noMatch.length}`);
+lines.push(`-- Data fixes:     ${dataFixes.length}`);
+lines.push("-- =============================================================");
+lines.push("");
+
+if (dataFixes.length) {
+  lines.push("-- ── DATA FIXES (typos, bad dates) ──────────────────────────");
+  lines.push("BEGIN;");
+  for (const f of dataFixes) lines.push(f);
+  lines.push("COMMIT;");
+  lines.push("");
+}
+
+if (updates.length) {
+  lines.push("-- ── EXACT MATCHES — safe to run ─────────────────────────────");
+  lines.push("BEGIN;");
+  for (const u of updates) {
+    lines.push(`UPDATE contracts SET schwab_transaction_id = '${u.txId}' WHERE id = ${u.id}; -- ${u.desc}`);
+  }
+  lines.push("COMMIT;");
+  lines.push("");
+}
+
+if (fuzzy.length) {
+  lines.push("-- ── FUZZY MATCHES — review premium differences before running ─");
+  lines.push("-- These matched on stock+optType+strike+expires but premium differs.");
+  lines.push("-- Likely caused by partial fills, fee rounding, or data entry differences.");
+  lines.push("-- Uncomment lines you're confident about.");
+  lines.push("");
+  for (const u of fuzzy) {
+    lines.push(`-- DB prem: ${u.dbPrem}  |  Schwab prem: ${u.txPrem}  |  diff: ${u.diff}`);
+    lines.push(`-- UPDATE contracts SET schwab_transaction_id = '${u.txId}' WHERE id = ${u.id}; -- ${u.desc}`);
+    lines.push("");
+  }
+}
+
+if (noMatch.length) {
+  lines.push("-- ── NO MATCH FOUND ──────────────────────────────────────────");
+  lines.push("-- These contracts have no corresponding Schwab transaction.");
+  lines.push("-- Likely: ETrade contracts, pre-Nov 2025 data, or data entry errors.");
+  lines.push("");
+  for (const n of noMatch) {
+    lines.push(`-- id=${n.id}  ${n.desc}`);
+    lines.push(`--   reason: ${n.reason}`);
+    if (n.fuzzyOptions) lines.push(`--   fuzzy options: ${n.fuzzyOptions}`);
+    lines.push("");
+  }
+}
+
+fs.writeFileSync("reconcile_updates.sql", lines.join("\n"), "utf8");
+
+// ── Write report ───────────────────────────────────────────────────────────
+const report = [
+  "RECONCILIATION REPORT",
+  "=====================",
+  `DB contracts without schwab_transaction_id: ${dbList.filter(c=>!c.schwab_transaction_id).length}`,
+  `Schwab transactions loaded:                  ${txList.length}`,
+  "",
+  `Exact matches:   ${updates.length}`,
+  `Fuzzy matches:   ${fuzzy.length}`,
+  `No match:        ${noMatch.length}`,
+  `Data fixes:      ${dataFixes.length}`,
+  "",
+  "FUZZY MATCHES (review):",
+  ...fuzzy.map(u => `  id=${u.id} ${u.desc} | dbPrem=${u.dbPrem} txPrem=${u.txPrem} diff=${u.diff}`),
+  "",
+  "NO MATCH (manual review needed):",
+  ...noMatch.map(n => `  id=${n.id} ${n.desc}\n    ${n.reason}${n.fuzzyOptions ? "\n    options: "+n.fuzzyOptions : ""}`),
+];
+
+fs.writeFileSync("reconcile_report.txt", report.join("\n"), "utf8");
+console.log("Done.");
+console.log(`  Exact: ${updates.length} | Fuzzy: ${fuzzy.length} | No match: ${noMatch.length} | Fixes: ${dataFixes.length}`);
+console.log("  Output: reconcile_updates.sql  reconcile_report.txt");

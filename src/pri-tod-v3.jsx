@@ -440,7 +440,7 @@ function BalanceHistory({ supabase, cashData, onSave }) {
 // ── Import Tab wrapper ────────────────────────────────────────────────────────
 import ImportPageComponent from "./ImportPage.jsx";
 function ImportTab({ supabase, tradeRules }) {
-  return <ImportPageComponent parallelRun={true} defaultDays={1} supabaseClient={supabase} tradeRules={tradeRules} />;
+  return <ImportPageComponent parallelRun={false} defaultDays={1} supabaseClient={supabase} tradeRules={tradeRules} />;
 }
 
 export default function App() {
@@ -463,6 +463,7 @@ export default function App() {
   // App core
   const [tab,setTab]             = useState("dashboard");
   const [uiScale,setUiScale]     = useState(()=>{ try{ return +localStorage.getItem("pri_ui_scale")||1; }catch{ return 1; } });
+  const [pendingCount,setPendingCount] = useState(0);
   const [contracts,setContracts] = useState([]);
   const [dbReady,setDbReady]     = useState(false);
   const [form,setForm]           = useState({...EMPTY_NEW});
@@ -1165,6 +1166,22 @@ export default function App() {
       }
     }
   }, [etradeStatus, originals, contracts, stocksData, applyQuotesToStocksData]);
+
+  // Poll pending_transactions count every 5 min and on mount
+  useEffect(() => {
+    const loadCount = async () => {
+      try {
+        const { count } = await supabase
+          .from("pending_transactions")
+          .select("id", { count: "exact", head: true })
+          .eq("status", "pending");
+        setPendingCount(count || 0);
+      } catch {}
+    };
+    loadCount();
+    const t = setInterval(loadCount, 5 * 60 * 1000);
+    return () => clearInterval(t);
+  }, [supabase]);
 
   // Poll Supabase for background refresh data (quotes updated by server cron)
   // Must be after applyQuotesToStocksData is declared
@@ -2328,7 +2345,12 @@ ${JSON.stringify(summary, null, 1)}`;
         </div>
         <div style={{display:"flex",gap:2,flex:1,overflowX:"auto",WebkitOverflowScrolling:"touch",scrollbarWidth:"none",msOverflowStyle:"none",justifyContent:"flex-start",padding:"0 4px"}}>
           {["dashboard","contracts","analytics","plan","stocks","import"].map(n=>(
-            <button key={n} onClick={()=>setTab(n)} style={{background:tab===n?"#00ff8814":"transparent",color:tab===n?"#00ff88":"#444",border:tab===n?"1px solid #00ff8825":"1px solid transparent",borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"monospace",letterSpacing:"0.05em",textTransform:"uppercase",whiteSpace:"nowrap",flexShrink:0}}>{n}</button>
+            <button key={n} onClick={()=>setTab(n)} style={{background:tab===n?"#00ff8814":"transparent",color:tab===n?"#00ff88":"#444",border:tab===n?"1px solid #00ff8825":"1px solid transparent",borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"monospace",letterSpacing:"0.05em",textTransform:"uppercase",whiteSpace:"nowrap",flexShrink:0,position:"relative"}}>
+              {n}
+              {n==="import" && pendingCount > 0 && (
+                <span style={{position:"absolute",top:-4,right:-4,background:"#ff6b2b",color:"#fff",borderRadius:8,fontSize:7,fontWeight:700,padding:"1px 4px",lineHeight:1.4}}>{pendingCount}</span>
+              )}
+            </button>
           ))}
         </div>
         <div style={{display:"flex",alignItems:"center",gap:5,flexShrink:0,marginLeft:"auto"}}>

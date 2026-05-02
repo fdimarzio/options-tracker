@@ -29,6 +29,9 @@ jobs:
               echo "Fetching chains..."
               curl -s -H "x-cron-secret: $SECRET" --max-time 15 "$BASE_URL/api/chain-refresh"
               echo ""
+              echo "Checking for new transactions..."
+              curl -s -H "x-cron-secret: $SECRET" --max-time 20 "$BASE_URL/api/auto-import"
+              echo ""
             fi
 
             if [ $i -lt 4 ]; then sleep 60; fi
