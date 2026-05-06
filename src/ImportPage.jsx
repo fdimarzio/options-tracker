@@ -23,6 +23,8 @@ const STRATEGIES = [
 const C = {
   bg:        "#0a0e14",
   surface:   "#0d1117",
+  card:      "#111620",
+  input:     "#161b22",
   border:    "#1c2128",
   border2:   "#2a3040",
   green:     "#00ff88",
@@ -53,6 +55,7 @@ const MATCH_COLORS = { exact: C.green, partial: C.yellow, split: C.blue, unmatch
 // ── toDB mapper (mirrors main app) ───────────────────────────────────────────
 function contractToDB(c) {
   return {
+    schwab_transaction_id: c.schwabTransactionId || null,
     stock:              c.stock        || null,
     type:               c.type,
     opt_type:           c.optType,
@@ -63,10 +66,10 @@ function contractToDB(c) {
     price_at_execution: c.priceAtExecution != null ? +c.priceAtExecution : null,
     date_exec:          c.dateExec     || null,
     account:            c.account      || "Schwab",
-    status:             c.status       || "Open",
+    status:             ["BTC","STC"].includes(c.optType) ? "Closed" : "Open",
     strategy:           c.strategy     || null,
     notes:              c.notes        || null,
-    created_via:        "Schwab Import",
+    created_via:        c.account?.startsWith("ETrade") ? "ETrade Import" : "Schwab Import",
     parent_id:          typeof c.parentId === "number" ? c.parentId : null,
     trade_rule:         c.tradeRule    || null,
   };
@@ -326,7 +329,8 @@ function EditOpenerModal({ contract, closer, onSave, onClose, supabaseProp = nul
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function ImportPage({ parallelRun = false, defaultDays = 30, supabaseClient = null, tradeRules = null }) {
+export default function ImportPage({ parallelRun = false, defaultDays = 30, supabaseClient = null, tradeRules = null, persistedState = null, onStateChange = null, authUser = "user", pendingOnly = false }) {
+  const [mode,         setMode]         = useState("config"); // config | loading | review | done | pending
   // Use passed-in client (from main app) or create own as fallback
   const supabase = supabaseClient ?? createClient(
     import.meta.env.VITE_SUPABASE_URL,
@@ -335,11 +339,12 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
 
   // Trade rule names for the dropdown — either passed in from main app or loaded from Supabase
   const [localTradeRules, setLocalTradeRules] = useState([]);
-  const rulesList = tradeRules ?? localTradeRules;
-  const ruleNames = rulesList.map(r => r.name || r.title || r.rule).filter(Boolean);
-  const [mode,         setMode]         = useState("config");   // config | loading | review | done
-  const [testMode,     setTestMode]     = useState(true);
-  const [rangeType,    setRangeType]    = useState("days");     // days | dates
+  const [dbStrategies,    setDbStrategies]    = useState([]); // from strategies table
+  const rulesList  = tradeRules ?? localTradeRules;
+  const ruleNames  = rulesList.map(r => r.name || r.title || r.rule).filter(Boolean);
+  const stratNames = dbStrategies.map(s => s.name).filter(Boolean);
+  const [testMode,     setTestMode]     = useState(false);
+  const [rangeType,    setRangeType]    = useState("dates");     // days | dates
   const [days,         setDays]         = useState(defaultDays);
   const [startDate,    setStartDate]    = useState("");
   const [endDate,      setEndDate]      = useState("");
@@ -352,6 +357,9 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
   const [committed,    setCommitted]    = useState([]);
   const [filterOptType,    setFilterOptType]    = useState("ALL");
   const [matchFilter,      setMatchFilter]      = useState("ALL"); // ALL|exact|partial|split|unmatched
+  const [filterAccount,    setFilterAccount]    = useState("ALL"); // ALL|Schwab|ETrade
+  const [hideCommitted,    setHideCommitted]    = useState(true);  // hide already-committed by default
+  const [committedIds,     setCommittedIds]     = useState(new Set()); // schwab_transaction_ids already in DB
   const [sortCol,          setSortCol]          = useState("dateExec");
   const [sortDir,          setSortDir]          = useState("desc");
   const [dismissed,        setDismissed]        = useState(new Set()); // _idx values
@@ -364,23 +372,14 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
   const [pendingLoading,   setPendingLoading]   = useState(false);
   const [committingPending, setCommittingPending] = useState(new Set());
 
-  const loadPending = useCallback(async () => {
-    setPendingLoading(true);
-    try {
-      const { data } = await supabase
-        .from("pending_transactions")
-        .select("*")
-        .eq("status", "pending")
-        .order("created_at", { ascending: false });
-      setPending((data || []).map((t, i) => ({ ...t, _idx: i, strategy: t.strategy || "", trade_rule: t.trade_rule || "", notes: t.notes || "" })));
-    } catch (e) { console.warn("loadPending:", e.message); }
-    setPendingLoading(false);
-  }, [supabase]);
-
-  useEffect(() => { loadPending(); }, [loadPending]);
-
-  const updatePending = (id, field, value) => {
-    setPending(prev => prev.map(t => t.id === id ? { ...t, [field]: value } : t));
+  const updatePending = async (id, field, value) => {
+    setAllPending(prev => prev.map(t => t.id === id ? { ...t, [field]: value } : t));
+    // Auto-save strategy/notes/trade_rule to DB immediately
+    if (["strategy","notes","trade_rule"].includes(field)) {
+      try {
+        await supabase.from("pending_transactions").update({ [field]: value }).eq("id", id);
+      } catch (e) { console.warn("updatePending save failed:", e.message); }
+    }
   };
 
   const commitPendingTx = async (t) => {
@@ -438,12 +437,13 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
         }
       }
 
-      // Mark pending as committed
+      // Mark pending as committed with who/when
       await supabase.from("pending_transactions")
-        .update({ status: "committed", reviewed_at: new Date().toISOString() })
+        .update({ status: "committed", reviewed_at: new Date().toISOString(), committed_by: authUser || "user" })
         .eq("id", t.id);
 
       setPending(prev => prev.filter(p => p.id !== t.id));
+      setAllPending(prev => prev.map(p => p.id === t.id ? { ...p, status: "committed", reviewed_at: new Date().toISOString() } : p));
     } catch (e) {
       console.error("commitPendingTx:", e.message);
       alert("Commit failed: " + e.message);
@@ -456,7 +456,18 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
       .update({ status: "skipped", reviewed_at: new Date().toISOString() })
       .eq("id", t.id);
     setPending(prev => prev.filter(p => p.id !== t.id));
+    setAllPending(prev => prev.map(p => p.id === t.id ? { ...p, status: "skipped", reviewed_at: new Date().toISOString() } : p));
   };
+  useEffect(() => {
+    if (!supabase) return;
+    supabase.from("strategies").select("id,name").order("name", { ascending: true })
+      .then(({ data, error }) => {
+        console.log("[ImportPage] strategies loaded:", data?.length, error?.message);
+        if (data?.length) setDbStrategies(data);
+      })
+      .catch(e => console.warn("[ImportPage] strategies load failed:", e.message));
+  }, []); // eslint-disable-line
+
   useEffect(() => {
     if (tradeRules !== null) return; // already provided by parent
     supabase.from("col_prefs").select("cols").eq("id","trade_rules").single()
@@ -469,27 +480,132 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
     setMode("loading");
     setError(null);
     try {
-      let url = "/api/schwab-transactions?";
+      // ── Fetch Schwab transactions ─────────────────────────────────────────
+      let schwabUrl = "/api/schwab-transactions?";
       if (rangeType === "days") {
-        url += `days=${days}`;
+        schwabUrl += `days=${days}`;
       } else {
-        url += `startDate=${startDate}&endDate=${endDate}`;
+        schwabUrl += `startDate=${startDate}&endDate=${endDate}`;
       }
-      const res  = await fetch(url);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      const schwabRes  = await fetch(schwabUrl);
+      const schwabData = await schwabRes.json();
+      if (!schwabRes.ok) throw new Error(schwabData.error || `Schwab HTTP ${schwabRes.status}`);
 
-      // Add UI state + defaults to each transaction
-      const txs = (data.transactions || []).map((t, i) => ({
-        ...t,
-        _idx: i,
-        // Default strategy for Call STO → OTM Covered Call Strategy
+      // ── Fetch ETrade transactions ─────────────────────────────────────────
+      let etradeUrl = "/api/etrade?action=import&dryRun=1&";
+      if (rangeType === "days") {
+        etradeUrl += `days=${days}`;
+      } else {
+        const daysBack = Math.ceil((new Date() - new Date(startDate)) / 86400000) + 1;
+        etradeUrl += `days=${daysBack}`;
+      }
+      let etradeTxs = [];
+      try {
+        const etradeRes  = await fetch(etradeUrl);
+        const etradeData = await etradeRes.json();
+        console.log("[ImportPage] ETrade response:", etradeRes.status, JSON.stringify(etradeData).slice(0, 200));
+        if (etradeRes.ok && etradeData.transactions) {
+          const from = rangeType === "dates" ? startDate : null;
+          const to   = rangeType === "dates" ? endDate   : null;
+          etradeTxs = etradeData.transactions
+            .filter(t => !from || (t.date_exec >= from && t.date_exec <= to))
+            .map(t => ({
+              schwabTransactionId: t.schwab_transaction_id,
+              stock:         t.stock,
+              type:          t.type,
+              optType:       t.opt_type,
+              strike:        t.strike,
+              expires:       t.expires,
+              qty:           t.qty,
+              premium:       t.premium,
+              dateExec:      t.date_exec,
+              account:       t.account,
+              exercised:     t.exercised,
+              matchConfidence: t.match_confidence || null,
+              parentId:      t.match_id || null,
+              matchedContract: null,
+              priceAtExecution: null,
+              priceAtExecutionAuto: false,
+              strategy:      t.strategy || null,
+              tradeRule:     t.trade_rule || null,
+              _raw:          t._raw,
+            }));
+        }
+      } catch (e) {
+        console.warn("[ImportPage] ETrade fetch failed:", e.message);
+      }
+
+      // ── Merge ─────────────────────────────────────────────────────────────
+      const schwabTxs = (schwabData.transactions || []).map(t => ({ ...t, account: t.account || "Schwab" }));
+      const allTxs    = [...schwabTxs, ...etradeTxs];
+      const txs = allTxs.map((t, i) => ({
+        ...t, _idx: i,
         strategy: t.strategy || (t.type === "Call" && t.optType === "STO" ? "OTM Covered Call Strategy" : null),
       }));
+
       setTransactions(txs);
-      setOpenContracts(data.openContracts || []);
-      setMeta(data.meta);
-      setChecked(new Set()); // nothing checked by default
+      setOpenContracts(schwabData.openContracts || []);
+      setMeta({ ...schwabData.meta, total: txs.length });
+      setChecked(new Set());
+
+      // Load already-committed transaction IDs from both contracts and pending_transactions
+      try {
+        const [{ data: existing }, { data: pendingAll }] = await Promise.all([
+          supabase.from("contracts").select("schwab_transaction_id").not("schwab_transaction_id","is",null),
+          supabase.from("pending_transactions").select("schwab_transaction_id").not("schwab_transaction_id","is",null),
+        ]);
+        const ids = new Set([
+          ...(existing||[]).map(r=>String(r.schwab_transaction_id)),
+          ...(pendingAll||[]).map(r=>String(r.schwab_transaction_id)),
+        ]);
+        setCommittedIds(ids);
+        console.log("[ImportPage] committedIds loaded:", ids.size, [...ids].slice(0,3));
+        console.log("[ImportPage] sample tx ids:", txs.slice(0,3).map(t=>String(t.schwabTransactionId)));
+      } catch (e) { console.warn("[ImportPage] failed to load committed IDs:", e.message); }
+
+      // ── Stage to pending_transactions for cross-device persistence ────────
+      if (txs.length > 0) {
+        try {
+          // Get existing IDs to avoid duplicates
+          const { data: existing } = await supabase
+            .from("pending_transactions")
+            .select("schwab_transaction_id");
+          const existingIds = new Set((existing || []).map(r => r.schwab_transaction_id));
+
+          const toStage = txs
+            .filter(t => t.schwabTransactionId && !existingIds.has(t.schwabTransactionId))
+            .map(t => ({
+              schwab_transaction_id: t.schwabTransactionId,
+              account:    t.account || "Schwab",
+              status:     "pending",
+              raw:        t._raw || null,
+              parsed:     {
+                opt_type: t.optType, stock: t.stock, type: t.type,
+                strike: t.strike, expires: t.expires, qty: t.qty,
+                premium: t.premium, date_exec: t.dateExec,
+                match_confidence: t.matchConfidence,
+              },
+              match_id:   (typeof t.parentId === "number" ? t.parentId : null),
+              notes:      t.notes || null,
+            }));
+
+          if (toStage.length > 0) {
+            const { error: stageErr } = await supabase
+              .from("pending_transactions")
+              .upsert(toStage, { onConflict: "schwab_transaction_id", ignoreDuplicates: true });
+            if (stageErr) {
+              console.error("[ImportPage] staging upsert failed:", stageErr.message);
+            } else {
+              console.log(`[ImportPage] staged ${toStage.length} new transactions`);
+            }
+          } else {
+            console.log("[ImportPage] no new transactions to stage");
+          }
+        } catch (e) {
+          console.warn("[ImportPage] staging to pending_transactions failed:", e.message);
+        }
+      }
+
       setMode("review");
     } catch (err) {
       setError(err.message);
@@ -554,31 +670,113 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
 
       if (dbErr) throw new Error(dbErr.message);
 
-      // If any closer trades matched a parent, update the parent's closed_by_id
-      // (only for exact/partial matches with a numeric parentId)
+      // Link closers to openers and calculate profit
       const closers = toCommit.filter(t =>
         (t.optType === "BTC" || t.optType === "STC") &&
         typeof t.parentId === "number" &&
         (t.matchConfidence === "exact" || t.matchConfidence === "partial")
       );
       for (const c of closers) {
-        // We need the newly inserted id for this row — find by schwab_transaction_id
         if (!c.schwabTransactionId) continue;
+        // Get the newly inserted closer id
         const { data: inserted } = await supabase
           .from("contracts")
-          .select("id")
+          .select("id, premium")
           .eq("schwab_transaction_id", c.schwabTransactionId)
           .single();
 
         if (inserted?.id) {
+          // Get parent opener to calc profit
+          const { data: parent } = await supabase
+            .from("contracts")
+            .select("id, premium, opt_type, date_exec, qty")
+            .eq("id", c.parentId)
+            .single();
+
+          let profit = null;
+          if (parent?.premium != null && c.premium != null) {
+            // Prorate parent premium by close qty vs open qty
+            const openQty  = parent.qty  || 1;
+            const closeQty = c.qty        || 1;
+            const proratedOpenCost = Math.abs(+parent.premium) * (closeQty / openQty);
+            // STO opener: profit = premium received - cost to close
+            // BTO opener: profit = close proceeds - prorated open cost
+            profit = parent.opt_type === "STO"
+              ? proratedOpenCost - Math.abs(+c.premium)
+              : Math.abs(+c.premium) - proratedOpenCost;
+          }
+
+          const daysHeld = c.dateExec && parent?.date_exec
+            ? Math.round((new Date(c.dateExec) - new Date(parent.date_exec)) / 86400000)
+            : null;
+
+          const closeQty      = c.qty || 1;
+          const openQty       = parent?.qty || 1;
+          const proratedCost  = parent?.premium ? Math.abs(+parent.premium) * (closeQty / openQty) : 0;
+          const profitPct     = proratedCost > 0 && profit != null
+            ? Math.round((profit / proratedCost) * 10000) / 10000
+            : null;
+
           await supabase
             .from("contracts")
-            .update({ closed_by_id: inserted.id, status: "Closed" })
+            .update({
+              closed_by_id: inserted.id,
+              status:       "Closed",
+              cost_to_close: Math.abs(+c.premium),
+              profit:       profit != null ? Math.round(profit * 100) / 100 : null,
+              profit_pct:   profitPct,
+              close_date:   c.dateExec || null,
+              days_held:    daysHeld,
+            })
             .eq("id", c.parentId);
+
+          // Also set profit on the closer row
+          if (profit != null) {
+            await supabase
+              .from("contracts")
+              .update({ profit: Math.round(profit * 100) / 100 })
+              .eq("id", inserted.id);
+          }
         }
       }
 
       setCommitted(toCommit);
+
+      // 🎉 Gamify — play sound and show profit
+      const gamifyClosers = toCommit.filter(t => ["BTC","STC"].includes(t.optType));
+      const gamifyOpeners = toCommit.filter(t => ["STO","BTO"].includes(t.optType));
+      const totalCommitProfit = gamifyClosers.reduce((s, c) => {
+        const opener = gamifyOpeners.find(o => o.stock===c.stock && o.strike===c.strike && o.expires===c.expires) ||
+                      toCommit.find(o => !["BTC","STC"].includes(o.optType) && o.stock===c.stock);
+        if (opener) {
+          const profit = opener.optType==="STO"
+            ? Math.abs(opener.premium||0) - Math.abs(c.premium||0)
+            : Math.abs(c.premium||0) - Math.abs(opener.premium||0);
+          return s + profit;
+        }
+        return s;
+      }, 0);
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        [523, 659, 784, 1047].forEach((freq, i) => {
+          const osc = ctx.createOscillator(); const gain = ctx.createGain();
+          osc.connect(gain); gain.connect(ctx.destination);
+          osc.frequency.value = freq; osc.type = "sine";
+          gain.gain.setValueAtTime(0.3, ctx.currentTime + i*0.12);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i*0.12 + 0.3);
+          osc.start(ctx.currentTime + i*0.12); osc.stop(ctx.currentTime + i*0.12 + 0.3);
+        });
+      } catch(e) { /* audio not supported */ }
+
+      // Mark as committed in pending_transactions
+      for (const t of toCommit) {
+        if (!t.schwabTransactionId) continue;
+        await supabase.from("pending_transactions")
+          .update({ status: "committed", reviewed_at: new Date().toISOString(), committed_by: authUser || "user" })
+          .eq("schwab_transaction_id", t.schwabTransactionId);
+      }
+
+      await loadAllPending();
       setMode("done");
     } catch (err) {
       setError(`Commit failed: ${err.message}`);
@@ -603,6 +801,8 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
   const filtered = transactions
     .filter(t => filterOptType === "ALL" ? true : t.optType === filterOptType)
     .filter(t => matchFilter === "ALL" ? true : t.matchConfidence === matchFilter)
+    .filter(t => filterAccount === "ALL" ? true : t.account === filterAccount)
+    .filter(t => hideCommitted ? !committedIds.has(String(t.schwabTransactionId)) : true)
     .filter(t => showDismissed ? dismissed.has(t._idx) : !dismissed.has(t._idx))
     .sort((a, b) => {
       const fn = SORT_KEYS[sortCol] ?? (t => "");
@@ -661,89 +861,190 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
   // ── Render ───────────────────────────────────────────────────────────────────
 
   // ── Pending transactions section (shown on all screens) ───────────────────
-  const PendingSection = pending.length > 0 ? (
+  const [pendingFilter,    setPendingFilter]    = useState("pending"); // pending | committed | skipped | all
+  const [pendingAcctFilter,setPendingAcctFilter]= useState("all"); // all | Schwab | ETrade
+  const [allPending, setAllPending] = useState([]);
+
+  const loadAllPending = useCallback(async () => {
+    setPendingLoading(true);
+    try {
+      const { data } = await supabase
+        .from("pending_transactions")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(200);
+      setAllPending((data || []).map((t, i) => ({
+        ...t,
+        // Flatten parsed JSON fields to top level for rendering
+        ...(t.parsed || {}),
+        _idx: i,
+        strategy: t.strategy || "",
+        trade_rule: t.trade_rule || "",
+        notes: t.notes || "",
+      })));
+      // Also update pending (status=pending only) for badge count
+      const pendingOnly = (data || []).filter(t => t.status === "pending");
+      setPending(pendingOnly.map((t, i) => ({ ...t, _idx: i, strategy: t.strategy || "", trade_rule: t.trade_rule || "", notes: t.notes || "" })));
+    } catch (e) { console.warn("loadAllPending:", e.message); }
+    setPendingLoading(false);
+  }, [supabase]);
+
+  // Replace loadPending with loadAllPending on mount
+  useEffect(() => { loadAllPending(); }, [loadAllPending]);
+
+  const filteredPending = allPending
+    .filter(t => pendingFilter === "all" ? true : t.status === pendingFilter)
+    .filter(t => pendingAcctFilter === "all" ? true : pendingAcctFilter === "ETrade" ? t.account?.startsWith("ETrade") : t.account === pendingAcctFilter);
+
+  const PendingSection = (allPending.length > 0 && mode !== "review") ? (
     <div style={{ maxWidth: 1100, margin: "0 auto 28px auto" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
         <div style={{ fontSize: 11, fontWeight: 700, color: C.text, letterSpacing: "0.1em", textTransform: "uppercase" }}>
-          📥 Pending Transactions
+          📥 Transactions
         </div>
-        <div style={{ background: "#ff6b2b", color: "#fff", borderRadius: 10, fontSize: 10, fontWeight: 700, padding: "1px 7px" }}>
-          {pending.length}
+        {/* Filter tabs */}
+        {["pending","committed","skipped","all"].map(f => {
+          const count = f === "all" ? allPending.length : allPending.filter(t => t.status === f).length;
+          if (count === 0 && f !== "pending") return null;
+          return (
+            <button key={f} onClick={() => setPendingFilter(f)}
+              style={{ fontSize: 9, fontFamily: "monospace", textTransform: "uppercase", padding: "2px 8px", borderRadius: 4, cursor: "pointer", border: pendingFilter === f ? "1px solid #00ff8844" : `1px solid ${C.border}`, background: pendingFilter === f ? "#00ff8814" : "transparent", color: pendingFilter === f ? C.green : C.dimText }}>
+              {f} {count > 0 && <span style={{ background: f === "pending" ? "#ff6b2b" : C.dimText, color: "#fff", borderRadius: 8, fontSize: 7, fontWeight: 700, padding: "0px 4px", marginLeft: 3 }}>{count}</span>}
+            </button>
+          );
+        })}
+        {/* Account filter */}
+        <div style={{ display: "flex", gap: 4, marginLeft: 8, borderLeft: `1px solid ${C.border}`, paddingLeft: 8 }}>
+          {["all","Schwab","ETrade"].map(a => {
+            const count = a === "all" ? allPending.length : allPending.filter(t => a === "ETrade" ? t.account?.startsWith("ETrade") : t.account === a).length;
+            return (
+              <button key={a} onClick={() => setPendingAcctFilter(a)}
+                style={{ fontSize: 9, fontFamily: "monospace", padding: "2px 8px", borderRadius: 4, cursor: "pointer", border: pendingAcctFilter === a ? "1px solid #58a6ff44" : `1px solid ${C.border}`, background: pendingAcctFilter === a ? "#58a6ff14" : "transparent", color: pendingAcctFilter === a ? C.blue : C.dimText }}>
+                {a === "all" ? "All Accts" : a} {count > 0 && <span style={{ fontSize: 7, opacity: 0.7 }}>{count}</span>}
+              </button>
+            );
+          })}
         </div>
-        <button onClick={loadPending} style={{ background: "transparent", border: "none", color: C.dimText, fontSize: 10, cursor: "pointer", marginLeft: "auto" }}>
+        <button onClick={loadAllPending} style={{ background: "transparent", border: "none", color: C.dimText, fontSize: 10, cursor: "pointer", marginLeft: "auto" }}>
           ↻ Refresh
         </button>
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {pending.map(t => {
-          const isClose    = ["BTC","STC"].includes(t.opt_type);
-          const isCommitting = committingPending.has(t.id);
-          const matchColor = t.match_confidence === "exact" ? C.green : t.match_confidence === "partial" ? C.yellow : C.red;
-          const matchLabel = t.match_confidence === "exact" ? "✓ Matched" : t.match_confidence === "partial" ? "~ Partial" : "⚠ No Match";
-          return (
-            <div key={t.id} style={{ background: C.card, border: `1px solid ${isClose && t.match_confidence === "none" ? C.red + "44" : C.border}`, borderRadius: 8, padding: "10px 14px" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                {/* Transaction info */}
-                <div style={{ fontFamily: "monospace", fontSize: 12, color: C.text, fontWeight: 700, minWidth: 180 }}>
-                  {t.opt_type} {t.stock} {t.expires} ${t.strike} {t.type}
-                </div>
-                <div style={{ fontFamily: "monospace", fontSize: 11, color: t.premium >= 0 ? C.green : C.red }}>
-                  {t.premium >= 0 ? "+" : ""}{t.premium}
-                </div>
-                <div style={{ fontFamily: "monospace", fontSize: 10, color: C.dimText }}>
-                  qty={t.qty} · {t.date_exec}
-                </div>
-                {t.stock_price_at_exec && (
-                  <div style={{ fontFamily: "monospace", fontSize: 10, color: C.dimText }}>
-                    stk@${t.stock_price_at_exec}
-                  </div>
-                )}
-                {isClose && (
-                  <div style={{ fontSize: 10, color: matchColor, fontFamily: "monospace", background: matchColor + "18", borderRadius: 4, padding: "1px 6px" }}>
-                    {matchLabel}
-                  </div>
-                )}
-                {/* Edit fields */}
-                <div style={{ display: "flex", gap: 6, marginLeft: "auto", alignItems: "center", flexWrap: "wrap" }}>
-                  <select value={t.strategy || ""} onChange={e => updatePending(t.id, "strategy", e.target.value)}
-                    style={{ fontSize: 10, background: C.input, border: `1px solid ${C.border}`, color: C.text, borderRadius: 4, padding: "2px 5px" }}>
-                    <option value="">— strategy —</option>
-                    {["OTM Covered Call Strategy","Put Spread","BTO Call","Iron Condor","Other"].map(s => (
-                      <option key={s} value={s}>{s}</option>
-                    ))}
-                  </select>
-                  {ruleNames?.length > 0 && (
-                    <select value={t.trade_rule || ""} onChange={e => updatePending(t.id, "trade_rule", e.target.value)}
-                      style={{ fontSize: 10, background: C.input, border: `1px solid ${C.border}`, color: C.text, borderRadius: 4, padding: "2px 5px" }}>
-                      <option value="">— rule —</option>
-                      {ruleNames.map(r => <option key={r} value={r}>{r}</option>)}
-                    </select>
+      {filteredPending.length === 0 ? (
+        <div style={{ color: C.dimText, fontSize: 11, fontFamily: "monospace", padding: "12px 0" }}>No {pendingFilter} transactions.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {filteredPending.map(t => {
+            const isClose    = ["BTC","STC"].includes(t.opt_type);
+            const isCommitting = committingPending.has(t.id);
+            const isPending  = t.status === "pending";
+            const matchColor = t.match_confidence === "exact" ? C.green : t.match_confidence === "partial" ? C.yellow : C.red;
+            const matchLabel = t.match_confidence === "exact" ? "✓ Matched" : t.match_confidence === "partial" ? "~ Partial" : "⚠ No Match";
+            const statusColor = t.status === "committed" ? C.green : t.status === "skipped" ? C.dimText : C.yellow;
+            return (
+              <div key={t.id} style={{ background: C.card, border: `1px solid ${isClose && t.match_confidence === "none" && isPending ? C.red + "44" : C.border}`, borderRadius: 8, padding: "10px 14px", opacity: t.status !== "pending" ? 0.7 : 1 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  {/* Status badge */}
+                  {t.status !== "pending" && (
+                    <div style={{ fontSize: 9, color: statusColor, fontFamily: "monospace", background: statusColor + "18", borderRadius: 4, padding: "1px 6px", textTransform: "uppercase" }}>
+                      {t.status}
+                    </div>
                   )}
-                  <input value={t.notes || ""} onChange={e => updatePending(t.id, "notes", e.target.value)}
-                    placeholder="notes..." style={{ fontSize: 10, background: C.input, border: `1px solid ${C.border}`, color: C.text, borderRadius: 4, padding: "2px 7px", width: 120 }} />
-                  <button onClick={() => commitPendingTx(t)} disabled={isCommitting}
-                    style={{ fontSize: 10, background: isCommitting ? C.dimText : C.green, color: "#000", border: "none", borderRadius: 4, padding: "3px 10px", fontWeight: 700, cursor: isCommitting ? "default" : "pointer" }}>
-                    {isCommitting ? "Saving..." : "Commit →"}
-                  </button>
-                  <button onClick={() => skipPendingTx(t)}
-                    style={{ fontSize: 10, background: "transparent", color: C.dimText, border: `1px solid ${C.border}`, borderRadius: 4, padding: "3px 8px", cursor: "pointer" }}>
-                    Skip
-                  </button>
+                  {/* Transaction info */}
+                  <div style={{ fontFamily: "monospace", fontSize: 12, color: C.text, fontWeight: 700, minWidth: 180 }}>
+                    {t.opt_type} {t.stock} {t.expires} ${t.strike} {t.type}
+                  </div>
+                  <div style={{ fontFamily: "monospace", fontSize: 11, color: t.premium >= 0 ? C.green : C.red }}>
+                    {t.premium >= 0 ? "+" : ""}{typeof t.premium === "number" ? `$${(t.premium).toFixed(2)}` : t.premium}
+                  </div>
+                  {/* Profit for close transactions */}
+                  {isClose && t.profit != null && (
+                    <div style={{ fontFamily: "monospace", fontSize: 11, color: t.profit >= 0 ? C.green : C.red, background: (t.profit >= 0 ? C.green : C.red) + "18", borderRadius: 4, padding: "1px 6px" }}>
+                      P&L: {t.profit >= 0 ? "+" : ""}${t.profit.toFixed(2)}
+                    </div>
+                  )}
+                  <div style={{ fontFamily: "monospace", fontSize: 10, color: C.dimText }}>
+                    qty={t.qty} · {t.date_exec}
+                  </div>
+                  {t.stock_price_at_exec && (
+                    <div style={{ fontFamily: "monospace", fontSize: 10, color: C.dimText }}>
+                      stk@${t.stock_price_at_exec}
+                    </div>
+                  )}
+                  {isClose && (
+                    <div style={{ fontSize: 10, color: matchColor, fontFamily: "monospace", background: matchColor + "18", borderRadius: 4, padding: "1px 6px" }}>
+                      {matchLabel}
+                    </div>
+                  )}
+                  {/* Edit fields + actions (only for pending) */}
+                  {isPending ? (
+                    <div style={{ display: "flex", gap: 6, marginLeft: "auto", alignItems: "center", flexWrap: "wrap" }}>
+                      <select value={t.strategy || ""} onChange={e => updatePending(t.id, "strategy", e.target.value)}
+                        style={{ fontSize: 10, background: C.input, border: `1px solid ${C.border}`, color: C.text, borderRadius: 4, padding: "2px 5px" }}>
+                        <option value="">— strategy —</option>
+                        {(stratNames.length > 0 ? stratNames : STRATEGIES).map(s => (
+                          <option key={s} value={s}>{s}</option>
+                        ))}
+                      </select>
+                      <select value={t.trade_rule || ""} onChange={e => updatePending(t.id, "trade_rule", e.target.value)}
+                        style={{ fontSize: 10, background: C.input, border: `1px solid ${C.border}`, color: C.text, borderRadius: 4, padding: "2px 5px" }}>
+                        <option value="">— trade rule —</option>
+                        {ruleNames.map(r => <option key={r} value={r}>{r}</option>)}
+                      </select>
+                      <input value={t.notes || ""} onChange={e => updatePending(t.id, "notes", e.target.value)}
+                        placeholder="notes..." style={{ fontSize: 10, background: C.input, border: `1px solid ${C.border}`, color: C.text, borderRadius: 4, padding: "2px 7px", width: 120 }} />
+                      <button onClick={() => commitPendingTx(t)} disabled={isCommitting}
+                        style={{ fontSize: 10, background: isCommitting ? C.dimText : C.green, color: "#000", border: "none", borderRadius: 4, padding: "3px 10px", fontWeight: 700, cursor: isCommitting ? "default" : "pointer" }}>
+                        {isCommitting ? "Saving..." : "Commit →"}
+                      </button>
+                      <button onClick={() => skipPendingTx(t)}
+                        style={{ fontSize: 10, background: "transparent", color: C.dimText, border: `1px solid ${C.border}`, borderRadius: 4, padding: "3px 8px", cursor: "pointer" }}>
+                        Skip
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ marginLeft: "auto", fontSize: 10, color: C.dimText, fontFamily: "monospace", display: "flex", gap: 8, alignItems: "center" }}>
+                      {t.strategy && <span style={{ color: C.text, background: C.border, borderRadius: 4, padding: "1px 6px" }}>{t.strategy}</span>}
+                      {t.committed_by && <span style={{ color: C.dimText }}>by {t.committed_by}</span>}
+                      <span>{t.reviewed_at ? new Date(t.reviewed_at).toLocaleString() : ""}</span>
+                    </div>
+                  )}
                 </div>
               </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
     </div>
+  ) : pendingLoading ? (
+    <div style={{ maxWidth: 1100, margin: "0 auto 28px auto", color: C.dimText, fontSize: 11, fontFamily: "monospace" }}>Loading transactions...</div>
   ) : null;
+
+  // ── Pending Only mode (burger menu view) ─────────────────────────────────
+  if (pendingOnly) {
+    return (
+      <div style={{ ...page, padding: "16px" }}>
+        <div style={{ maxWidth: 1100, margin: "0 auto" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+            <h2 style={{ margin: 0, fontSize: 16, color: C.green, fontWeight: 700 }}>📥 Pending Transactions</h2>
+            <div style={{ fontSize: 11, color: C.dimText, marginLeft: 8 }}>Transactions persist across sessions. Strategy saves automatically.</div>
+          </div>
+          {PendingSection}
+          {allPending.length === 0 && !pendingLoading && (
+            <div style={{ color: C.dimText, fontSize: 12, fontFamily: "monospace", padding: "40px 0", textAlign: "center" }}>
+              No pending transactions. Use the Import tab to fetch transactions.
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   // ── Config screen ─────────────────────────────────────────────────────────
   if (mode === "config") {
     return (
       <div style={page}>
-        <div style={{ maxWidth: 580, margin: "0 auto" }}>
-          {PendingSection}
+        <div style={{ maxWidth: 1100, margin: "0 auto" }}>
+          <div style={{ maxWidth: 580, margin: "0 auto" }}>
           {/* Header */}
           <div style={{ marginBottom: 24 }}>
             <div style={{ fontSize: 10, color: C.dimText, letterSpacing: "0.12em", marginBottom: 4 }}>
@@ -833,6 +1134,7 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
             Fetch Transactions →
           </button>
         </div>
+        </div>
       </div>
     );
   }
@@ -855,19 +1157,26 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
   // ── Done screen ────────────────────────────────────────────────────────────
   if (mode === "done") {
     const wasTest = committed[0]?._testMode;
+    const totalPrem = committed.filter(t => !["BTC","STC"].includes(t.optType)).reduce((s,t) => s + Math.abs(t.premium||0), 0);
     return (
       <div style={page}>
         <div style={{ maxWidth: 680, margin: "0 auto" }}>
           {PendingSection}
-          <div style={{ ...card, border: `1px solid ${wasTest ? C.yellow + "44" : C.green + "44"}`, background: (wasTest ? C.yellow : C.green) + "08" }}>
-            <div style={{ fontSize: 18, fontWeight: 700, color: wasTest ? C.yellow : C.green, marginBottom: 8 }}>
-              {wasTest ? "🧪 Test Complete" : "✓ Committed Successfully"}
+          <div style={{ ...card, border: `1px solid ${wasTest ? C.yellow + "44" : C.green + "44"}`, background: (wasTest ? C.yellow : C.green) + "08", textAlign: "center" }}>
+            <div style={{ fontSize: 32, marginBottom: 8 }}>{wasTest ? "🧪" : "🎉"}</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: wasTest ? C.yellow : C.green, marginBottom: 6 }}>
+              {wasTest ? "Test Complete" : "Committed Successfully!"}
             </div>
-            <div style={{ fontSize: 13, color: C.muted }}>
+            <div style={{ fontSize: 13, color: C.muted, marginBottom: 12 }}>
               {wasTest
-                ? `${committed.length} transactions would have been saved (test mode — nothing was written).`
+                ? `${committed.length} transactions would have been saved (test mode).`
                 : `${committed.length} transactions saved to the database.`}
             </div>
+            {!wasTest && totalPrem > 0 && (
+              <div style={{ fontSize: 28, fontWeight: 700, color: C.green, fontFamily: "monospace", animation: "fadeIn 0.5s ease" }}>
+                +${totalPrem.toFixed(2)} premium collected
+              </div>
+            )}
           </div>
 
           {/* Summary table */}
@@ -949,15 +1258,25 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
           )}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          {/* Filter by opt type */}
-          {["ALL", "BTO", "STO", "BTC", "STC"].map(f => (
-            <button key={f} onClick={() => setFilterOptType(f)}
-              style={{ ...btn(OPT_COLORS[f] || C.muted), background: filterOptType === f ? (OPT_COLORS[f] || C.muted) + "33" : "transparent", fontSize: 11, padding: "4px 10px" }}>
-              {f}
-            </button>
-          ))}
+          {/* Account filter — dynamic from fetched transactions */}
+          {["ALL", ...new Set(transactions.map(t => t.account).filter(Boolean))].map(a => {
+            const count = a === "ALL" ? transactions.length : transactions.filter(t => t.account === a).length;
+            if (count === 0) return null;
+            const color = a === "ALL" ? C.muted : a === "Schwab" ? C.blue : C.green;
+            return (
+              <button key={a} onClick={() => setFilterAccount(a)}
+                style={{ ...btn(color), background: filterAccount === a ? color + "33" : "transparent", fontSize: 11, padding: "4px 10px" }}>
+                {a === "ALL" ? "All Accts" : a} <span style={{ marginLeft: 3, fontSize: 9, opacity: 0.7 }}>{count}</span>
+              </button>
+            );
+          })}
           <div style={{ width: 1, height: 20, background: C.border }} />
-          {/* Match confidence filters */}
+          {/* Hide already-committed toggle */}
+          <button onClick={() => setHideCommitted(p => !p)}
+            style={{ ...btn(hideCommitted ? C.green : C.muted), background: hideCommitted ? C.green + "22" : "transparent", fontSize: 11, padding: "4px 10px", whiteSpace: "nowrap" }}>
+            {hideCommitted ? "✓ Hide Committed" : "Show All"}
+          </button>
+          <div style={{ width: 1, height: 20, background: C.border }} />
           {[
             { key: "ALL",       label: "All",       color: C.muted,   count: null },
             { key: "exact",     label: "Exact",     color: C.green,   count: exactCount },
@@ -1140,7 +1459,7 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
                       <EditCell
                         value={t.strategy}
                         onChange={v => updateTx(t._idx, "strategy", v || null)}
-                        options={STRATEGIES}
+                        options={stratNames.length ? stratNames : STRATEGIES}
                       />
                     </td>
 
