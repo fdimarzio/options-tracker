@@ -297,6 +297,8 @@ const ChartTip = ({active,payload,label}) => {
 // ── Coin / Loss animation overlay ─────────────────────────────────────────────
 function CelebrationOverlay({profit, onDone}) {
   useEffect(() => { const t = setTimeout(onDone, 2800); return () => clearTimeout(t); }, []);
+
+  // Listen handled by onTrade callback from OptionsChainComponent
   const isWin = profit > 0;
   return (
     <div style={{position:"fixed",inset:0,zIndex:2000,pointerEvents:"none",display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -439,9 +441,424 @@ function BalanceHistory({ supabase, cashData, onSave }) {
 
 // ── Import Tab wrapper ────────────────────────────────────────────────────────
 import ImportPageComponent from "./ImportPage.jsx";
-function ImportTab({ supabase, tradeRules }) {
-  return <ImportPageComponent parallelRun={false} defaultDays={1} supabaseClient={supabase} tradeRules={tradeRules} />;
+function ImportTab({ supabase, tradeRules, authUser, persistedState, onStateChange }) {
+  return <ImportPageComponent parallelRun={false} defaultDays={1} supabaseClient={supabase} tradeRules={tradeRules} authUser={authUser} persistedState={persistedState} onStateChange={onStateChange} />;
 }
+
+function PendingTab({ supabase, tradeRules, authUser }) {
+  return <ImportPageComponent parallelRun={false} defaultDays={1} supabaseClient={supabase} tradeRules={tradeRules} authUser={authUser} pendingOnly={true} />;
+}
+
+// ── Options Chain Component (inlined) ─────────────────────────
+// ── Theme ─────────────────────────────────────────────────────────────────────
+const T = {
+  bg:       "#080b10",
+  surface:  "#0d1117",
+  card:     "#111620",
+  border:   "#1a2030",
+  border2:  "#242e40",
+  green:    "#00e676",
+  red:      "#ff4444",
+  blue:     "#4fc3f7",
+  yellow:   "#ffd54f",
+  purple:   "#ce93d8",
+  muted:    "#546e7a",
+  text:     "#eceff1",
+  dim:      "#37474f",
+  font:     "'JetBrains Mono', 'Fira Code', monospace",
+};
+
+const css = `
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Syne:wght@400;600;700;800&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: ${T.bg}; color: ${T.text}; font-family: ${T.font}; }
+  ::-webkit-scrollbar { width: 3px; height: 3px; }
+  ::-webkit-scrollbar-track { background: ${T.bg}; }
+  ::-webkit-scrollbar-thumb { background: ${T.border2}; border-radius: 3px; }
+  input { font-family: ${T.font}; }
+  @keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .fade-in { animation: fadeIn 0.2s ease forwards; }
+  .expiry-row { transition: background 0.12s; cursor: pointer; }
+  .expiry-row:hover { background: #151e2a !important; }
+  .strike-row { transition: background 0.08s; }
+  .strike-row:hover { background: #0f1620 !important; }
+  @media (max-width: 600px) {
+    .chain-table th, .chain-table td { padding: 5px 6px !important; font-size: 10px !important; }
+    .hide-mobile { display: none !important; }
+  }
+`;
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const fmt  = (v, d=2) => v != null ? (+v).toFixed(d) : "—";
+const fmtK = v => v != null ? (+v >= 1000 ? (v/1000).toFixed(0)+"k" : String(v)) : "—";
+const pct  = v => v != null ? (v*100).toFixed(1)+"%" : "—";
+const clr  = (v, pos=T.green, neg=T.red) => !v ? T.muted : +v >= 0 ? pos : neg;
+
+function Spinner() {
+  return <div style={{width:18,height:18,border:`2px solid ${T.border2}`,borderTopColor:T.blue,borderRadius:"50%",animation:"spin 0.7s linear infinite",display:"inline-block"}}/>;
+}
+
+// ── Option row ────────────────────────────────────────────────────────────────
+function OptionRow({ opt, type, stockPrice, ticker, expiry, onTrade }) {
+  if (!opt) return (
+    <tr className="strike-row" style={{borderBottom:`1px solid ${T.border}`}}>
+      {Array(9).fill(0).map((_,i) => <td key={i} style={{padding:"7px 10px",color:T.dim,fontSize:11,textAlign:"right"}}>—</td>)}
+    </tr>
+  );
+
+  const itm    = type === "Call" ? stockPrice > opt.strikePrice : stockPrice < opt.strikePrice;
+  const mid    = opt.bid != null && opt.ask != null ? ((+opt.bid + +opt.ask)/2).toFixed(2) : null;
+  const ivPct  = opt.volatility != null ? (opt.volatility).toFixed(1)+"%" : "—";
+
+  const handleTrade = () => {
+    if (onTrade) onTrade({ ticker, expiry, optType: type, strike: opt.strikePrice, bid: opt.bid, ask: opt.ask, mid });
+  };
+
+  return (
+    <tr className="strike-row" style={{
+      borderBottom: `1px solid ${T.border}`,
+      background: itm ? (type==="Call" ? "#00e67608" : "#ff444408") : "transparent",
+    }}>
+      {/* Strike */}
+      <td style={{padding:"7px 10px",fontWeight:600,color:itm?(type==="Call"?T.green:T.red):T.text,fontSize:12,textAlign:"right",fontFamily:T.font}}>
+        {opt.strikePrice}
+        {itm && <span style={{fontSize:8,color:itm?(type==="Call"?T.green:T.red):T.dim,marginLeft:4}}>ITM</span>}
+      </td>
+      <td style={{padding:"7px 10px",color:T.text,fontSize:11,textAlign:"right"}}>{fmt(opt.bid)}</td>
+      <td style={{padding:"7px 10px",color:T.text,fontSize:11,textAlign:"right"}}>{fmt(opt.ask)}</td>
+      <td style={{padding:"7px 10px",color:mid?T.blue:T.muted,fontSize:11,textAlign:"right"}}>{mid||"—"}</td>
+      <td style={{padding:"7px 10px",color:T.muted,fontSize:11,textAlign:"right"}} className="hide-mobile">{fmt(opt.last)}</td>
+      <td style={{padding:"7px 10px",color:T.purple,fontSize:11,textAlign:"right"}} className="hide-mobile">{ivPct}</td>
+      <td style={{padding:"7px 10px",color:clr(opt.delta, type==="Call"?T.green:T.red, type==="Call"?T.red:T.green),fontSize:11,textAlign:"right"}} className="hide-mobile">{fmt(opt.delta,3)}</td>
+      <td style={{padding:"7px 10px",color:T.muted,fontSize:11,textAlign:"right"}} className="hide-mobile">{fmtK(opt.totalVolume)}</td>
+      <td style={{padding:"7px 10px",color:T.dim,fontSize:11,textAlign:"right"}} className="hide-mobile">{fmtK(opt.openInterest)}</td>
+      {/* Trade button */}
+      <td style={{padding:"4px 8px",textAlign:"right"}}>
+        <button onClick={handleTrade}
+          style={{background:T.green+"22",color:T.green,border:`1px solid ${T.green}44`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:T.font,cursor:"pointer",fontWeight:600,whiteSpace:"nowrap"}}>
+          STO
+        </button>
+      </td>
+    </tr>
+  );
+}
+
+// ── Chain table ───────────────────────────────────────────────────────────────
+function ChainTable({ calls, puts, stockPrice, showType, ticker, expiry, onTrade }) {
+  const allStrikes = [...new Set([
+    ...calls.map(o => o.strikePrice),
+    ...puts.map(o => o.strikePrice),
+  ])].sort((a,b) => a-b);
+
+  const callMap = Object.fromEntries(calls.map(o => [o.strikePrice, o]));
+  const putMap  = Object.fromEntries(puts.map(o  => [o.strikePrice, o]));
+
+  const thStyle = {padding:"6px 10px",textAlign:"right",color:T.muted,fontSize:9,fontFamily:T.font,letterSpacing:"0.08em",borderBottom:`1px solid ${T.border2}`,fontWeight:400};
+
+  const headers = ["STRIKE","BID","ASK","MID","LAST","IV","DELTA","VOL","OI",""];
+
+  return (
+    <div style={{overflowX:"auto"}}>
+      <table className="chain-table" style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+        <thead>
+          <tr style={{background:T.surface}}>
+            {headers.map((h,i) => (
+              <th key={h||"trade"} style={{...thStyle, ...(i>4&&i<9?{display:"none"}:{}), ...({})}}
+                className={i>=4&&i<9?"hide-mobile":""}>
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {allStrikes.map(strike => (
+            <OptionRow
+              key={strike}
+              opt={showType==="Call" ? callMap[strike] : putMap[strike]}
+              type={showType}
+              stockPrice={stockPrice}
+              ticker={ticker}
+              expiry={expiry}
+              onTrade={onTrade}
+            />
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ── Expiry row ────────────────────────────────────────────────────────────────
+function ExpiryRow({ expiry, dte, isOpen, onToggle, calls, puts, stockPrice, showType, onTypeChange, ticker, onTrade }) {
+  const totalVol = [...calls,...puts].reduce((s,o) => s+(o.totalVolume||0), 0);
+  const totalOI  = [...calls,...puts].reduce((s,o) => s+(o.openInterest||0), 0);
+
+  const dteColor = dte <= 7 ? T.red : dte <= 14 ? T.yellow : dte <= 30 ? T.blue : T.muted;
+
+  return (
+    <div style={{borderBottom:`1px solid ${T.border}`,overflow:"hidden"}}>
+      {/* Header row */}
+      <div className="expiry-row fade-in"
+        onClick={onToggle}
+        style={{display:"flex",alignItems:"center",padding:"12px 16px",gap:12,background:isOpen?T.card:T.surface}}>
+        {/* Arrow */}
+        <span style={{color:T.muted,fontSize:10,width:12,transition:"transform 0.15s",transform:isOpen?"rotate(90deg)":"none",display:"inline-block"}}>▶</span>
+        {/* Date */}
+        <span style={{fontFamily:"'Syne',sans-serif",fontWeight:600,fontSize:14,color:T.text,flex:1}}>
+          {new Date(expiry+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}
+        </span>
+        {/* DTE badge */}
+        <span style={{fontSize:9,fontFamily:T.font,color:dteColor,background:dteColor+"18",border:`1px solid ${dteColor}33`,borderRadius:4,padding:"2px 7px",flexShrink:0}}>
+          {dte}d
+        </span>
+        {/* Stats */}
+        <span style={{fontSize:9,color:T.muted,fontFamily:T.font,flexShrink:0}} className="hide-mobile">
+          Vol {fmtK(totalVol)} · OI {fmtK(totalOI)}
+        </span>
+      </div>
+      {/* Expanded chain */}
+      {isOpen && (
+        <div className="fade-in" style={{background:T.bg,borderTop:`1px solid ${T.border}`}}>
+          {/* Call/Put toggle */}
+          <div style={{display:"flex",gap:0,padding:"8px 16px",borderBottom:`1px solid ${T.border}`}}>
+            {["Call","Put"].map(t => (
+              <button key={t} onClick={e=>{e.stopPropagation();onTypeChange(t);}}
+                style={{background:showType===t?(t==="Call"?T.green+"22":T.red+"22"):"transparent",
+                  color:showType===t?(t==="Call"?T.green:T.red):T.muted,
+                  border:`1px solid ${showType===t?(t==="Call"?T.green+"44":T.red+"44"):T.border}`,
+                  borderRadius:t==="Call"?"4px 0 0 4px":"0 4px 4px 0",
+                  padding:"4px 16px",fontSize:10,fontFamily:T.font,cursor:"pointer",fontWeight:600}}>
+                {t}s ({t==="Call"?calls.length:puts.length})
+              </button>
+            ))}
+          </div>
+          <ChainTable calls={calls} puts={puts} stockPrice={stockPrice} showType={showType} ticker={ticker} expiry={expiry} onTrade={onTrade}/>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
+function OptionsChainComponent({ initialTicker = "", onTrade = null }) {
+  const [ticker,      setTicker]      = useState(initialTicker);
+  const [inputVal,    setInputVal]    = useState(initialTicker);
+  const [loading,     setLoading]     = useState(false);
+  const [loadingExp,  setLoadingExp]  = useState(null); // expiry being loaded
+  const [error,       setError]       = useState(null);
+  const [stockPrice,  setStockPrice]  = useState(null);
+  const [stockChange, setStockChange] = useState(null);
+  const [expirations, setExpirations] = useState([]); // [{expiry, dte}]
+  const [chains,      setChains]      = useState({}); // {expiry: {calls,puts}}
+  const [openExpiry,  setOpenExpiry]  = useState(null);
+  const [showType,    setShowType]    = useState("Call");
+
+  // ── Fetch quote + expirations ───────────────────────────────────────────────
+  const fetchTicker = useCallback(async (sym) => {
+    if (!sym) return;
+    setTicker(sym);
+    setInputVal(sym);
+    setLoading(true);
+    setError(null);
+    setExpirations([]);
+    setChains({});
+    setOpenExpiry(null);
+    setStockPrice(null);
+
+    try {
+      // Quote
+      const qRes  = await fetch(`/api/schwab-proxy?path=/marketdata/v1/quotes&symbols=${sym}&fields=quote&indicative=false`);
+      const qData = await qRes.json();
+      const q     = qData?.[sym]?.quote ?? qData?.[sym];
+      if (q?.lastPrice) {
+        setStockPrice(q.lastPrice);
+        setStockChange({ change: q.netChange, pct: q.netPercentChange });
+      }
+
+      // Expiration chain
+      const eRes  = await fetch(`/api/schwab-proxy?path=/marketdata/v1/expirationchain&symbol=${sym}`);
+      const eData = await eRes.json();
+      const today = new Date(); today.setHours(0,0,0,0);
+
+      const exps = (eData?.expirationList || [])
+        .map(e => {
+          const d   = new Date(e.expirationDate+"T12:00:00");
+          const dte = Math.ceil((d - today) / 86400000);
+          return { expiry: e.expirationDate, dte, dteType: e.dteType };
+        })
+        .filter(e => e.dte >= 0)
+        .sort((a,b) => a.dte - b.dte);
+
+      setExpirations(exps);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // ── Fetch chain for a specific expiry ───────────────────────────────────────
+  const fetchChain = useCallback(async (sym, expiry) => {
+    if (chains[expiry]) return; // already loaded
+    setLoadingExp(expiry);
+    try {
+      const res  = await fetch(`/api/schwab-proxy?path=/marketdata/v1/chains&symbol=${sym}&contractType=ALL&strikeCount=40&fromDate=${expiry}&toDate=${expiry}`);
+      const data = await res.json();
+
+      const calls = [], puts = [];
+      for (const [, strikes] of Object.entries(data?.callExpDateMap || {}))
+        for (const [, opts] of Object.entries(strikes))
+          for (const o of opts) calls.push(o);
+      for (const [, strikes] of Object.entries(data?.putExpDateMap || {}))
+        for (const [, opts] of Object.entries(strikes))
+          for (const o of opts) puts.push(o);
+
+      calls.sort((a,b) => a.strikePrice - b.strikePrice);
+      puts.sort((a,b) => a.strikePrice - b.strikePrice);
+
+      setChains(prev => ({ ...prev, [expiry]: { calls, puts } }));
+    } catch (err) {
+      console.warn("Chain fetch failed:", err.message);
+    } finally {
+      setLoadingExp(null);
+    }
+  }, [chains]);
+
+  // ── Auto-fetch if initialTicker provided ───────────────────────────────────
+  useEffect(() => {
+    if (initialTicker) {
+      setTicker(initialTicker);
+      setInputVal(initialTicker);
+      fetchTicker(initialTicker);
+    }
+  }, [initialTicker, fetchTicker]);
+
+  // ── Toggle expiry row ───────────────────────────────────────────────────────
+  const toggleExpiry = (expiry) => {
+    if (openExpiry === expiry) {
+      setOpenExpiry(null);
+    } else {
+      setOpenExpiry(expiry);
+      fetchChain(ticker, expiry);
+    }
+  };
+
+  const handleSearch = (e) => {
+    e.preventDefault();
+    const sym = inputVal.trim().toUpperCase();
+    if (sym) { setTicker(sym); fetchTicker(sym); }
+  };
+
+  const changeDir = stockChange?.change >= 0;
+
+  return (
+    <div style={{minHeight:"100vh",background:T.bg,color:T.text,fontFamily:T.font}}>
+      <style>{css}</style>
+
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
+      <div style={{background:T.surface,borderBottom:`1px solid ${T.border}`,padding:"14px 20px",position:"sticky",top:0,zIndex:100}}>
+        <div style={{maxWidth:900,margin:"0 auto",display:"flex",alignItems:"center",gap:16,flexWrap:"wrap"}}>
+          {/* Title */}
+          <div style={{fontFamily:"'Syne',sans-serif",fontWeight:800,fontSize:16,color:T.blue,letterSpacing:"0.04em",flexShrink:0}}>
+            OPTIONS<span style={{color:T.green}}>.</span>CHAIN
+          </div>
+
+          {/* Search */}
+          <form onSubmit={handleSearch} style={{display:"flex",gap:0,flex:1,minWidth:180,maxWidth:320}}>
+            <input
+              value={inputVal}
+              onChange={e => setInputVal(e.target.value.toUpperCase())}
+              placeholder="Enter ticker… AAPL"
+              style={{flex:1,background:T.card,border:`1px solid ${T.border2}`,borderRight:"none",borderRadius:"6px 0 0 6px",color:T.text,fontFamily:T.font,fontSize:13,padding:"8px 12px",outline:"none"}}
+            />
+            <button type="submit"
+              style={{background:T.blue+"22",border:`1px solid ${T.border2}`,borderRadius:"0 6px 6px 0",color:T.blue,fontFamily:T.font,fontSize:12,padding:"8px 14px",cursor:"pointer",fontWeight:600,whiteSpace:"nowrap"}}>
+              {loading ? <Spinner/> : "→"}
+            </button>
+          </form>
+
+          {/* Stock price */}
+          {stockPrice && (
+            <div style={{display:"flex",alignItems:"baseline",gap:8,flexShrink:0}}>
+              <span style={{fontFamily:"'Syne',sans-serif",fontWeight:700,fontSize:20,color:T.text}}>${(+stockPrice).toFixed(2)}</span>
+              <span style={{fontSize:11,color:changeDir?T.green:T.red,fontFamily:T.font}}>
+                {changeDir?"+":""}{fmt(stockChange?.change)} ({changeDir?"+":""}{fmt(stockChange?.pct,2)}%)
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Content ────────────────────────────────────────────────────────── */}
+      <div style={{maxWidth:900,margin:"0 auto"}}>
+        {error && (
+          <div style={{padding:"16px 20px",color:T.red,fontSize:12,borderBottom:`1px solid ${T.border}`}}>
+            ⚠ {error}
+          </div>
+        )}
+
+        {!ticker && !loading && (
+          <div style={{padding:"80px 20px",textAlign:"center"}}>
+            <div style={{fontFamily:"'Syne',sans-serif",fontSize:32,fontWeight:800,color:T.border2,marginBottom:12}}>Enter a ticker</div>
+            <div style={{fontSize:12,color:T.dim}}>Type a stock symbol above to view its options chain</div>
+          </div>
+        )}
+
+        {ticker && !loading && expirations.length === 0 && !error && (
+          <div style={{padding:"40px 20px",textAlign:"center",color:T.muted,fontSize:12}}>
+            No expirations found for {ticker}
+          </div>
+        )}
+
+        {/* Expiry list */}
+        {expirations.length > 0 && (
+          <div>
+            {/* Ticker header */}
+            <div style={{padding:"12px 16px",borderBottom:`1px solid ${T.border}`,display:"flex",alignItems:"center",gap:10}}>
+              <span style={{fontFamily:"'Syne',sans-serif",fontWeight:800,fontSize:22,color:T.text}}>{ticker}</span>
+              <span style={{fontSize:10,color:T.muted,fontFamily:T.font}}>{expirations.length} expirations</span>
+              <span style={{fontSize:10,color:T.muted,fontFamily:T.font,marginLeft:"auto"}}>Calls &amp; Puts</span>
+            </div>
+
+            {expirations.map(({ expiry, dte }) => {
+              const chain      = chains[expiry] || { calls: [], puts: [] };
+              const isLoading  = loadingExp === expiry;
+              const isOpen     = openExpiry === expiry;
+
+              return (
+                <div key={expiry}>
+                  <ExpiryRow
+                    expiry={expiry}
+                    dte={dte}
+                    isOpen={isOpen}
+                    onToggle={() => toggleExpiry(expiry)}
+                    calls={chain.calls}
+                    puts={chain.puts}
+                    stockPrice={stockPrice}
+                    showType={showType}
+                    onTypeChange={setShowType}
+                    ticker={ticker}
+                    onTrade={onTrade}
+                  />
+                  {isLoading && (
+                    <div style={{padding:"16px",display:"flex",alignItems:"center",justifyContent:"center",gap:8,background:T.bg,borderBottom:`1px solid ${T.border}`}}>
+                      <Spinner/>
+                      <span style={{fontSize:11,color:T.muted}}>Loading {expiry}…</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────
 
 export default function App() {
   // Auth
@@ -620,11 +1037,21 @@ export default function App() {
   useEffect(() => {
     async function load() {
       try {
-        // Load contracts
-        const { data: cData, error: cErr } = await supabase
-          .from("contracts").select("*").order("date_exec", { ascending: false });
-        if (cErr) throw cErr;
-        const loaded = cData?.map(toApp) || [];
+        // Load contracts — paginate to get all rows (Supabase default limit is 1000)
+        let allContracts = [];
+        let from = 0;
+        const pageSize = 1000;
+        while (true) {
+          const { data: page, error: cErr } = await supabase
+            .from("contracts").select("*").order("date_exec", { ascending: false })
+            .range(from, from + pageSize - 1);
+          if (cErr) throw cErr;
+          if (!page?.length) break;
+          allContracts = [...allContracts, ...page];
+          if (page.length < pageSize) break;
+          from += pageSize;
+        }
+        const loaded = allContracts.map(toApp).filter(Boolean);
         setContracts(loaded.length ? loaded : SEED);
         // If first run, seed the DB
         if (!loaded.length && SEED.length) {
@@ -721,6 +1148,7 @@ export default function App() {
         setStorageMsg("DB error — check console");
       }
       setDbReady(true);
+      loadTradeOrders();
     }
     load();
   }, []);
@@ -851,14 +1279,24 @@ export default function App() {
   };
 
   // Auto-refresh every 30 seconds to pick up changes from other users
+  const loadAllContracts = async () => {
+    let all = [], from = 0;
+    while (true) {
+      const { data: pg, error } = await supabase.from("contracts").select("*").order("date_exec",{ascending:false}).range(from, from+999);
+      if (error || !pg?.length) break;
+      all = [...all, ...pg];
+      if (pg.length < 1000) break;
+      from += 1000;
+    }
+    return all.map(toApp).filter(Boolean);
+  };
+
   useEffect(() => {
     if (!dbReady) return;
     const interval = setInterval(async () => {
       try {
-        const { data, error } = await supabase
-          .from("contracts").select("*").order("date_exec", { ascending: false });
-        if (!error && data) {
-          const loaded = data.map(toApp);
+        const loaded = await loadAllContracts();
+        if (loaded.length) {
           setContracts(loaded);
           setStorageMsg(loaded.length + " contracts · synced " + new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}));
         }
@@ -868,8 +1306,8 @@ export default function App() {
     const channel = supabase.channel("contracts-changes")
       .on("postgres_changes", {event:"*",schema:"public",table:"contracts"}, async () => {
         try {
-          const {data,error} = await supabase.from("contracts").select("*").order("date_exec",{ascending:false});
-          if(!error&&data) setContracts(data.map(toApp));
+          const loaded = await loadAllContracts();
+          if (loaded.length) setContracts(loaded);
         } catch {}
       }).subscribe();
     return () => { clearInterval(interval); supabase.removeChannel(channel); };
@@ -886,7 +1324,7 @@ export default function App() {
   // ── Derived ───────────────────────────────────────────────────────────────
   // originals = contracts that are not linked close records (parentId is null)
   // close records (BTC/STC with parentId) only appear in the table, never in aggregations
-  const originals = contracts.filter(c => !c.parentId);
+  const originals = contracts.filter(c => !c.parentId && !["BTC","STC"].includes(c.optType));
 
   const applyG = list => list.filter(c => {
     if (gTicker  !== "All" && c.stock?.toUpperCase() !== gTicker) return false;
@@ -898,7 +1336,7 @@ export default function App() {
   const openC   = allF.filter(c => c.status === "Open");
   const closedC = allF.filter(c => c.status === "Closed");
   const totalPrem   = allF.reduce((s,c) => s+(c.premium||0), 0);
-  const totalProfit = closedC.reduce((s,c) => s+(c.profit||0), 0);
+  const totalProfit = closedC.reduce((s,c) => s+(c.profit||0), 0); // ALL time, no date filter
   const openPrem    = openC.reduce((s,c) => s+Math.abs(c.premium||0), 0);
   // committedFunds moved below etradeChains declaration
   const winRate  = closedC.length ? (closedC.filter(c=>c.profit>0).length/closedC.length*100).toFixed(0) : 0;
@@ -1408,8 +1846,43 @@ export default function App() {
   const [analyticsView,setAnalyticsView] = useState("monthly");
   const [showBalCols,setShowBalCols]     = useState(true);   // hide/show Schwab/ETrade/Total/MoM/YTD cols
 
-  const [profitDateMode,setProfitDateMode] = useState("exec"); // "exec" | "close"
-  const profitDateField = (c) => profitDateMode==="close" ? c.closeDate : c.dateExec;
+  const [profitDateMode,setProfitDateMode] = useState("close"); // "exec" | "close"
+  const [chainTradeOrder, setChainTradeOrder] = useState(null);
+  const [orderPreview,   setOrderPreview]   = useState(null);
+  const [orderControls,  setOrderControls]  = useState({orderType:"LIMIT",duration:"DAY",specialInstruction:"NONE",limitPrice:null,qty:null});
+  const [orderLoading,   setOrderLoading]   = useState(false);
+  const [orderError,     setOrderError]     = useState(null);
+  const [orderSuccess,   setOrderSuccess]   = useState(null);
+  const [showRawJson,    setShowRawJson]    = useState(false);
+  const [orderStatuses,  setOrderStatuses]  = useState({});
+  const [tradeOrders,    setTradeOrders]    = useState([]);
+  const [ordersLoading,  setOrdersLoading]  = useState(false);
+
+  const loadTradeOrders = async () => {
+    setOrdersLoading(true);
+    try {
+      const r = await fetch(`/api/schwab-orders?action=list&secret=${encodeURIComponent("mYs3cr3tK3y2026!")}`);
+      const data = await r.json();
+      if (data.ok) setTradeOrders((data.orders||[]).filter(o=>!["filled","cancelled","error"].includes(o.status)));
+    } catch(e) { console.warn("loadTradeOrders:", e.message); }
+    setOrdersLoading(false);
+  };
+
+  const cancelTradeOrder = async (orderId) => {
+    try {
+      const order    = tradeOrders.find(o => o.id === orderId);
+      const isETrade = order?.account?.startsWith("ETrade");
+      const url      = isETrade
+        ? `/api/schwab-orders?action=order-cancel&secret=${encodeURIComponent("mYs3cr3tK3y2026!")}`
+        : `/api/schwab-orders?action=cancel&secret=${encodeURIComponent("mYs3cr3tK3y2026!")}`;
+      const r = await fetch(url, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({orderId:String(orderId)}) });
+      const data = await r.json();
+      if (!r.ok) { alert(`Cancel failed: ${data.error||r.status}`); return; }
+      loadTradeOrders();
+    } catch(e) { alert(`Cancel error: ${e.message}`); }
+  }; // { ticker, expiry, optType, strike, bid, ask, mid }
+  const [importState,     setImportState]     = useState(null); // persists import tab state across tab switches
+  const profitDateField = (c) => profitDateMode==="close" ? (c.closeDate || c.dateExec) : c.dateExec;
   const profitMTD = closedC.filter(c=>profitDateField(c)?.startsWith(thisMonth)).reduce((s,c)=>s+(c.profit||0),0);
   const profitYTD = closedC.filter(c=>profitDateField(c)?.startsWith(thisYear)).reduce((s,c)=>s+(c.profit||0),0);
   // Daily
@@ -1420,6 +1893,7 @@ export default function App() {
 
   // Filtered contracts for table
   const sortedFiltered = contracts.filter(c => {
+    if (["BTC","STC"].includes(c.optType)) return false; // closers are not standalone contracts
     if (fOriginals && c.parentId) return false; // hide linked close records
     if (fStatus !== "All" && c.status !== fStatus) return false;
     if (fAcct   !== "All" && c.account !== fAcct)  return false;
@@ -1831,6 +2305,7 @@ ${JSON.stringify(summary, null, 1)}`;
 
   // ── MAIN APP ──────────────────────────────────────────────────────────────
   return (
+    <>
     <div style={{minHeight:"100vh",background:"#010409",color:"#e6edf3",fontFamily:"'Inter',sans-serif",fontSize:`${uiScale*100}%`}}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600&display=swap');
@@ -2372,6 +2847,7 @@ ${JSON.stringify(summary, null, 1)}`;
                   {label:"Profile",      icon:"👤", fn:()=>{setShowProfile(true);setShowMenu(false);}},
                   {label:"Team",         icon:"👥", fn:()=>{setShowTeam(true);setShowMenu(false);}},
                   {label:"Strategies",   icon:"♟",  fn:()=>{setTab("strategies");setShowMenu(false);}},
+                  {label:"Pending Txns", icon:"📥", fn:()=>{setTab("pending");setShowMenu(false);}},
                   {label:"Profit Bands", icon:"🎯", fn:()=>{setShowBands(true);setShowMenu(false);}},
                   {label:"OTM/DTE Matrix",icon:"📐",fn:()=>{setShowMatrix(true);setShowMenu(false);}},
                   {label:"Trade Rules",  icon:"⚙", fn:()=>{setShowTradeRules(true);setShowMenu(false);}},
@@ -2525,7 +3001,7 @@ ${JSON.stringify(summary, null, 1)}`;
               const unrealPL = openC.reduce((s,c) => {
                 if (!c.premium) return s;
                 const lo   = findOptionForContract(etradeChains, c);
-                const last = lo?.last ?? lo?.bid ?? null;
+                const last = lo?.mark ?? lo?.last ?? lo?.bid ?? null;
                 if (last == null) return s;
                 const mv   = (c.qty||1) * last * 100;
                 const prem = Math.abs(c.premium);
@@ -2534,7 +3010,7 @@ ${JSON.stringify(summary, null, 1)}`;
               }, 0);
               const currVal = openC.reduce((s,c) => {
                 const lo   = findOptionForContract(etradeChains, c);
-                const last = lo?.last ?? lo?.bid ?? null;
+                const last = lo?.mark ?? lo?.last ?? lo?.bid ?? null;
                 return last != null ? s + (c.qty||1)*last*100 : s;
               }, 0);
               // Expiry buckets
@@ -2701,7 +3177,7 @@ ${JSON.stringify(summary, null, 1)}`;
             )}
 
             {/* Close form */}
-            {showForm && formMode==="close" && (() => {
+            {showForm && (formMode==="close" || formMode==="manualClose") && (() => {
               const orig = contracts.find(c=>c.id===closingId);
               const ctc = +closeForm.costToClose||0;
               const isBTO = orig?.optType === "BTO";
@@ -2710,13 +3186,44 @@ ${JSON.stringify(summary, null, 1)}`;
               const epct = basis > 0 ? (ep/basis*100).toFixed(1) : null;
               const ed  = orig&&closeForm.closeDate ? Math.round((new Date(closeForm.closeDate)-new Date(orig.dateExec))/86400000) : null;
               const closeLabel = isBTO ? "STC (Sell to Close)" : "BTC (Buy to Close)";
+              const isApiAccount = (orig?.account === "Schwab" || orig?.account?.startsWith("ETrade")) && formMode !== "manualClose";
               return (
                 <div style={{background:"#0a0e14",border:"1px solid #ffd16625",borderRadius:8,padding:13,animation:"fadeIn .2s"}}>
                   <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:10}}>
                     <div style={{width:5,height:5,borderRadius:"50%",background:"#ffd166"}}/>
                     <span style={{fontFamily:"monospace",fontSize:10,color:"#ffd166",letterSpacing:"0.07em"}}>CLOSE CONTRACT — {closeLabel}</span>
                     {orig && <span style={{fontSize:10,color:"#8b949e",fontFamily:"monospace"}}>{fTitle(orig)} — opened at <span style={{color:"#58a6ff"}}>{fMoney(orig.premium)}</span></span>}
+                    <button onClick={()=>{setShowForm(false);setClosingId(null);setCloseForm({...EMPTY_CLOSE});}} style={{marginLeft:"auto",background:"transparent",border:"none",color:"#555",cursor:"pointer",fontSize:14}}>✕</button>
                   </div>
+                  {/* For API accounts — go straight to order panel */}
+                  {isApiAccount ? (
+                    <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                      <div style={{fontSize:11,color:"#8b949e",fontFamily:"monospace"}}>
+                        This contract is held at <span style={{color:"#ffd166"}}>{orig.account}</span>. Place a closing order via the API:
+                      </div>
+                      <div style={{display:"flex",gap:8}}>
+                        <button onClick={()=>{
+                          setOrderControls({orderType:"LIMIT",duration:"DAY",specialInstruction:"NONE",limitPrice:null,qty:orig.qty});
+                          setOrderPreview(null); setOrderError(null); setOrderSuccess(null); setShowRawJson(false);
+                          setShowForm(false);
+                          setClosingId(orig.id);
+                          setFormMode("order");
+                          setShowForm(true);
+                        }}
+                          style={{background:"#00ff8822",color:"#00ff88",border:"1px solid #00ff8844",borderRadius:6,padding:"8px 18px",fontSize:11,fontWeight:700,fontFamily:"monospace",cursor:"pointer"}}>
+                          📤 Place {closeLabel} Order via {orig.account}
+                        </button>
+                        <button onClick={()=>{setShowForm(false);setClosingId(null);setCloseForm({...EMPTY_CLOSE});}} style={{background:"transparent",color:"#555",border:"1px solid #21262d",borderRadius:6,padding:"8px 13px",fontSize:11,cursor:"pointer"}}>Cancel</button>
+                      </div>
+                      <div style={{fontSize:9,color:"#3a4050",fontFamily:"monospace",borderTop:"1px solid #1c2128",paddingTop:8,marginTop:4}}>
+                        Need to record a manual close instead? 
+                        <button onClick={()=>setFormMode("manualClose")} style={{background:"transparent",color:"#58a6ff",border:"none",cursor:"pointer",fontSize:9,fontFamily:"monospace",marginLeft:4,textDecoration:"underline"}}>
+                          Record manually →
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
                   <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(135px,1fr))",gap:7,marginBottom:9}}>
                     {orig && orig.qty > 1 && <div><FL>Qty to Close (of {orig.qty})</FL><input type="number" min={1} max={orig.qty} value={closeForm.qtyToClose||orig.qty} onChange={e=>setCloseForm(p=>({...p,qtyToClose:Math.min(orig.qty,Math.max(1,+e.target.value||1))}))} /></div>}
                     <div><FL>Cost to Close $</FL><input type="number" value={closeForm.costToClose} onChange={e=>setCloseForm(p=>({...p,costToClose:e.target.value}))}/></div>
@@ -2738,11 +3245,196 @@ ${JSON.stringify(summary, null, 1)}`;
                     <button onClick={saveClose} style={{background:"#ffd166",color:"#010409",border:"none",borderRadius:6,padding:"7px 18px",fontSize:11,fontWeight:700,fontFamily:"monospace"}}>CLOSE CONTRACT</button>
                     <button onClick={()=>{setShowForm(false);setClosingId(null);setCloseForm({...EMPTY_CLOSE});}} style={{background:"transparent",color:"#555",border:"1px solid #21262d",borderRadius:6,padding:"7px 13px",fontSize:11}}>Cancel</button>
                   </div>
+                    </>
+                  )}
                 </div>
               );
             })()}
 
-            {/* Table filters */}
+            {showForm && formMode==="order" && (() => {
+              const orig = contracts.find(c=>c.id===closingId);
+              if (!orig) return null;
+              const isETrade = orig.account?.startsWith("ETrade");
+              const isBTO = orig.optType === "BTO";
+              const closeLabel = isBTO ? "STC" : "BTC";
+              const previewAction = isETrade ? "order-preview" : "preview";
+              const approveAction = isETrade ? "order-place" : "approve";
+              const apiBase = `/api/schwab-orders`;
+
+              const fetchPreview = async () => {
+                setOrderLoading(true); setOrderError(null); setOrderPreview(null); setOrderSuccess(null);
+                try {
+                  const r = await fetch(`${apiBase}?action=${previewAction}&secret=${encodeURIComponent("mYs3cr3tK3y2026!")}`, {
+                    method:"POST", headers:{"Content-Type":"application/json"},
+                    body: JSON.stringify({ contract_id: orig.id, qty: orderControls.qty||orig.qty, limit_price: orderControls.limitPrice||undefined, order_type: orderControls.orderType, duration: orderControls.duration, special_instruction: orderControls.specialInstruction }),
+                  });
+                  const data = await r.json();
+                  if (!r.ok) throw new Error(data.error || "Preview failed");
+                  setOrderControls(c => ({...c, limitPrice: data.livePrice?.mid ?? c.limitPrice}));
+                  setOrderPreview(data);
+                } catch(e) { setOrderError(e.message); }
+                setOrderLoading(false);
+              };
+
+              const approveOrder = async (dryRun) => {
+                if (!orderPreview?.order?.id) return;
+                setOrderLoading(true); setOrderError(null);
+                try {
+                  const r = await fetch(`${apiBase}?action=${approveAction}&secret=${encodeURIComponent("mYs3cr3tK3y2026!")}`, {
+                    method:"POST", headers:{"Content-Type":"application/json"},
+                    body: JSON.stringify({ orderId: orderPreview.order.id, dry_run: dryRun, limit_price: orderControls.limitPrice, order_type: orderControls.orderType, duration: orderControls.duration, special_instruction: orderControls.specialInstruction }),
+                  });
+                  const data = await r.json();
+                  if (r.status === 429 && data.retryable) {
+                    let secs = 60;
+                    setOrderError(`⏱ Rate limit — retrying in ${secs}s`);
+                    const cd = setInterval(()=>{ secs--; if(secs<=0){clearInterval(cd);setOrderError(null);approveOrder(dryRun);}else{setOrderError(`⏱ Rate limit — retrying in ${secs}s`);} }, 1000);
+                    setOrderLoading(false); return;
+                  }
+                  if (!r.ok) throw new Error(data.error || "Failed");
+                  setOrderSuccess(dryRun ? "✓ Dry run approved." : `✅ Order submitted to ${orig.account}!`);
+                  setOrderPreview(null);
+                  if (!dryRun) loadTradeOrders?.();
+                } catch(e) { setOrderError(e.message); }
+                setOrderLoading(false);
+              };
+
+              return (
+                <div style={{background:"#0a0e14",border:"1px solid #00ff8825",borderRadius:8,padding:13,animation:"fadeIn .2s"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:10}}>
+                    <div style={{width:5,height:5,borderRadius:"50%",background:"#00ff88"}}/>
+                    <span style={{fontFamily:"monospace",fontSize:10,color:"#00ff88",letterSpacing:"0.07em"}}>PLACE ORDER — {closeLabel} · {orig.account}</span>
+                    {orig && <span style={{fontSize:10,color:"#8b949e",fontFamily:"monospace"}}>{fTitle(orig)}</span>}
+                    <button onClick={()=>{setShowForm(false);setClosingId(null);setOrderPreview(null);setOrderError(null);setOrderSuccess(null);}} style={{marginLeft:"auto",background:"transparent",border:"none",color:"#555",cursor:"pointer",fontSize:14}}>✕</button>
+                  </div>
+                  {!orderSuccess ? (
+                    <div>
+                      {/* Controls */}
+                      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
+                        <div>
+                          <div style={{fontSize:8,color:"#3a4050",letterSpacing:"0.08em",marginBottom:4}}>QTY</div>
+                          <div style={{display:"flex",alignItems:"center",gap:4}}>
+                            <button onClick={()=>setOrderControls(c=>({...c,qty:Math.max(1,(c.qty||orig.qty)-1)}))} style={{width:22,height:22,background:"#21262d",color:"#e6edf3",border:"none",borderRadius:3,cursor:"pointer"}}>−</button>
+                            <span style={{fontFamily:"monospace",fontSize:13,color:"#e6edf3",minWidth:20,textAlign:"center"}}>{orderControls.qty||orig.qty}</span>
+                            <button onClick={()=>setOrderControls(c=>({...c,qty:Math.min(orig.qty,(c.qty||orig.qty)+1)}))} style={{width:22,height:22,background:"#21262d",color:"#e6edf3",border:"none",borderRadius:3,cursor:"pointer"}}>+</button>
+                          </div>
+                        </div>
+                        {[["ORDER TYPE",["LIMIT","MARKET"],"orderType","#ffd166"],["DURATION",[["DAY","Day"],["GTC","GTC"]],"duration","#58a6ff"]].map(([label,opts,key,color])=>(
+                          <div key={key}>
+                            <div style={{fontSize:8,color:"#3a4050",letterSpacing:"0.08em",marginBottom:4}}>{label}</div>
+                            <div style={{display:"flex"}}>
+                              {opts.map(o=>{const[val,lbl]=Array.isArray(o)?o:[o,o];return(
+                                <button key={val} onClick={()=>setOrderControls(c=>({...c,[key]:val}))}
+                                  style={{background:orderControls[key]===val?color+"22":"transparent",color:orderControls[key]===val?color:"#555",border:"1px solid #21262d",borderRadius:val===opts[0]||val===opts[0]?.[0]?"4px 0 0 4px":"0 4px 4px 0",padding:"4px 10px",fontSize:10,fontFamily:"monospace",cursor:"pointer"}}>{lbl}</button>
+                              );})}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      {/* Bid/Mid/Ask after preview */}
+                      {orderPreview?.livePrice && orderControls.orderType==="LIMIT" && (
+                        <div style={{background:"#080c12",border:"1px solid #21262d",borderRadius:6,padding:"8px 10px",marginBottom:10}}>
+                          <div style={{fontSize:8,color:"#3a4050",letterSpacing:"0.08em",marginBottom:6}}>LIMIT PRICE</div>
+                          <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                            {[["Bid",orderPreview.livePrice.bid,"#ff4560"],["Mid",orderPreview.livePrice.mid,"#00ff88"],["Ask",orderPreview.livePrice.ask,"#58a6ff"]].map(([lbl,val,color])=>(
+                              <button key={lbl} onClick={()=>setOrderControls(c=>({...c,limitPrice:Math.round(val*100)/100}))}
+                                style={{background:Math.abs((orderControls.limitPrice||0)-val)<0.005?color+"22":"transparent",color,border:`1px solid ${color}44`,borderRadius:4,padding:"3px 10px",fontSize:10,fontFamily:"monospace",cursor:"pointer",fontWeight:600}}>
+                                {lbl} ${val?.toFixed(2)}
+                              </button>
+                            ))}
+                            <button onClick={()=>setOrderControls(c=>({...c,limitPrice:Math.max(0.01,Math.round(((c.limitPrice||0)-0.01)*100)/100)}))} style={{background:"#21262d",color:"#e6edf3",border:"none",borderRadius:3,width:22,height:22,cursor:"pointer",fontSize:13}}>−</button>
+                            <span style={{fontFamily:"monospace",fontSize:13,color:"#ffd166",minWidth:40,textAlign:"center"}}>${(orderControls.limitPrice||0).toFixed(2)}</span>
+                            <button onClick={()=>setOrderControls(c=>({...c,limitPrice:Math.round(((c.limitPrice||0)+0.01)*100)/100}))} style={{background:"#21262d",color:"#e6edf3",border:"none",borderRadius:3,width:22,height:22,cursor:"pointer",fontSize:13}}>+</button>
+                            <input type="number" step="0.01" min="0.01" value={orderControls.limitPrice||""} onChange={e=>setOrderControls(c=>({...c,limitPrice:+e.target.value}))} style={{width:64,background:"#161b22",color:"#ffd166",border:"1px solid #30363d",borderRadius:4,padding:"3px 6px",fontFamily:"monospace",fontSize:11}}/>
+                          </div>
+                        </div>
+                      )}
+                      {/* Position summary */}
+                      {orderPreview && (
+                        <div style={{background:"#080c12",border:"1px solid #21262d",borderRadius:6,padding:"8px 10px",marginBottom:10,fontFamily:"monospace",fontSize:11}}>
+                          <div style={{fontSize:8,color:"#3a4050",letterSpacing:"0.08em",marginBottom:6}}>POSITION SUMMARY</div>
+                          <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
+                            {[
+                              ["Opened At", orig.premium != null ? (orig.premium >= 0 ? "+$"+orig.premium.toFixed(2) : "-$"+Math.abs(orig.premium).toFixed(2)) : "—", orig.premium >= 0 ? "#00ff88" : "#ff4560"],
+                              ["Stock Price", stocksData[orig.stock?.toUpperCase()]?.currentPrice ? "$"+(stocksData[orig.stock?.toUpperCase()].currentPrice.toFixed(2)) : "—", "#e6edf3"],
+                              ["Est. Cost", orderControls.limitPrice ? "$"+(orderControls.limitPrice*(orderControls.qty||orig.qty)*100).toFixed(2) : "—", "#ffd166"],
+                              ["Est. Profit", (() => {
+                                if (!orderControls.limitPrice) return "—";
+                                const closeQty = orderControls.qty || orig.qty;
+                                const openQty  = orig.qty || 1;
+                                const proratedPrem = Math.abs(orig.premium||0) * (closeQty/openQty);
+                                const closeCost = orderControls.limitPrice * closeQty * 100;
+                                const profit = orig.optType==="STO" ? proratedPrem - closeCost : closeCost - proratedPrem;
+                                return (profit>=0?"+":"")+`$${profit.toFixed(2)}`;
+                              })(), (() => {
+                                if (!orderControls.limitPrice) return "#555";
+                                const closeQty = orderControls.qty || orig.qty;
+                                const openQty  = orig.qty || 1;
+                                const proratedPrem = Math.abs(orig.premium||0) * (closeQty/openQty);
+                                const closeCost = orderControls.limitPrice * closeQty * 100;
+                                const profit = orig.optType==="STO" ? proratedPrem - closeCost : closeCost - proratedPrem;
+                                return profit >= 0 ? "#00ff88" : "#ff4560";
+                              })()],
+                            ].map(([label,val,color])=>(
+                              <div key={label}>
+                                <div style={{fontSize:8,color:"#3a4050",letterSpacing:"0.06em"}}>{label}</div>
+                                <div style={{color}}>{val}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {orderError && <div style={{fontSize:11,color:"#ff4560",marginBottom:8,fontFamily:"monospace"}}>⚠ {orderError}</div>}
+                      {!orderPreview ? (
+                        <button onClick={fetchPreview} disabled={orderLoading}
+                          style={{background:"#ffd166",color:"#010409",border:"none",borderRadius:6,padding:"7px 18px",fontSize:11,fontWeight:700,fontFamily:"monospace",cursor:orderLoading?"wait":"pointer"}}>
+                          {orderLoading?"Fetching…":"Get Live Price →"}
+                        </button>
+                      ) : (
+                        <div>
+                          <div style={{fontSize:10,color:"#ffd166",fontFamily:"monospace",marginBottom:8}}>⚠ Review carefully. Dry Run logs without submitting. Live submits to {orig.account}.</div>
+                          <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
+                            <button onClick={()=>approveOrder(true)} disabled={orderLoading} style={{background:"#58a6ff22",color:"#58a6ff",border:"1px solid #58a6ff44",borderRadius:6,padding:"7px 14px",fontSize:11,fontWeight:700,fontFamily:"monospace",cursor:"pointer"}}>{orderLoading?"…":"🧪 Dry Run"}</button>
+                            <button onClick={()=>approveOrder(false)} disabled={orderLoading} style={{background:"#00ff8822",color:"#00ff88",border:"1px solid #00ff8844",borderRadius:6,padding:"7px 14px",fontSize:11,fontWeight:700,fontFamily:"monospace",cursor:"pointer"}}>{orderLoading?"Submitting…":`✅ Submit to ${orig.account}`}</button>
+                            <button onClick={()=>{setOrderPreview(null);setOrderError(null);}} style={{background:"transparent",color:"#555",border:"1px solid #21262d",borderRadius:6,padding:"7px 13px",fontSize:11,cursor:"pointer"}}>← Back</button>
+                            <button onClick={()=>setShowRawJson(v=>!v)} style={{background:"transparent",color:"#3a4050",border:"1px solid #21262d",borderRadius:6,padding:"7px 13px",fontSize:11,cursor:"pointer",fontFamily:"monospace"}}>{showRawJson?"▲ Hide":"{ } JSON"}</button>
+                          </div>
+                          {showRawJson && (() => {
+                            const closingAction = orig.optType === "STO" ? (isETrade ? "BUY_CLOSE" : "BUY_TO_CLOSE") : (isETrade ? "SELL_CLOSE" : "SELL_TO_CLOSE");
+                            const expires = new Date(orig.expires||"");
+                            const payload = isETrade ? {
+                              PreviewOrderRequest: {
+                                orderType:"OPTN", clientOrderId:`app_preview`,
+                                Order:[{ priceType: orderControls.orderType==="MARKET"?"MARKET":"LIMIT",
+                                  ...(orderControls.orderType!=="MARKET"&&orderControls.limitPrice?{limitPrice:orderControls.limitPrice}:{}),
+                                  orderTerm: orderControls.duration==="GTC"?"GOOD_UNTIL_CANCEL":"GOOD_FOR_DAY",
+                                  marketSession:"REGULAR",
+                                  Instrument:[{Product:{securityType:"OPTN",symbol:orig.stock,callPut:orig.type?.toUpperCase(),expiryYear:expires.getFullYear(),expiryMonth:expires.getMonth()+1,expiryDay:expires.getDate(),strikePrice:orig.strike},orderAction:closingAction,quantityType:"QUANTITY",quantity:orderControls.qty||orig.qty}]
+                                }]
+                              }
+                            } : {
+                              orderType: orderControls.orderType,
+                              session: "NORMAL",
+                              duration: orderControls.duration,
+                              orderStrategyType: "SINGLE",
+                              ...(orderControls.orderType==="LIMIT"&&orderControls.limitPrice?{price:(orderControls.limitPrice).toFixed(2)}:{}),
+                              ...(orderControls.specialInstruction!=="NONE"?{specialInstruction:orderControls.specialInstruction}:{}),
+                              orderLegCollection:[{instruction:closingAction,quantity:orderControls.qty||orig.qty,instrument:{symbol:`${orig.stock?.toUpperCase().padEnd(6)}${orig.expires?.replace(/-/g,"").slice(2)}${orig.type==="Call"?"C":"P"}${((orig.strike||0)*1000).toFixed(0).padStart(8,"0")}`,assetType:"OPTION"}}],
+                            };
+                            return <pre style={{marginTop:8,background:"#080c12",border:"1px solid #21262d",borderRadius:5,padding:"8px",fontSize:9,color:"#8b949e",fontFamily:"monospace",overflowX:"auto",whiteSpace:"pre-wrap"}}>{JSON.stringify(payload,null,2)}</pre>;
+                          })()}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div>
+                      <div style={{fontSize:13,color:"#00ff88",fontFamily:"monospace",marginBottom:8}}>{orderSuccess}</div>
+                      <button onClick={()=>{setShowForm(false);setClosingId(null);setOrderPreview(null);setOrderSuccess(null);}} style={{background:"transparent",color:"#555",border:"1px solid #21262d",borderRadius:6,padding:"7px 13px",fontSize:11,cursor:"pointer"}}>Done</button>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
             <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
               <select value={fStatus} onChange={e=>setFStatus(e.target.value)} style={{width:85,fontSize:11,padding:"3px 5px"}}><option value="All">All</option><option value="Open">Open</option><option value="Closed">Closed</option></select>
               <select value={fAcct} onChange={e=>setFAcct(e.target.value)} style={{width:100,fontSize:11,padding:"3px 5px"}}><option value="All">All Accounts</option><option>Schwab</option><option>Etrade</option></select>
@@ -2858,11 +3550,11 @@ ${JSON.stringify(summary, null, 1)}`;
                               </td>;
                             }
                             case "mktValue": {
-                              // Mkt Value = qty * last option price * 100
+                              // Mkt Value = qty * mark (mid) * 100
                               if (c.status!=="Open") return <td key="mktValue" style={{padding:"5px 8px",textAlign:"right",color:"#1c2128",fontFamily:"monospace"}}>—</td>;
                               const lo = getLiveOption(c);
-                              const last = lo?.last ?? lo?.bid ?? null;
-                              const mv = last != null ? (c.qty||1) * last * 100 : null;
+                              const price = lo?.mark ?? lo?.last ?? lo?.bid ?? null;
+                              const mv = price != null ? (c.qty||1) * price * 100 : null;
                               return <td key="mktValue" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:mv!=null?"#c9d1d9":"#555"}}>
                                 {mv!=null ? f$(mv) : "—"}
                               </td>;
@@ -2873,7 +3565,7 @@ ${JSON.stringify(summary, null, 1)}`;
                               // For BTO: gain = mktValue - premium (positive = good, option gained value)
                               if (c.status!=="Open") return <td key="liveGain" style={{padding:"5px 8px",textAlign:"right",color:"#1c2128",fontFamily:"monospace"}}>—</td>;
                               const lo = getLiveOption(c);
-                              const last = lo?.last ?? lo?.bid ?? null;
+                              const last = lo?.mark ?? lo?.last ?? lo?.bid ?? null;
                               if (last == null || c.premium == null) return <td key="liveGain" style={{padding:"5px 8px",textAlign:"right",color:"#555",fontFamily:"monospace"}}>—</td>;
                               const mv   = (c.qty||1) * last * 100;
                               const prem = Math.abs(c.premium);
@@ -2885,7 +3577,7 @@ ${JSON.stringify(summary, null, 1)}`;
                             case "liveGainPct": {
                               if (c.status!=="Open") return <td key="liveGainPct" style={{padding:"5px 8px",textAlign:"right",color:"#1c2128",fontFamily:"monospace"}}>—</td>;
                               const lo = getLiveOption(c);
-                              const last = lo?.last ?? lo?.bid ?? null;
+                              const last = lo?.mark ?? lo?.last ?? lo?.bid ?? null;
                               if (last == null || !c.premium) return <td key="liveGainPct" style={{padding:"5px 8px",textAlign:"right",color:"#555",fontFamily:"monospace"}}>—</td>;
                               const mv   = (c.qty||1) * last * 100;
                               const prem = Math.abs(c.premium);
@@ -2899,7 +3591,7 @@ ${JSON.stringify(summary, null, 1)}`;
                               if (c.status!=="Open") return <td key="signal" style={{padding:"5px 8px"}}></td>;
                               const bd  = getContractBand(c);
                               const lo  = getLiveOption(c);
-                              const last = lo?.last ?? lo?.bid ?? null;
+                              const last = lo?.mark ?? lo?.last ?? lo?.bid ?? null;
                               if (!bd || last == null || !c.premium) return <td key="signal" style={{padding:"5px 8px",color:"#1c2128",fontSize:10,fontFamily:"monospace"}}>—</td>;
                               const mv      = (c.qty||1) * last * 100;
                               const prem    = Math.abs(c.premium);
@@ -2945,6 +3637,105 @@ ${JSON.stringify(summary, null, 1)}`;
                 </tbody>
               </table>
             </div>
+
+            {/* ── Pending Orders ── */}
+            {(() => {
+              const activeOrders = tradeOrders.filter(o => ["pending_approval","dry_run_approved","submitted"].includes(o.status));
+              if (!activeOrders.length && !ordersLoading) return null;
+              return (
+                <div style={{background:"#0a0e14",border:"1px solid #58a6ff25",borderRadius:8,padding:"10px 13px"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                    <span style={{fontSize:9,color:"#58a6ff",fontFamily:"monospace",letterSpacing:"0.08em",fontWeight:700}}>PENDING ORDERS</span>
+                    <button onClick={loadTradeOrders} disabled={ordersLoading} style={{background:"transparent",color:"#3a4050",border:"1px solid #1c2128",borderRadius:3,padding:"1px 7px",fontSize:9,fontFamily:"monospace",cursor:"pointer"}}>{ordersLoading?"…":"⟳ Refresh"}</button>
+                  </div>
+                  {activeOrders.length === 0 ? (
+                    <div style={{fontSize:10,color:"#3a4050",fontFamily:"monospace"}}>No pending orders</div>
+                  ) : (
+                    <div style={{overflowX:"auto"}}>
+                      <table style={{width:"100%",borderCollapse:"collapse",fontSize:10,fontFamily:"monospace"}}>
+                        <thead>
+                          <tr style={{borderBottom:"1px solid #1c2128"}}>
+                            {["Contract","Side","Qty","Limit","Type","Dur","Status","Dry Run","Date",""].map(h=>(
+                              <th key={h} style={{padding:"3px 8px",textAlign:"left",color:"#3a4050",fontWeight:400,fontSize:8,letterSpacing:"0.06em"}}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {activeOrders.map(o => {
+                            const statusColor = o.status==="submitted"?"#00ff88":o.status==="dry_run_approved"?"#58a6ff":"#ffd166";
+                            const sc = orderStatuses[o.id];
+                            const isExpanded = sc?.expanded;
+                            return [
+                              <tr key={`order-${o.id}`} style={{borderBottom: isExpanded?"none":"1px solid #0d1117",cursor:"pointer"}}
+                                onClick={()=>setOrderStatuses(p=>({...p,[o.id]:{...p[o.id],expanded:!p[o.id]?.expanded}}))}>
+                                <td style={{padding:"4px 8px",color:"#e6edf3",fontWeight:600}}>{o.ticker} ${o.strike} {o.type} {o.expires}</td>
+                                <td style={{padding:"4px 8px"}}><span style={{color:o.side==="BUY"?"#ff4560":"#00ff88",fontWeight:700,fontSize:9}}>{o.opt_type}</span></td>
+                                <td style={{padding:"4px 8px",color:"#e6edf3"}}>{o.qty}</td>
+                                <td style={{padding:"4px 8px",color:"#ffd166"}}>{o.order_type==="MARKET"?"MKT":o.limit_price!=null?"$"+Number(o.limit_price).toFixed(2):"—"}</td>
+                                <td style={{padding:"4px 8px",color:"#8b949e"}}>{o.order_type||"LIMIT"}</td>
+                                <td style={{padding:"4px 8px",color:"#8b949e"}}>{o.duration==="GTC"?"GTC":"Day"}</td>
+                                <td style={{padding:"4px 8px"}}><span style={{color:statusColor,fontSize:9,fontWeight:600}}>{o.status.replace(/_/g," ").toUpperCase()}</span></td>
+                                <td style={{padding:"4px 8px",color:"#555"}}>{o.dry_run?"Yes":"—"}</td>
+                                <td style={{padding:"4px 8px",color:"#3a4050"}}>{o.created_at?.slice(0,10)}</td>
+                                <td style={{padding:"4px 8px"}} onClick={e=>e.stopPropagation()}>
+                                  <div style={{display:"flex",gap:4}}>
+                                    {o.status==="submitted" && o.schwab_order_id && (
+                                      <button onClick={async()=>{
+                                        setOrderStatuses(p=>({...p,[o.id]:{...p[o.id],loading:true}}));
+                                        try {
+                                          const r = await fetch(`/api/schwab-orders?action=status&orderId=${o.id}&secret=${encodeURIComponent("mYs3cr3tK3y2026!")}`);
+                                          const data = await r.json();
+                                          setOrderStatuses(p=>({...p,[o.id]:{...p[o.id],loading:false,result:data}}));
+                                          loadTradeOrders();
+                                        } catch(e) { setOrderStatuses(p=>({...p,[o.id]:{...p[o.id],loading:false,result:{error:e.message}}})); }
+                                      }} disabled={sc?.loading}
+                                        style={{background:"#58a6ff14",color:"#58a6ff",border:"1px solid #58a6ff30",borderRadius:3,padding:"2px 7px",fontSize:9,cursor:"pointer"}}>
+                                        {sc?.loading?"…":"⟳"}
+                                      </button>
+                                    )}
+                                    <button onClick={()=>cancelTradeOrder(o.id)}
+                                      style={{background:orderStatuses[o.id]?.confirmCancel?"#ff4560":"#ff456014",color:orderStatuses[o.id]?.confirmCancel?"#fff":"#ff4560",border:"1px solid #ff456030",borderRadius:3,padding:"2px 7px",fontSize:9,cursor:"pointer",transition:"all 0.2s"}}
+                                      onClickCapture={e=>{
+                                        if (!orderStatuses[o.id]?.confirmCancel) {
+                                          e.stopPropagation();
+                                          setOrderStatuses(p=>({...p,[o.id]:{...p[o.id],confirmCancel:true}}));
+                                          setTimeout(()=>setOrderStatuses(p=>({...p,[o.id]:{...p[o.id],confirmCancel:false}})),3000);
+                                        }
+                                      }}>
+                                      {orderStatuses[o.id]?.confirmCancel?"Confirm?":"Cancel"}
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>,
+                              isExpanded && (
+                                <tr key={`detail-${o.id}`} style={{borderBottom:"1px solid #0d1117"}}>
+                                  <td colSpan={10} style={{padding:"4px 8px 8px"}}>
+                                    <pre style={{background:"#080c12",border:"1px solid #21262d",borderRadius:4,padding:"7px",fontFamily:"monospace",fontSize:9,color:"#8b949e",overflowX:"auto",whiteSpace:"pre-wrap",margin:0}}>
+                                      {JSON.stringify(o.raw_request||{},null,2)}
+                                    </pre>
+                                    {o.schwab_order_id && <div style={{fontSize:9,color:"#3a4050",fontFamily:"monospace",marginTop:4}}>Order ID: {o.schwab_order_id}</div>}
+                                    {sc?.result && (
+                                      <div style={{marginTop:6,padding:"5px 8px",background:"#080c12",border:`1px solid ${sc.result.error?"#ff456030":sc.result.schwabStatus==="FILLED"?"#00ff8830":"#58a6ff30"}`,borderRadius:4,fontFamily:"monospace",fontSize:10}}>
+                                        {sc.result.error ? <span style={{color:"#ff4560"}}>⚠ {sc.result.error}</span> : (
+                                          <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+                                            <div><span style={{color:"#3a4050"}}>Status: </span><span style={{color:sc.result.schwabStatus==="FILLED"?"#00ff88":sc.result.schwabStatus==="CANCELED"?"#ff4560":"#ffd166",fontWeight:700}}>{sc.result.schwabStatus||"—"}</span></div>
+                                            {o.schwab_order_id && <div><span style={{color:"#3a4050"}}>ID: </span><span style={{color:"#555"}}>{o.schwab_order_id}</span></div>}
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+                                  </td>
+                                </tr>
+                              )
+                            ];
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         )}
 
@@ -3508,74 +4299,59 @@ ${JSON.stringify(summary, null, 1)}`;
                         })}
                       </div>
                     )}
-                    {/* Option chain — on demand with controls */}
+                    {/* Option chain — inline component */}
                     {(() => {
-                      const wCtrl = getChainControl(selectedWatchTicker);
-                      const wKey = `${selectedWatchTicker}|live`;
-                      const wChain = etradeChains[wKey];
-                      const wCalls = wChain?.calls || allCalls;
-                      const wPuts  = wChain?.puts  || allPuts;
-                      const wBtnStyle = (active) => ({fontSize:8,fontFamily:"monospace",padding:"2px 6px",borderRadius:3,border:"1px solid #21262d",cursor:"pointer",background:active?"#58a6ff20":"transparent",color:active?"#58a6ff":"#3a4050"});
                       return (
-                      <div>
-                        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6,flexWrap:"wrap"}}>
-                          <span style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.06em"}}>OPTION CHAIN</span>
-                          <span style={{fontSize:7,color:"#3a4050",fontFamily:"monospace"}}>±</span>
-                          {[3,5,7,10].map(n=><button key={n} onClick={()=>{setChainControl(selectedWatchTicker,"strikes",n);fetchChainForTicker(selectedWatchTicker,n,wCtrl.dates);}} style={wBtnStyle(wCtrl.strikes===n)}>{n}</button>)}
-                          <span style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",marginLeft:4}}>dates</span>
-                          {[3,5,7,10].map(n=><button key={n} onClick={()=>{setChainControl(selectedWatchTicker,"dates",n);fetchChainForTicker(selectedWatchTicker,wCtrl.strikes,n);}} style={wBtnStyle(wCtrl.dates===n)}>{n}</button>)}
-                          <button onClick={()=>fetchChainForTicker(selectedWatchTicker,wCtrl.strikes,wCtrl.dates)} style={{fontSize:8,padding:"2px 8px",borderRadius:3,border:"1px solid #58a6ff30",cursor:"pointer",background:"#58a6ff14",color:"#58a6ff",fontFamily:"monospace"}}>⟳</button>
-                        </div>
-                        {wCalls.length === 0 && wPuts.length === 0 && <div style={{fontSize:9,color:"#3a4050",fontFamily:"monospace"}}>Click ⟳ to fetch chain</div>}
-                        {(wCalls.length > 0 || wPuts.length > 0) &&
-                        ((() => {
-                          const allOpts = [...wCalls,...wPuts];
-                          const expiries = [...new Set(allOpts.map(o=>o.expiryDate))].sort();
-                          const thS = {padding:"3px 5px",textAlign:"right",color:"#3a4050",borderBottom:"1px solid #1c2128",fontSize:7};
-                          return expiries.map(exp => {
-                            const cs = wCalls.filter(o=>o.expiryDate===exp).sort((a,b)=>a.strike-b.strike);
-                            const ps = wPuts.filter(o=>o.expiryDate===exp).sort((a,b)=>a.strike-b.strike);
-                            const strikes = [...new Set([...cs.map(o=>o.strike),...ps.map(o=>o.strike)])].sort((a,b)=>a-b);
-                            const cm = Object.fromEntries(cs.map(o=>[o.strike,o]));
-                            const pm = Object.fromEntries(ps.map(o=>[o.strike,o]));
-                            return (
-                              <div key={exp} style={{marginBottom:8}}>
-                                <div onClick={()=>toggleChainDate(selectedWatchTicker,exp)} style={{padding:"3px 6px",fontSize:8,color:"#58a6ff",fontFamily:"monospace",background:"#58a6ff10",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",userSelect:"none"}}>
-                                  <span>{exp}</span>
-                                  <span style={{fontSize:9,color:"#3a4050"}}>{isChainDateCollapsed(selectedWatchTicker,exp)?"▶":"▼"}</span>
-                                </div>
-                                {!isChainDateCollapsed(selectedWatchTicker,exp) && <div style={{overflowX:"auto"}}>
-                                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:8,fontFamily:"monospace"}}>
-                                    <thead><tr>
-                                      <th style={{...thS,color:"#00ff8870"}}>Bid</th><th style={{...thS,color:"#00ff8870"}}>Ask</th><th style={{...thS,color:"#00ff8870"}}>Δ</th>
-                                      <th style={{...thS,color:"#ffd166",textAlign:"center",background:"#0d1117"}}>STRIKE</th>
-                                      <th style={{...thS,color:"#ff456070"}}>Δ</th><th style={{...thS,color:"#ff456070"}}>Ask</th><th style={{...thS,color:"#ff456070"}}>Bid</th>
-                                    </tr></thead>
-                                    <tbody>
-                                      {strikes.map(s=>{
-                                        const c=cm[s]; const p=pm[s];
-                                        const wAddCall = () => { openPlanForm(selectedWatchTicker, {action:"STO",type:"Call",strike:s,expiration:exp}); setTab("plan"); };
-                                      const wAddPut  = () => { openPlanForm(selectedWatchTicker, {action:"STO",type:"Put", strike:s,expiration:exp}); setTab("plan"); };
-                                      return <tr key={s} style={{borderTop:"1px solid #0d1117"}}>
-                                          <td onClick={c?wAddCall:undefined} style={{padding:"2px 5px",textAlign:"right",color:"#00ff88",cursor:c?"pointer":"default",userSelect:"none"}} title={c?"Add Call to plan":undefined}>{c?.bid!=null?`${f$(c.bid)} +`:"—"}</td>
-                                          <td style={{padding:"2px 5px",textAlign:"right",color:"#58a6ff"}}>{c?.ask!=null?f$(c.ask):"—"}</td>
-                                          <td style={{padding:"2px 5px",textAlign:"right",color:"#58a6ff"}}>{c?.delta!=null?c.delta.toFixed(2):"—"}</td>
-                                          <td style={{padding:"2px 5px",textAlign:"center",fontWeight:700,color:"#ffd166",background:"#0d1117"}}>{f$(s)}</td>
-                                          <td style={{padding:"2px 5px",textAlign:"right",color:"#ff4560"}}>{p?.delta!=null?p.delta.toFixed(2):"—"}</td>
-                                          <td style={{padding:"2px 5px",textAlign:"right",color:"#58a6ff"}}>{p?.ask!=null?f$(p.ask):"—"}</td>
-                                          <td onClick={p?wAddPut:undefined} style={{padding:"2px 5px",textAlign:"right",color:"#ff4560",cursor:p?"pointer":"default",userSelect:"none"}} title={p?"Add Put to plan":undefined}>{p?.bid!=null?`+ ${f$(p.bid)}`:"—"}</td>
-                                        </tr>;
-                                      })}
-                                    </tbody>
-                                  </table>
-                                </div>}
-                              </div>
-                            );
-                          });
-                        })()
-                        )}
+                        <div>
+                          <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
+                            <span style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.06em"}}>OPTION CHAIN</span>
+                            <a href={`https://options-chain.vercel.app/?ticker=${selectedWatchTicker}`} target="_blank" rel="noreferrer"
+                              style={{fontSize:8,fontFamily:"monospace",color:"#58a6ff",textDecoration:"none",padding:"2px 7px",border:"1px solid #58a6ff30",borderRadius:3,background:"#58a6ff10"}}>
+                              ↗ Open Full
+                            </a>
+                          </div>
+                          {/* Option chain — inline component */}
+                          <div style={{borderRadius:6,overflow:"hidden",border:"1px solid #21262d"}}>
+                            <OptionsChainComponent
+                              initialTicker={selectedWatchTicker}
+                              onTrade={trade => setChainTradeOrder(trade)}
+                            />
+                          </div>
 
-                      </div>
+                          {/* Order panel from chain click */}
+                          {chainTradeOrder && chainTradeOrder.ticker === selectedWatchTicker && (
+                            <div style={{marginTop:10,background:"#0a0e14",border:"1px solid #00ff8830",borderRadius:8,padding:13,animation:"fadeIn .2s"}}>
+                              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+                                <div style={{width:5,height:5,borderRadius:"50%",background:"#00ff88"}}/>
+                                <span style={{fontFamily:"monospace",fontSize:10,color:"#00ff88",letterSpacing:"0.07em"}}>
+                                  STO — {chainTradeOrder.ticker} ${chainTradeOrder.strike} {chainTradeOrder.optType} {chainTradeOrder.expiry}
+                                </span>
+                                <button onClick={()=>setChainTradeOrder(null)} style={{marginLeft:"auto",background:"transparent",border:"none",color:"#555",cursor:"pointer",fontSize:14}}>✕</button>
+                              </div>
+                              <div style={{display:"flex",gap:16,marginBottom:10,fontFamily:"monospace",fontSize:11}}>
+                                {[["Bid",`$${chainTradeOrder.bid}`,"#ff4560"],["Mid",`$${chainTradeOrder.mid}`,"#00ff88"],["Ask",`$${chainTradeOrder.ask}`,"#58a6ff"]].map(([l,v,c])=>(
+                                  <div key={l}><div style={{fontSize:8,color:"#3a4050"}}>{l}</div><div style={{color:c,fontWeight:600}}>{v}</div></div>
+                                ))}
+                              </div>
+                              <div style={{fontSize:10,color:"#8b949e",fontFamily:"monospace",marginBottom:10}}>
+                                Select account to place this STO order:
+                              </div>
+                              <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
+                                {["Schwab","ETrade 6917","ETrade 8222"].map(acct => (
+                                  <button key={acct} onClick={()=>{
+                                    // Find or create a synthetic contract to open the order form
+                                    // For now navigate to contracts tab with a pre-filled new order
+                                    alert(`Opening new STO order for ${chainTradeOrder.ticker} $${chainTradeOrder.strike} ${chainTradeOrder.optType} ${chainTradeOrder.expiry} on ${acct}.\n\nNote: New STO order placement (opening new positions) coming soon. Currently the order flow supports closing existing open contracts.`);
+                                    setChainTradeOrder(null);
+                                  }}
+                                    style={{background:"#21262d",color:"#e6edf3",border:"1px solid #30363d",borderRadius:6,padding:"6px 14px",fontSize:11,fontFamily:"monospace",cursor:"pointer"}}>
+                                    {acct}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       );
                     })()}
                   </div>
@@ -3631,7 +4407,7 @@ ${JSON.stringify(summary, null, 1)}`;
                         <td style={{padding:"5px 8px"}}>
                           {(() => {
                             const lo   = getLiveOption(c);
-                            const last = lo?.last ?? lo?.bid ?? null;
+                            const last = lo?.mark ?? lo?.last ?? lo?.bid ?? null;
                             if (!bd||last==null||!c.premium) return <span style={{color:"#1c2128",fontSize:9,fontFamily:"monospace"}}>—</span>;
                             const mv      = (c.qty||1)*last*100;
                             const prem    = Math.abs(c.premium);
@@ -4567,9 +5343,47 @@ ${JSON.stringify(summary, null, 1)}`;
 
 
         {/* ══ IMPORT ══ */}
-        {tab==="import" && <ImportTab supabase={supabase} tradeRules={tradeRules} />}
+        {tab==="import" && <ImportTab supabase={supabase} tradeRules={tradeRules} authUser={authUser?.name || authUser?.id || "user"} persistedState={importState} onStateChange={setImportState} />}
+        {tab==="pending" && <PendingTab supabase={supabase} tradeRules={tradeRules} authUser={authUser?.name || authUser?.id || "user"} />}
 
+        {/* Bottom padding so content isn't hidden behind mobile ribbon */}
+        <div style={{height:70}}/>
       </div>
     </div>
+
+    {/* ── Mobile bottom ribbon ──────────────────────────────────────────── */}
+    <div style={{
+      position:"fixed", bottom:0, left:0, right:0, zIndex:9000,
+      background:"#0a0e14", borderTop:"1px solid #1c2128",
+      display:"flex", alignItems:"stretch",
+      paddingBottom:"env(safe-area-inset-bottom)",
+    }}>
+      {[
+        {id:"dashboard", icon:"📊", label:"Dash"},
+        {id:"contracts", icon:"📋", label:"Contracts"},
+        {id:"analytics", icon:"📈", label:"Analytics"},
+        {id:"plan",      icon:"🗓", label:"Plan"},
+        {id:"stocks",    icon:"💹", label:"Stocks"},
+        {id:"import",    icon:"⬇", label:"Import"},
+      ].map(({id, icon, label}) => (
+        <button key={id} onClick={()=>setTab(id)}
+          style={{
+            flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
+            gap:2, padding:"8px 2px 6px", border:"none", background:"transparent",
+            color: tab===id ? "#00ff88" : "#444",
+            borderTop: tab===id ? "2px solid #00ff88" : "2px solid transparent",
+            cursor:"pointer", position:"relative",
+            transition:"color 0.15s",
+          }}>
+          <span style={{fontSize:18, lineHeight:1}}>{icon}</span>
+          <span style={{fontSize:9, fontFamily:"monospace", letterSpacing:"0.03em", textTransform:"uppercase"}}>{label}</span>
+          {id==="import" && pendingCount > 0 && (
+            <span style={{position:"absolute",top:4,right:"calc(50% - 14px)",background:"#ff6b2b",color:"#fff",borderRadius:8,fontSize:7,fontWeight:700,padding:"1px 4px",lineHeight:1.4}}>{pendingCount}</span>
+          )}
+        </button>
+      ))}
+    </div>
+    </>
   );
 }
+

@@ -540,24 +540,23 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
       setMeta({ ...schwabData.meta, total: txs.length });
       setChecked(new Set());
 
-      // Load committed IDs for filter - check both tables
+      // Load committed IDs - query only the IDs we just fetched for accuracy
       try {
-        const cutoff = new Date();
-        cutoff.setDate(cutoff.getDate() - 90); // last 90 days
-        const cutoffStr = cutoff.toISOString().slice(0,10);
-        const [{ data: fromContracts }, { data: fromPending }] = await Promise.all([
-          supabase.from("contracts").select("schwab_transaction_id")
-            .not("schwab_transaction_id","is",null)
-            .gte("date_exec", cutoffStr),
-          supabase.from("pending_transactions").select("schwab_transaction_id")
-            .not("schwab_transaction_id","is",null),
-        ]);
-        const ids = new Set([
-          ...(fromContracts||[]).map(r => String(r.schwab_transaction_id)),
-          ...(fromPending||[]).map(r => String(r.schwab_transaction_id)),
-        ]);
-        setCommittedIds(ids);
-        console.log("[Import] committedIds sample:", [...ids].filter(id=>id.startsWith("etrade_")).slice(0,5));
+        const fetchedIds = txs.map(t => t.schwabTransactionId).filter(Boolean).map(String);
+        if (fetchedIds.length > 0) {
+          const { data: fromContracts } = await supabase.from("contracts")
+            .select("schwab_transaction_id")
+            .in("schwab_transaction_id", fetchedIds);
+          const { data: fromPending } = await supabase.from("pending_transactions")
+            .select("schwab_transaction_id")
+            .in("schwab_transaction_id", fetchedIds);
+          const ids = new Set([
+            ...(fromContracts||[]).map(r => String(r.schwab_transaction_id)),
+            ...(fromPending||[]).map(r => String(r.schwab_transaction_id)),
+          ]);
+          setCommittedIds(ids);
+          console.log("[Import] committedIds from fetch:", ids.size, [...ids].slice(0,3));
+        }
       } catch(e) { console.warn("committedIds load failed:", e.message); }
 
       setMode("review");
