@@ -339,7 +339,7 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
   const ruleNames = rulesList.map(r => r.name || r.title || r.rule).filter(Boolean);
   const [mode,         setMode]         = useState(() => (persistedState?.transactions?.length > 0) ? "review" : "config");
   const [testMode,     setTestMode]     = useState(false);
-  const [rangeType,    setRangeType]    = useState("days");
+  const [rangeType,    setRangeType]    = useState("dates");
   const [days,         setDays]         = useState(defaultDays);
   const [startDate,    setStartDate]    = useState("");
   const [endDate,      setEndDate]      = useState("");
@@ -540,12 +540,24 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
       setMeta({ ...schwabData.meta, total: txs.length });
       setChecked(new Set());
 
-      // Load committed IDs for filter
+      // Load committed IDs for filter - check both tables
       try {
-        const { data } = await supabase.from("pending_transactions")
-          .select("schwab_transaction_id")
-          .not("schwab_transaction_id", "is", null);
-        setCommittedIds(new Set((data||[]).map(r => String(r.schwab_transaction_id))));
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - 90); // last 90 days
+        const cutoffStr = cutoff.toISOString().slice(0,10);
+        const [{ data: fromContracts }, { data: fromPending }] = await Promise.all([
+          supabase.from("contracts").select("schwab_transaction_id")
+            .not("schwab_transaction_id","is",null)
+            .gte("date_exec", cutoffStr),
+          supabase.from("pending_transactions").select("schwab_transaction_id")
+            .not("schwab_transaction_id","is",null),
+        ]);
+        const ids = new Set([
+          ...(fromContracts||[]).map(r => String(r.schwab_transaction_id)),
+          ...(fromPending||[]).map(r => String(r.schwab_transaction_id)),
+        ]);
+        setCommittedIds(ids);
+        console.log("[Import] committedIds sample:", [...ids].filter(id=>id.startsWith("etrade_")).slice(0,5));
       } catch(e) { console.warn("committedIds load failed:", e.message); }
 
       setMode("review");
@@ -862,7 +874,7 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
     return (
       <div style={page}>
         <div style={{ maxWidth: 580, margin: "0 auto" }}>
-          {PendingSection}
+
           {/* Header */}
           <div style={{ marginBottom: 24 }}>
             <div style={{ fontSize: 10, color: C.dimText, letterSpacing: "0.12em", marginBottom: 4 }}>
@@ -962,9 +974,9 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
       <div style={{ ...page, display: "flex", alignItems: "center", justifyContent: "center" }}>
         <div style={{ textAlign: "center" }}>
           <div style={{ fontSize: 32, marginBottom: 12 }}>⟳</div>
-          <div style={{ color: C.green, fontSize: 14 }}>Fetching from Schwab...</div>
+          <div style={{ color: C.green, fontSize: 14 }}>Fetching transactions...</div>
           <div style={{ color: C.dimText, fontSize: 11, marginTop: 6 }}>
-            Pulling transactions + stock prices
+            {rangeType === "dates" ? `${startDate} → ${endDate}` : `Last ${days} day${days !== 1 ? "s" : ""}`}
           </div>
         </div>
       </div>
@@ -977,7 +989,7 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
     return (
       <div style={page}>
         <div style={{ maxWidth: 680, margin: "0 auto" }}>
-          {PendingSection}
+
           <div style={{ ...card, border: `1px solid ${wasTest ? C.yellow + "44" : C.green + "44"}`, background: (wasTest ? C.yellow : C.green) + "08" }}>
             <div style={{ fontSize: 18, fontWeight: 700, color: wasTest ? C.yellow : C.green, marginBottom: 8 }}>
               {wasTest ? "🧪 Test Complete" : "✓ Committed Successfully"}
@@ -1051,7 +1063,6 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
 
   return (
     <div style={{ ...page, padding: "16px 20px" }}>
-      {PendingSection}
       {/* Top bar */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
         <div>
@@ -1068,14 +1079,6 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
           )}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          {/* Filter by opt type */}
-          {["ALL", "BTO", "STO", "BTC", "STC"].map(f => (
-            <button key={f} onClick={() => setFilterOptType(f)}
-              style={{ ...btn(OPT_COLORS[f] || C.muted), background: filterOptType === f ? (OPT_COLORS[f] || C.muted) + "33" : "transparent", fontSize: 11, padding: "4px 10px" }}>
-              {f}
-            </button>
-          ))}
-          <div style={{ width: 1, height: 20, background: C.border }} />
           {/* Match confidence filters */}
           {[
             { key: "ALL",       label: "All",       color: C.muted,   count: null },
