@@ -344,7 +344,7 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
   const ruleNames  = rulesList.map(r => r.name || r.title || r.rule).filter(Boolean);
   const stratNames = dbStrategies.map(s => s.name).filter(Boolean);
   const [testMode,     setTestMode]     = useState(false);
-  const [rangeType,    setRangeType]    = useState("dates");     // days | dates
+  const [rangeType,    setRangeType]    = useState("days");     // days | dates
   const [days,         setDays]         = useState(defaultDays);
   const [startDate,    setStartDate]    = useState("");
   const [endDate,      setEndDate]      = useState("");
@@ -358,8 +358,6 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
   const [filterOptType,    setFilterOptType]    = useState("ALL");
   const [matchFilter,      setMatchFilter]      = useState("ALL"); // ALL|exact|partial|split|unmatched
   const [filterAccount,    setFilterAccount]    = useState("ALL"); // ALL|Schwab|ETrade
-  const [hideCommitted,    setHideCommitted]    = useState(true);  // hide already-committed by default
-  const [committedIds,     setCommittedIds]     = useState(new Set()); // schwab_transaction_ids already in DB
   const [sortCol,          setSortCol]          = useState("dateExec");
   const [sortDir,          setSortDir]          = useState("desc");
   const [dismissed,        setDismissed]        = useState(new Set()); // _idx values
@@ -548,21 +546,6 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
       setMeta({ ...schwabData.meta, total: txs.length });
       setChecked(new Set());
 
-      // Load already-committed transaction IDs from both contracts and pending_transactions
-      try {
-        const [{ data: existing }, { data: pendingAll }] = await Promise.all([
-          supabase.from("contracts").select("schwab_transaction_id").not("schwab_transaction_id","is",null),
-          supabase.from("pending_transactions").select("schwab_transaction_id").not("schwab_transaction_id","is",null),
-        ]);
-        const ids = new Set([
-          ...(existing||[]).map(r=>String(r.schwab_transaction_id)),
-          ...(pendingAll||[]).map(r=>String(r.schwab_transaction_id)),
-        ]);
-        setCommittedIds(ids);
-        console.log("[ImportPage] committedIds loaded:", ids.size, [...ids].slice(0,3));
-        console.log("[ImportPage] sample tx ids:", txs.slice(0,3).map(t=>String(t.schwabTransactionId)));
-      } catch (e) { console.warn("[ImportPage] failed to load committed IDs:", e.message); }
-
       // ── Stage to pending_transactions for cross-device persistence ────────
       if (txs.length > 0) {
         try {
@@ -590,16 +573,14 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
             }));
 
           if (toStage.length > 0) {
-            const { error: stageErr } = await supabase
-              .from("pending_transactions")
-              .upsert(toStage, { onConflict: "schwab_transaction_id", ignoreDuplicates: true });
+            const { error: stageErr } = await supabase.from("pending_transactions").insert(toStage);
             if (stageErr) {
-              console.error("[ImportPage] staging upsert failed:", stageErr.message);
+              console.error("[ImportPage] staging insert failed:", stageErr.message, stageErr.details);
             } else {
               console.log(`[ImportPage] staged ${toStage.length} new transactions`);
             }
           } else {
-            console.log("[ImportPage] no new transactions to stage");
+            console.log("[ImportPage] no new transactions to stage (all already exist)");
           }
         } catch (e) {
           console.warn("[ImportPage] staging to pending_transactions failed:", e.message);
@@ -689,44 +670,30 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
           // Get parent opener to calc profit
           const { data: parent } = await supabase
             .from("contracts")
-            .select("id, premium, opt_type, date_exec, qty")
+            .select("id, premium, opt_type")
             .eq("id", c.parentId)
             .single();
 
           let profit = null;
           if (parent?.premium != null && c.premium != null) {
-            // Prorate parent premium by close qty vs open qty
-            const openQty  = parent.qty  || 1;
-            const closeQty = c.qty        || 1;
-            const proratedOpenCost = Math.abs(+parent.premium) * (closeQty / openQty);
             // STO opener: profit = premium received - cost to close
-            // BTO opener: profit = close proceeds - prorated open cost
+            // BTO opener: profit = close proceeds - premium paid
             profit = parent.opt_type === "STO"
-              ? proratedOpenCost - Math.abs(+c.premium)
-              : Math.abs(+c.premium) - proratedOpenCost;
+              ? Math.abs(parent.premium) - Math.abs(c.premium)
+              : Math.abs(c.premium) - Math.abs(parent.premium);
           }
 
-          const daysHeld = c.dateExec && parent?.date_exec
-            ? Math.round((new Date(c.dateExec) - new Date(parent.date_exec)) / 86400000)
-            : null;
-
-          const closeQty      = c.qty || 1;
-          const openQty       = parent?.qty || 1;
-          const proratedCost  = parent?.premium ? Math.abs(+parent.premium) * (closeQty / openQty) : 0;
-          const profitPct     = proratedCost > 0 && profit != null
-            ? Math.round((profit / proratedCost) * 10000) / 10000
+          const daysHeld = c.dateExec && parent
+            ? Math.round((new Date(c.dateExec) - new Date()) / 86400000)
             : null;
 
           await supabase
             .from("contracts")
             .update({
               closed_by_id: inserted.id,
-              status:       "Closed",
+              status: "Closed",
               cost_to_close: Math.abs(+c.premium),
-              profit:       profit != null ? Math.round(profit * 100) / 100 : null,
-              profit_pct:   profitPct,
-              close_date:   c.dateExec || null,
-              days_held:    daysHeld,
+              profit: profit != null ? Math.round(profit * 100) / 100 : null,
             })
             .eq("id", c.parentId);
 
@@ -741,32 +708,6 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
       }
 
       setCommitted(toCommit);
-
-      // 🎉 Gamify — play sound and show profit
-      const gamifyClosers = toCommit.filter(t => ["BTC","STC"].includes(t.optType));
-      const gamifyOpeners = toCommit.filter(t => ["STO","BTO"].includes(t.optType));
-      const totalCommitProfit = gamifyClosers.reduce((s, c) => {
-        const opener = gamifyOpeners.find(o => o.stock===c.stock && o.strike===c.strike && o.expires===c.expires) ||
-                      toCommit.find(o => !["BTC","STC"].includes(o.optType) && o.stock===c.stock);
-        if (opener) {
-          const profit = opener.optType==="STO"
-            ? Math.abs(opener.premium||0) - Math.abs(c.premium||0)
-            : Math.abs(c.premium||0) - Math.abs(opener.premium||0);
-          return s + profit;
-        }
-        return s;
-      }, 0);
-      try {
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        [523, 659, 784, 1047].forEach((freq, i) => {
-          const osc = ctx.createOscillator(); const gain = ctx.createGain();
-          osc.connect(gain); gain.connect(ctx.destination);
-          osc.frequency.value = freq; osc.type = "sine";
-          gain.gain.setValueAtTime(0.3, ctx.currentTime + i*0.12);
-          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i*0.12 + 0.3);
-          osc.start(ctx.currentTime + i*0.12); osc.stop(ctx.currentTime + i*0.12 + 0.3);
-        });
-      } catch(e) { /* audio not supported */ }
 
       // Mark as committed in pending_transactions
       for (const t of toCommit) {
@@ -802,7 +743,6 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
     .filter(t => filterOptType === "ALL" ? true : t.optType === filterOptType)
     .filter(t => matchFilter === "ALL" ? true : t.matchConfidence === matchFilter)
     .filter(t => filterAccount === "ALL" ? true : t.account === filterAccount)
-    .filter(t => hideCommitted ? !committedIds.has(String(t.schwabTransactionId)) : true)
     .filter(t => showDismissed ? dismissed.has(t._idx) : !dismissed.has(t._idx))
     .sort((a, b) => {
       const fn = SORT_KEYS[sortCol] ?? (t => "");
@@ -1157,26 +1097,19 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
   // ── Done screen ────────────────────────────────────────────────────────────
   if (mode === "done") {
     const wasTest = committed[0]?._testMode;
-    const totalPrem = committed.filter(t => !["BTC","STC"].includes(t.optType)).reduce((s,t) => s + Math.abs(t.premium||0), 0);
     return (
       <div style={page}>
         <div style={{ maxWidth: 680, margin: "0 auto" }}>
           {PendingSection}
-          <div style={{ ...card, border: `1px solid ${wasTest ? C.yellow + "44" : C.green + "44"}`, background: (wasTest ? C.yellow : C.green) + "08", textAlign: "center" }}>
-            <div style={{ fontSize: 32, marginBottom: 8 }}>{wasTest ? "🧪" : "🎉"}</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: wasTest ? C.yellow : C.green, marginBottom: 6 }}>
-              {wasTest ? "Test Complete" : "Committed Successfully!"}
+          <div style={{ ...card, border: `1px solid ${wasTest ? C.yellow + "44" : C.green + "44"}`, background: (wasTest ? C.yellow : C.green) + "08" }}>
+            <div style={{ fontSize: 18, fontWeight: 700, color: wasTest ? C.yellow : C.green, marginBottom: 8 }}>
+              {wasTest ? "🧪 Test Complete" : "✓ Committed Successfully"}
             </div>
-            <div style={{ fontSize: 13, color: C.muted, marginBottom: 12 }}>
+            <div style={{ fontSize: 13, color: C.muted }}>
               {wasTest
-                ? `${committed.length} transactions would have been saved (test mode).`
+                ? `${committed.length} transactions would have been saved (test mode — nothing was written).`
                 : `${committed.length} transactions saved to the database.`}
             </div>
-            {!wasTest && totalPrem > 0 && (
-              <div style={{ fontSize: 28, fontWeight: 700, color: C.green, fontFamily: "monospace", animation: "fadeIn 0.5s ease" }}>
-                +${totalPrem.toFixed(2)} premium collected
-              </div>
-            )}
           </div>
 
           {/* Summary table */}
@@ -1271,12 +1204,7 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
             );
           })}
           <div style={{ width: 1, height: 20, background: C.border }} />
-          {/* Hide already-committed toggle */}
-          <button onClick={() => setHideCommitted(p => !p)}
-            style={{ ...btn(hideCommitted ? C.green : C.muted), background: hideCommitted ? C.green + "22" : "transparent", fontSize: 11, padding: "4px 10px", whiteSpace: "nowrap" }}>
-            {hideCommitted ? "✓ Hide Committed" : "Show All"}
-          </button>
-          <div style={{ width: 1, height: 20, background: C.border }} />
+          {/* Match confidence filters */}
           {[
             { key: "ALL",       label: "All",       color: C.muted,   count: null },
             { key: "exact",     label: "Exact",     color: C.green,   count: exactCount },
