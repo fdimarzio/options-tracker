@@ -50,7 +50,83 @@ const pill = (label, color) => ({
 const OPT_COLORS = { BTO: C.blue, STO: C.green, BTC: C.orange, STC: C.yellow };
 const MATCH_COLORS = { exact: C.green, partial: C.yellow, split: C.blue, unmatched: C.red, manual: C.blue };
 
-// ── toDB mapper (mirrors main app) ───────────────────────────────────────────
+// ── Sound engine ──────────────────────────────────────────────────────────────
+function playCashRegister() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const play = (freq, start, dur, vol = 0.3) => {
+      const o = ctx.createOscillator(); const g = ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.frequency.value = freq; o.type = "sine";
+      g.gain.setValueAtTime(0, ctx.currentTime + start);
+      g.gain.linearRampToValueAtTime(vol, ctx.currentTime + start + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + dur);
+      o.start(ctx.currentTime + start); o.stop(ctx.currentTime + start + dur + 0.05);
+    };
+    play(1047, 0, 0.15, 0.4); play(1319, 0.1, 0.12, 0.35);
+    play(1568, 0.2, 0.12, 0.35); play(2093, 0.3, 0.25, 0.5);
+    [0.55, 0.65, 0.72, 0.80, 0.88].forEach((t, i) => play(2637 + i * 100, t, 0.08, 0.25));
+  } catch(e) {}
+}
+
+function playLoss() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = ctx.createOscillator(); const g = ctx.createGain();
+    o.connect(g); g.connect(ctx.destination);
+    o.type = "sawtooth"; o.frequency.setValueAtTime(220, ctx.currentTime);
+    o.frequency.exponentialRampToValueAtTime(80, ctx.currentTime + 0.4);
+    g.gain.setValueAtTime(0.2, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.45);
+    o.start(); o.stop(ctx.currentTime + 0.5);
+  } catch(e) {}
+}
+
+// ── Commit celebration overlay ────────────────────────────────────────────────
+function CommitCelebration({ profit, count, onDone }) {
+  useEffect(() => { const t = setTimeout(onDone, 3200); return () => clearTimeout(t); }, []);
+  const isWin = profit >= 0;
+  const fSign = v => (v >= 0 ? "+" : "-") + "$" + Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 9999, pointerEvents: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <style>{`
+        @keyframes commitPop{0%{opacity:0;transform:scale(0.3) translateY(0)}40%{opacity:1;transform:scale(1.3) translateY(-40px)}70%{transform:scale(1) translateY(-60px)}100%{opacity:0;transform:scale(0.8) translateY(-130px)}}
+        @keyframes commitLoss{0%{opacity:0;transform:translateY(-20px)}20%{opacity:1;transform:translateY(0)}80%{opacity:1}100%{opacity:0;transform:translateY(30px)}}
+        @keyframes sparkle{0%{opacity:1;transform:scale(1) translate(0,0)}100%{opacity:0;transform:scale(0) translate(var(--dx),var(--dy))}}
+      `}</style>
+      {isWin ? (
+        <div style={{ textAlign: "center", animation: "commitPop 3.2s ease forwards" }}>
+          <div style={{ fontSize: 80 }}>🪙</div>
+          <div style={{ fontFamily: "'JetBrains Mono',monospace", fontWeight: 700, fontSize: 32, color: "#00ff88", textShadow: "0 0 24px #00ff8880", marginTop: 10 }}>
+            {fSign(profit)}
+          </div>
+          <div style={{ fontFamily: "monospace", fontSize: 13, color: "#00ff8880", marginTop: 6 }}>
+            {count} CONTRACT{count !== 1 ? "S" : ""} COMMITTED
+          </div>
+          {[...Array(14)].map((_, i) => (
+            <div key={i} style={{ position: "absolute", left: "50%", top: "50%", fontSize: 18,
+              "--dx": `${(Math.random() - 0.5) * 260}px`, "--dy": `${(Math.random() - 0.5) * 260}px`,
+              animation: `sparkle 1.4s ease ${i * 0.07}s forwards` }}>
+              {["✨", "💰", "🌟", "💵", "⭐", "🤑"][i % 6]}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div style={{ textAlign: "center", animation: "commitLoss 3.2s ease forwards" }}>
+          <div style={{ fontSize: 72 }}>👎</div>
+          <div style={{ fontFamily: "'JetBrains Mono',monospace", fontWeight: 700, fontSize: 28, color: "#ff4560", textShadow: "0 0 20px #ff456080", marginTop: 10 }}>
+            {fSign(profit)}
+          </div>
+          <div style={{ fontFamily: "monospace", fontSize: 12, color: "#ff456080", marginTop: 6 }}>
+            {count} CONTRACT{count !== 1 ? "S" : ""} COMMITTED
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 function contractToDB(c) {
   return {
     stock:              c.stock        || null,
@@ -357,6 +433,7 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
   const [error,        setError]        = useState(null);
   const [committing,   setCommitting]   = useState(false);
   const [committed,    setCommitted]    = useState([]);
+  const [celebration,  setCelebration]  = useState(null); // { profit, count }
   const [filterOptType,    setFilterOptType]    = useState("ALL");
   const [hideCommitted,    setHideCommitted]    = useState(true);
   const [committedIds,     setCommittedIds]     = useState(new Set());
@@ -540,23 +617,24 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
       setMeta({ ...schwabData.meta, total: txs.length });
       setChecked(new Set());
 
-      // Load committed IDs - query only the IDs we just fetched for accuracy
+      // Load committed transactions - match by stock/opt_type/date/strike
       try {
-        const fetchedIds = txs.map(t => t.schwabTransactionId).filter(Boolean).map(String);
-        if (fetchedIds.length > 0) {
-          const { data: fromContracts } = await supabase.from("contracts")
-            .select("schwab_transaction_id")
-            .in("schwab_transaction_id", fetchedIds);
-          const { data: fromPending } = await supabase.from("pending_transactions")
-            .select("schwab_transaction_id")
-            .in("schwab_transaction_id", fetchedIds);
-          const ids = new Set([
-            ...(fromContracts||[]).map(r => String(r.schwab_transaction_id)),
-            ...(fromPending||[]).map(r => String(r.schwab_transaction_id)),
-          ]);
-          setCommittedIds(ids);
-          console.log("[Import] committedIds from fetch:", ids.size, [...ids].slice(0,3));
-        }
+        const { data: committed } = await supabase.from("contracts")
+          .select("stock, opt_type, date_exec, strike, account")
+          .gte("date_exec", "2026-01-01");
+
+        const committedSet = new Set((committed||[]).map(c =>
+          `${c.stock}|${c.opt_type}|${c.date_exec}|${Number(c.strike)}|${c.account}`
+        ));
+
+        const ids = new Set();
+        txs.forEach(t => {
+          const key = `${t.stock}|${t.optType}|${t.dateExec}|${Number(t.strike)}|${t.account}`;
+          if (committedSet.has(key)) ids.add(String(t.schwabTransactionId));
+        });
+
+        setCommittedIds(ids);
+        console.log("[Import] committedIds matched:", ids.size, "of", txs.length);
       } catch(e) { console.warn("committedIds load failed:", e.message); }
 
       setMode("review");
@@ -613,6 +691,10 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
       setCommitted(toCommit.map(t => ({ ...t, _testMode: true })));
       setMode("done");
       setCommitting(false);
+      // Still fire celebration in test mode so you can see it
+      const netPremium = toCommit.reduce((s, t) => s + (t.premium || 0), 0);
+      if (netPremium >= 0) playCashRegister(); else playLoss();
+      setCelebration({ profit: netPremium, count: toCommit.length });
       return;
     }
 
@@ -632,7 +714,7 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
       const closers = toCommit.filter(t =>
         (t.optType === "BTC" || t.optType === "STC") &&
         typeof t.parentId === "number" &&
-        (t.matchConfidence === "exact" || t.matchConfidence === "partial")
+        (t.matchConfidence === "exact" || t.matchConfidence === "partial" || t.matchConfidence === "manual")
       );
       for (const c of closers) {
         // We need the newly inserted id for this row — find by schwab_transaction_id
@@ -644,15 +726,61 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
           .single();
 
         if (inserted?.id) {
-          await supabase
+          // Load parent to compute profit
+          const { data: parent } = await supabase
             .from("contracts")
-            .update({ closed_by_id: inserted.id, status: "Closed" })
-            .eq("id", c.parentId);
+            .select("id, premium, date_exec, qty")
+            .eq("id", c.parentId)
+            .single();
+
+          if (parent) {
+            const costToClose = Math.abs(c.premium || 0);
+            const parentPrem  = Math.abs(parent.premium || 0);
+            // Pro-rate if partial close (different qty)
+            const closeQty  = c.qty || parent.qty || 1;
+            const parentQty = parent.qty || closeQty;
+            const proratedPrem = parentPrem * (closeQty / parentQty);
+            const profit    = Math.round((proratedPrem - costToClose) * 100) / 100;
+            const profitPct = proratedPrem > 0 ? Math.round((profit / proratedPrem) * 10000) / 10000 : null;
+            const daysHeld  = parent.date_exec
+              ? Math.ceil((new Date(c.dateExec) - new Date(parent.date_exec)) / 86400000)
+              : null;
+
+            await supabase
+              .from("contracts")
+              .update({
+                closed_by_id:        inserted.id,
+                status:              "Closed",
+                cost_to_close:       costToClose,
+                close_date:          c.dateExec,
+                profit,
+                profit_pct:          profitPct,
+                days_held:           daysHeld,
+                stock_price_at_close: c.priceAtExecution || null,
+              })
+              .eq("id", c.parentId);
+          } else {
+            // Parent not found — just mark closed
+            await supabase
+              .from("contracts")
+              .update({ closed_by_id: inserted.id, status: "Closed" })
+              .eq("id", c.parentId);
+          }
         }
       }
 
       setCommitted(toCommit);
       setMode("done");
+
+      // Celebration: for closers use computed profit; for openers use premium collected
+      const closerProfit = closers.reduce((s, c) => {
+        const parent = toCommit.find(t => t.parentId === c.parentId); // won't exist — look at c directly
+        return s; // will be summed below after parent lookup
+      }, 0);
+      // Simpler: sum all premiums — positive for STO/BTO opens, negative for BTC costs
+      const netPremium = toCommit.reduce((s, t) => s + (t.premium || 0), 0);
+      if (netPremium >= 0) playCashRegister(); else playLoss();
+      setCelebration({ profit: netPremium, count: toCommit.length });
     } catch (err) {
       setError(`Commit failed: ${err.message}`);
     } finally {
@@ -987,6 +1115,13 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
     const wasTest = committed[0]?._testMode;
     return (
       <div style={page}>
+        {celebration && (
+          <CommitCelebration
+            profit={celebration.profit}
+            count={celebration.count}
+            onDone={() => setCelebration(null)}
+          />
+        )}
         <div style={{ maxWidth: 680, margin: "0 auto" }}>
 
           <div style={{ ...card, border: `1px solid ${wasTest ? C.yellow + "44" : C.green + "44"}`, background: (wasTest ? C.yellow : C.green) + "08" }}>
@@ -1172,6 +1307,7 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
                   { label: "Premium",     col: "premium",          align: "right" },
                   { label: "Stock Price", col: "priceAtExecution", align: "right", minWidth: 100 },
                   { label: "Date",        col: "dateExec",         align: "left"  },
+                  { label: "Account",     col: "account",          align: "left"  },
                   { label: "Strategy",    col: null,               align: "left",  minWidth: 130 },
                   { label: "Trade Rule",  col: null,               align: "left",  minWidth: 130 },
                   { label: "Notes",       col: null,               align: "left",  minWidth: 160 },
@@ -1277,6 +1413,7 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
 
                     {/* Date */}
                     <td style={{ padding: "8px 10px", color: C.muted }}>{t.dateExec}</td>
+                    <td style={{ padding: "8px 10px", color: C.muted, fontSize: 10 }}>{t.account||"—"}</td>
 
                     {/* Strategy — editable */}
                     <td style={{ padding: "6px 10px" }} onClick={e => e.stopPropagation()}>
