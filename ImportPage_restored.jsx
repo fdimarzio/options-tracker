@@ -544,7 +544,7 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
     setError(null);
     try {
       // ── Fetch Schwab transactions ───────────────────────────────────────────
-      let schwabUrl = "/api/schwab-orders?action=transactions&";
+      let schwabUrl = "/api/schwab-transactions?";
       if (rangeType === "days") {
         schwabUrl += `days=${days}`;
       } else {

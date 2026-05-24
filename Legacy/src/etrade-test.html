@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ETrade Import Tester</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #080b10; color: #e6edf3; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+    a { color: #58a6ff; }
+
+    .header { background: #0d1117; border-bottom: 1px solid #1c2128; padding: 14px 20px; display: flex; align-items: center; gap: 16px; }
+    .header h1 { font-size: 14px; color: #4fc3f7; font-weight: 700; letter-spacing: 0.04em; }
+    .header span { font-size: 10px; color: #3a4050; }
+
+    .controls { padding: 16px 20px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; border-bottom: 1px solid #1c2128; }
+    .controls label { font-size: 10px; color: #555; margin-right: 4px; }
+    input[type=number] { background: #161b22; color: #e6edf3; border: 1px solid #30363d; border-radius: 4px; padding: 5px 8px; font-family: monospace; font-size: 11px; width: 70px; }
+    input[type=text]   { background: #161b22; color: #e6edf3; border: 1px solid #30363d; border-radius: 4px; padding: 5px 8px; font-family: monospace; font-size: 11px; width: 260px; }
+    button { border: none; border-radius: 4px; padding: 6px 14px; font-family: monospace; font-size: 11px; font-weight: 700; cursor: pointer; }
+    .btn-run    { background: #4fc3f7; color: #010409; }
+    .btn-run:hover { background: #7dd3fc; }
+    .btn-stage  { background: #00ff88; color: #010409; }
+    .btn-stage:disabled { background: #1c2128; color: #3a4050; cursor: not-allowed; }
+    .btn-clear  { background: transparent; color: #555; border: 1px solid #21262d; }
+
+    .summary { padding: 12px 20px; display: flex; gap: 20px; flex-wrap: wrap; border-bottom: 1px solid #1c2128; background: #0a0e14; }
+    .stat { display: flex; flex-direction: column; gap: 3px; }
+    .stat-label { font-size: 8px; color: #3a4050; letter-spacing: 0.08em; }
+    .stat-value { font-size: 16px; font-weight: 700; }
+
+    .table-wrap { overflow-x: auto; padding: 0 20px 20px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 11px; }
+    th { padding: 6px 8px; text-align: left; color: #3a4050; border-bottom: 1px solid #1c2128; font-weight: 400; font-size: 9px; letter-spacing: 0.06em; white-space: nowrap; }
+    td { padding: 6px 8px; border-bottom: 1px solid #0d1117; white-space: nowrap; }
+    tr:hover td { background: #0f1620; }
+
+    .tag { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 9px; font-weight: 700; }
+    .tag-STO  { background: #00ff8820; color: #00ff88; border: 1px solid #00ff8840; }
+    .tag-BTO  { background: #c084fc20; color: #c084fc; border: 1px solid #c084fc40; }
+    .tag-BTC  { background: #ffd16620; color: #ffd166; border: 1px solid #ffd16640; }
+    .tag-STC  { background: #58a6ff20; color: #58a6ff; border: 1px solid #58a6ff40; }
+    .tag-ASSIGNED { background: #ff456020; color: #ff4560; border: 1px solid #ff456040; }
+    .tag-Call { color: #00ff88; }
+    .tag-Put  { color: #ff4560; }
+    .match-exact   { color: #00ff88; font-size: 9px; }
+    .match-partial { color: #ffd166; font-size: 9px; }
+    .match-none    { color: #3a4050; font-size: 9px; }
+
+    .loading { padding: 40px 20px; text-align: center; color: #3a4050; }
+    .error   { padding: 16px 20px; color: #ff4560; background: #ff456010; border: 1px solid #ff456030; border-radius: 4px; margin: 16px 20px; }
+    .success { padding: 12px 20px; color: #00ff88; background: #00ff8810; border: 1px solid #00ff8830; border-radius: 4px; margin: 16px 20px; }
+
+    .filter-bar { padding: 8px 20px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .filter-btn { background: transparent; color: #555; border: 1px solid #21262d; border-radius: 4px; padding: 3px 10px; font-size: 9px; font-family: monospace; cursor: pointer; }
+    .filter-btn.active { background: #58a6ff20; color: #58a6ff; border-color: #58a6ff40; }
+
+    .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid #1c2128; border-top-color: #4fc3f7; border-radius: 50%; animation: spin 0.7s linear infinite; margin-right: 6px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <h1>ETRADE IMPORT TESTER</h1>
+  <span>Dry run — no data written until you click Stage</span>
+  <a href="https://options-tracker-five.vercel.app" style="margin-left:auto;font-size:10px">← Back to App</a>
+</div>
+
+<div class="controls">
+  <div>
+    <label>API URL</label>
+    <input type="text" id="apiUrl" value="https://options-tracker-five.vercel.app/api/etrade"/>
+  </div>
+  <div>
+    <label>Secret</label>
+    <input type="text" id="secret" value="mYs3cr3tK3y2026!" style="width:160px"/>
+  </div>
+  <div>
+    <label>Days</label>
+    <input type="number" id="days" value="30" min="1" max="90"/>
+  </div>
+  <button class="btn-run" onclick="runDryRun()">▶ Dry Run</button>
+  <button class="btn-stage" id="stageBtn" disabled onclick="runStage()">⬆ Stage to Pending</button>
+  <button class="btn-clear" onclick="clearResults()">✕ Clear</button>
+</div>
+
+<div id="statusMsg"></div>
+<div id="summary" style="display:none" class="summary"></div>
+<div id="filterBar" style="display:none" class="filter-bar"></div>
+<div id="results"></div>
+
+<script>
+  let allTransactions = [];
+  let activeFilter    = "ALL";
+
+  function apiUrl()  { return document.getElementById("apiUrl").value.trim(); }
+  function secret()  { return document.getElementById("secret").value.trim(); }
+  function days()    { return document.getElementById("days").value; }
+
+  function setStatus(msg, type="") {
+    const el = document.getElementById("statusMsg");
+    el.innerHTML = msg ? `<div class="${type||'loading'}">${msg}</div>` : "";
+  }
+
+  function clearResults() {
+    allTransactions = [];
+    activeFilter    = "ALL";
+    document.getElementById("summary").style.display  = "none";
+    document.getElementById("filterBar").style.display = "none";
+    document.getElementById("results").innerHTML       = "";
+    document.getElementById("stageBtn").disabled       = true;
+    setStatus("");
+  }
+
+  async function runDryRun() {
+    clearResults();
+    setStatus('<span class="spinner"></span>Fetching + parsing transactions…');
+    try {
+      const r    = await fetch(`${apiUrl()}?action=import&days=${days()}&dryRun=1&secret=${secret()}`);
+      const data = await r.json();
+      if (!r.ok || data.error) throw new Error(data.error || "Unknown error");
+      allTransactions = data.transactions || [];
+      renderSummary(data);
+      renderFilterBar();
+      renderTable("ALL");
+      if (allTransactions.length > 0) {
+        document.getElementById("stageBtn").disabled = false;
+      }
+      setStatus("");
+    } catch (e) {
+      setStatus(`Error: ${e.message}`, "error");
+    }
+  }
+
+  async function runStage() {
+    if (!confirm(`Stage ${allTransactions.length} transactions to pending_transactions? This will write to the database.`)) return;
+    setStatus('<span class="spinner"></span>Staging transactions…');
+    document.getElementById("stageBtn").disabled = true;
+    try {
+      const r    = await fetch(`${apiUrl()}?action=import&days=${days()}&secret=${secret()}`);
+      const data = await r.json();
+      if (!r.ok || data.error) throw new Error(data.error || "Unknown error");
+      setStatus(`✓ Staged ${data.new} new transactions (${data.opens} opens, ${data.closes} closes, ${data.assigned} assigned). Go to Import tab to review.`, "success");
+    } catch (e) {
+      setStatus(`Stage failed: ${e.message}`, "error");
+      document.getElementById("stageBtn").disabled = false;
+    }
+  }
+
+  function renderSummary(data) {
+    const el = document.getElementById("summary");
+    el.style.display = "flex";
+    const opts   = data.transactions || [];
+    const STOs   = opts.filter(t => t.opt_type === "STO").length;
+    const BTOs   = opts.filter(t => t.opt_type === "BTO").length;
+    const BTCs   = opts.filter(t => t.opt_type === "BTC").length;
+    const STCs   = opts.filter(t => t.opt_type === "STC").length;
+    const ASN    = opts.filter(t => t.opt_type === "ASSIGNED").length;
+    const matched = opts.filter(t => t.match_confidence === "exact" || t.match_confidence === "partial").length;
+
+    el.innerHTML = [
+      ["Raw Txns",    data.rawCount,    "#e6edf3"],
+      ["Parsed",      data.parsedCount, "#4fc3f7"],
+      ["Skipped",     data.skippedCount,"#3a4050"],
+      ["STO",         STOs,             "#00ff88"],
+      ["BTO",         BTOs,             "#c084fc"],
+      ["BTC",         BTCs,             "#ffd166"],
+      ["STC",         STCs,             "#58a6ff"],
+      ["Assigned",    ASN,              "#ff4560"],
+      ["Matched",     matched,          "#00ff88"],
+    ].map(([label, val, color]) => `
+      <div class="stat">
+        <span class="stat-label">${label}</span>
+        <span class="stat-value" style="color:${color}">${val}</span>
+      </div>
+    `).join("");
+  }
+
+  function renderFilterBar() {
+    const el      = document.getElementById("filterBar");
+    el.style.display = "flex";
+    const filters = ["ALL","STO","BTO","BTC","STC","ASSIGNED","6917","8222"];
+    el.innerHTML  = '<span style="font-size:9px;color:#3a4050;margin-right:4px">FILTER:</span>' +
+      filters.map(f => `
+        <button class="filter-btn ${f===activeFilter?'active':''}" onclick="setFilter('${f}')">${f}</button>
+      `).join("");
+  }
+
+  function setFilter(f) {
+    activeFilter = f;
+    renderFilterBar();
+    renderTable(f);
+  }
+
+  function renderTable(filter) {
+    const txs = allTransactions.filter(t => {
+      if (filter === "ALL")      return true;
+      if (filter === "6917")     return t.account?.includes("6917");
+      if (filter === "8222")     return t.account?.includes("8222");
+      return t.opt_type === filter;
+    });
+
+    if (!txs.length) {
+      document.getElementById("results").innerHTML = `<div class="loading">No transactions match filter</div>`;
+      return;
+    }
+
+    const rows = txs.map(t => {
+      const matchClass = `match-${t.match_confidence || "none"}`;
+      const matchLabel = t.match_confidence === "exact" ? "✓ exact" : t.match_confidence === "partial" ? "~ partial" : "— none";
+      const premium    = t.premium >= 0 ? `+$${t.premium.toFixed(2)}` : `-$${Math.abs(t.premium).toFixed(2)}`;
+      const premColor  = t.premium >= 0 ? "#00ff88" : "#ff4560";
+      return `
+        <tr>
+          <td>${t.date_exec}</td>
+          <td style="font-weight:700;color:#e6edf3">${t.stock}</td>
+          <td><span class="tag tag-${t.opt_type}">${t.opt_type}</span></td>
+          <td class="tag-${t.type}">${t.type === "Call" ? "C" : "P"}</td>
+          <td style="text-align:right">$${t.strike}</td>
+          <td>${t.expires}</td>
+          <td style="text-align:right">${t.qty}</td>
+          <td style="text-align:right;color:${premColor}">${premium}</td>
+          <td style="color:#555">${t.account}</td>
+          <td>${t.exercised === "Yes" ? '<span style="color:#ff4560">Yes</span>' : ""}</td>
+          <td class="${matchClass}">${matchLabel}</td>
+          <td style="color:#3a4050;font-size:10px;max-width:200px;overflow:hidden;text-overflow:ellipsis">${t._description || ""}</td>
+        </tr>
+      `;
+    }).join("");
+
+    document.getElementById("results").innerHTML = `
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>DATE</th><th>STOCK</th><th>TYPE</th><th>P/C</th>
+              <th style="text-align:right">STRIKE</th><th>EXPIRES</th>
+              <th style="text-align:right">QTY</th><th style="text-align:right">PREMIUM</th>
+              <th>ACCOUNT</th><th>EX</th><th>MATCH</th><th>DESCRIPTION</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <div style="padding:8px 0;color:#3a4050;font-size:10px">${txs.length} transactions shown</div>
+      </div>
+    `;
+  }
+</script>
+</body>
+</html>

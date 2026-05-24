@@ -6,6 +6,8 @@ on:
     - cron: '*/5 13-20 * * 1-5'
     # Token keeper: daily at 8am ET (12:00 UTC) — resets 7-day refresh token window
     - cron: '0 12 * * *'
+    # ETrade pre-expiry renew: daily at 11:50pm ET (3:50 UTC) — before midnight expiry
+    - cron: '50 3 * * *'
   workflow_dispatch:
 
 jobs:
@@ -38,7 +40,7 @@ jobs:
           done
 
   token-keeper:
-    if: github.event.schedule == '0 12 * * *' || github.event_name == 'workflow_dispatch'
+    if: github.event.schedule == '0 12 * * *' || github.event.schedule == '50 3 * * *' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 2
 
@@ -56,9 +58,26 @@ jobs:
           echo "Status: $HTTP_STATUS"
           echo "Response: $BODY"
 
-          # Fail the job if token refresh failed so GitHub sends an alert email
           if [ "$HTTP_STATUS" != "200" ]; then
             echo "ERROR: Token refresh failed! Manual re-auth may be required at:"
             echo "https://options-tracker-five.vercel.app/api/schwab-auth"
             exit 1
+          fi
+
+      - name: Renew ETrade access token
+        run: |
+          echo "Renewing ETrade token..."
+          RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+            "https://options-tracker-five.vercel.app/api/etrade?action=renew&secret=${{ secrets.CRON_SECRET }}")
+
+          HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS" | cut -d: -f2)
+          BODY=$(echo "$RESPONSE" | grep -v "HTTP_STATUS")
+
+          echo "Status: $HTTP_STATUS"
+          echo "Response: $BODY"
+
+          if [ "$HTTP_STATUS" == "401" ]; then
+            echo "WARNING: ETrade token expired — manual re-auth required at:"
+            echo "https://options-tracker-five.vercel.app/api/etrade?action=auth"
+            echo "A Pushover notification has been sent."
           fi

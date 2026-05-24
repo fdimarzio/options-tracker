@@ -182,7 +182,7 @@ async function fetchLivePrice(symbol, token) {
 // We include all statuses so we can match even if the user marked it closed manually
 async function loadExistingOpens() {
   const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/contracts?select=id,stock,opt_type,strike,expires,qty,account,status&account=eq.Schwab&order=id.desc&limit=1000`,
+    `${SUPABASE_URL}/rest/v1/contracts?select=id,stock,opt_type,strike,expires,qty,account,status&status=eq.Open&order=id.desc&limit=1000`,
     { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
   );
   const rows = await res.json();
@@ -218,11 +218,31 @@ function autoMatch(closer, dbOpeners, batchOpeners = []) {
 
     if (!matches.length) continue;
 
-    // Prefer exact qty
-    const exactQty = matches.find(o => Number(o.qty) === Number(closer.qty));
-    if (exactQty) return { parentId: exactQty.id, matchedContract: exactQty, confidence: "exact" };
+    // Helper: does the opener account match the closer account?
+    const sameAccount = (o) => {
+      if (!closer.account || !o.account) return false;
+      // Schwab matches Schwab, ETrade 6917 matches ETrade 6917, etc.
+      return o.account?.toLowerCase() === closer.account?.toLowerCase();
+    };
 
-    // Otherwise closest qty
+    // 1. Same account + exact qty
+    const sameAcctExact = matches.find(o => sameAccount(o) && Number(o.qty) === Number(closer.qty));
+    if (sameAcctExact) return { parentId: sameAcctExact.id, matchedContract: sameAcctExact, confidence: "exact" };
+
+    // 2. Exact qty (any account) — only if single match to avoid cross-broker confusion
+    const exactQtyMatches = matches.filter(o => Number(o.qty) === Number(closer.qty));
+    if (exactQtyMatches.length === 1) return { parentId: exactQtyMatches[0].id, matchedContract: exactQtyMatches[0], confidence: "exact" };
+
+    // 3. Same account + closest qty
+    const sameAcctMatches = matches.filter(o => sameAccount(o));
+    if (sameAcctMatches.length) {
+      const best = sameAcctMatches.reduce((a, b) =>
+        Math.abs(Number(a.qty) - Number(closer.qty)) < Math.abs(Number(b.qty) - Number(closer.qty)) ? a : b
+      );
+      return { parentId: best.id, matchedContract: best, confidence: "partial" };
+    }
+
+    // 4. Closest qty (any account) — fallback
     const best = matches.reduce((a, b) =>
       Math.abs(Number(a.qty) - Number(closer.qty)) < Math.abs(Number(b.qty) - Number(closer.qty)) ? a : b
     );

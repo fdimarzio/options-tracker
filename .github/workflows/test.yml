@@ -1,0 +1,64 @@
+# .github/workflows/test.yml
+# Runs unit tests on every push and PR
+# Blocks merge if tests fail
+
+name: Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  unit-tests:
+    name: Unit Tests (Vitest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: npx vitest run tests/utils.test.js
+
+  smoke-tests:
+    name: Smoke Tests (Playwright)
+    runs-on: ubuntu-latest
+    # Only run smoke tests on pushes to main (not every PR)
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Run smoke tests
+        run: npx playwright test tests/smoke.spec.js
+        env:
+          PLAYWRIGHT_BASE_URL: https://options-tracker-five.vercel.app
+          PLAYWRIGHT_PIN: ${{ secrets.PLAYWRIGHT_PIN }}
+
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

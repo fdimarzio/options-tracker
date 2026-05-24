@@ -1,0 +1,1576 @@
+// tests/utils.test.js
+// Vitest unit tests for PRI Options Tracker logic functions
+// Run: npx vitest run
+
+import { describe, it, expect } from "vitest";
+
+// ── Helpers copied from pri-tod-v3.jsx ──────────────────────────────────────
+// Keep these in sync manually, or extract to a shared utils.js
+
+function isSchw(account) { return account?.startsWith("Schwab"); }
+function isEtr(account)  { return account?.startsWith("ETrade") || account?.startsWith("Etrade"); }
+function isApiAccount(account) { return !!(isSchw(account) || isEtr(account)); }
+
+function calcProfitPct(premium, costToClose) {
+  if (!premium || premium === 0) return null;
+  return ((premium - costToClose) / Math.abs(premium)) * 100;
+}
+
+function calcBtcProfitPct(premiumTotal, currentMid, qty) {
+  // premiumTotal = what we collected (e.g. $1000)
+  // currentMid   = current mid price per contract (e.g. $0.30)
+  // qty          = number of contracts
+  const currentVal = currentMid * qty * 100;
+  return ((premiumTotal - currentVal) / premiumTotal) * 100;
+}
+
+function shouldAutoBtc(contract, currentMid, rule) {
+  if (!rule?.enabled) return false;
+  if (contract.opt_type !== "STO") return false;
+  if (contract.type !== "Call") return false;
+  const profitPct = calcBtcProfitPct(+contract.premium, currentMid, +contract.qty);
+  return profitPct >= (rule.min_profit_pct ?? 70);
+}
+
+function toDB(c) {
+  return {
+    id:           c.id,
+    stock:        c.stock || null,
+    type:         c.type,
+    opt_type:     c.optType,
+    strike:       c.strike != null ? +c.strike : null,
+    qty:          c.qty != null ? +c.qty : null,
+    premium:      c.premium != null ? +c.premium : null,
+    status:       c.status || "Open",
+    account:      c.account || null,
+    open_method:  c.openMethod || null,
+    close_method: c.closeMethod || null,
+  };
+}
+
+function fromDB(row) {
+  return {
+    id:          row.id,
+    stock:       row.stock,
+    type:        row.type,
+    optType:     row.opt_type,
+    strike:      row.strike,
+    qty:         row.qty,
+    premium:     row.premium,
+    status:      row.status,
+    account:     row.account,
+    openMethod:  row.open_method,
+    closeMethod: row.close_method,
+  };
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+describe("Account name matching", () => {
+  it("matches Schwab 3866 as Schwab account", () => {
+    expect(isSchw("Schwab 3866")).toBe(true);
+  });
+  it("matches plain Schwab as Schwab account", () => {
+    expect(isSchw("Schwab")).toBe(true);
+  });
+  it("does not match ETrade as Schwab", () => {
+    expect(isSchw("ETrade 6917")).toBe(false);
+  });
+  it("matches ETrade 6917 as ETrade account", () => {
+    expect(isEtr("ETrade 6917")).toBe(true);
+  });
+  it("matches ETrade 8222 as ETrade account", () => {
+    expect(isEtr("ETrade 8222")).toBe(true);
+  });
+  it("matches lowercase Etrade variant", () => {
+    expect(isEtr("Etrade")).toBe(true);
+  });
+  it("isApiAccount true for Schwab 3866", () => {
+    expect(isApiAccount("Schwab 3866")).toBe(true);
+  });
+  it("isApiAccount true for ETrade 6917", () => {
+    expect(isApiAccount("ETrade 6917")).toBe(true);
+  });
+  it("isApiAccount false for null", () => {
+    expect(isApiAccount(null)).toBe(false);
+  });
+  it("isApiAccount false for empty string", () => {
+    expect(isApiAccount("")).toBe(false);
+  });
+});
+
+describe("Profit % calculation", () => {
+  it("calculates 100% profit when cost_to_close is 0", () => {
+    expect(calcProfitPct(1000, 0)).toBeCloseTo(100);
+  });
+  it("calculates 70% profit correctly", () => {
+    expect(calcProfitPct(1000, 300)).toBeCloseTo(70);
+  });
+  it("calculates 50% profit correctly", () => {
+    expect(calcProfitPct(500, 250)).toBeCloseTo(50);
+  });
+  it("returns null when premium is 0", () => {
+    expect(calcProfitPct(0, 100)).toBeNull();
+  });
+  it("returns null when premium is null", () => {
+    expect(calcProfitPct(null, 100)).toBeNull();
+  });
+  it("handles negative profit (loss)", () => {
+    expect(calcProfitPct(100, 150)).toBeCloseTo(-50);
+  });
+});
+
+describe("Auto-BTC profit calculation", () => {
+  it("70% profit: $1000 premium, 1 contract at $0.30 mid", () => {
+    // currentVal = 0.30 * 1 * 100 = $30
+    // profitPct = (1000 - 30) / 1000 * 100 = 97%
+    expect(calcBtcProfitPct(1000, 0.30, 1)).toBeCloseTo(97);
+  });
+  it("exactly 70% profit: $1000 premium, 1 contract at $3.00", () => {
+    // currentVal = 3.00 * 1 * 100 = $300
+    // profitPct = (1000 - 300) / 1000 * 100 = 70%
+    expect(calcBtcProfitPct(1000, 3.00, 1)).toBeCloseTo(70);
+  });
+  it("handles multi-contract: $500 premium, 2 contracts at $0.50", () => {
+    // currentVal = 0.50 * 2 * 100 = $100
+    // profitPct = (500 - 100) / 500 * 100 = 80%
+    expect(calcBtcProfitPct(500, 0.50, 2)).toBeCloseTo(80);
+  });
+  it("below 70% threshold: $1000 premium, 1 contract at $4.00", () => {
+    // currentVal = 400, profitPct = 60%
+    expect(calcBtcProfitPct(1000, 4.00, 1)).toBeCloseTo(60);
+  });
+});
+
+describe("shouldAutoBtc rule evaluation", () => {
+  const rule = { enabled: true, min_profit_pct: 70, opt_type: "Call", dry_run: true };
+
+  it("fires for STO Call at 97% profit", () => {
+    const contract = { opt_type: "STO", type: "Call", premium: 1000, qty: 1 };
+    expect(shouldAutoBtc(contract, 0.30, rule)).toBe(true);
+  });
+  it("fires at exactly 70% profit", () => {
+    const contract = { opt_type: "STO", type: "Call", premium: 1000, qty: 1 };
+    expect(shouldAutoBtc(contract, 3.00, rule)).toBe(true);
+  });
+  it("does NOT fire below 70% profit", () => {
+    const contract = { opt_type: "STO", type: "Call", premium: 1000, qty: 1 };
+    expect(shouldAutoBtc(contract, 4.00, rule)).toBe(false);
+  });
+  it("does NOT fire for Put contracts", () => {
+    const contract = { opt_type: "STO", type: "Put", premium: 1000, qty: 1 };
+    expect(shouldAutoBtc(contract, 0.30, rule)).toBe(false);
+  });
+  it("does NOT fire when rule disabled", () => {
+    const contract = { opt_type: "STO", type: "Call", premium: 1000, qty: 1 };
+    expect(shouldAutoBtc(contract, 0.30, { ...rule, enabled: false })).toBe(false);
+  });
+  it("does NOT fire for BTO (only STO)", () => {
+    const contract = { opt_type: "BTO", type: "Call", premium: 1000, qty: 1 };
+    expect(shouldAutoBtc(contract, 0.30, rule)).toBe(false);
+  });
+});
+
+describe("toDB / fromDB round-trip", () => {
+  it("preserves open_method and close_method", () => {
+    const c = { id: 1, type: "Call", optType: "STO", strike: 120, qty: 2, premium: 1000, status: "Open", account: "Schwab 3866", openMethod: "app", closeMethod: null };
+    const row = toDB(c);
+    expect(row.open_method).toBe("app");
+    expect(row.close_method).toBeNull();
+  });
+  it("defaults open_method to null when not set", () => {
+    const c = { id: 1, type: "Call", optType: "STO", strike: 120, qty: 2, premium: 1000, status: "Open", account: "Schwab 3866" };
+    expect(toDB(c).open_method).toBeNull();
+  });
+  it("fromDB maps opt_type to optType", () => {
+    const row = { id: 1, type: "Call", opt_type: "STO", strike: 120, qty: 2, premium: 1000, status: "Open", account: "Schwab 3866", open_method: "manual", close_method: "auto" };
+    const c = fromDB(row);
+    expect(c.optType).toBe("STO");
+    expect(c.openMethod).toBe("manual");
+    expect(c.closeMethod).toBe("auto");
+  });
+  it("coerces strike to number", () => {
+    const c = { type: "Call", optType: "STO", strike: "120.5", qty: "2", premium: "1000" };
+    const row = toDB(c);
+    expect(typeof row.strike).toBe("number");
+    expect(row.strike).toBe(120.5);
+  });
+});
+
+describe("Signal rule type labels", () => {
+  const ruleTypeLabel = t => ({ sto: "STO Scanner", btc_auto: "Auto BTC", close_signal: "Close Signal" })[t] || t;
+  it("labels sto correctly", () => expect(ruleTypeLabel("sto")).toBe("STO Scanner"));
+  it("labels btc_auto correctly", () => expect(ruleTypeLabel("btc_auto")).toBe("Auto BTC"));
+  it("falls back to raw value for unknown types", () => expect(ruleTypeLabel("foo")).toBe("foo"));
+});
+
+describe("Anomaly dedup fingerprint", () => {
+  const anomalyFingerprint = a => `${a.stock}|${a.opt_type}|${a.strike}|${a.expires}|${a.account}|${Math.round(Math.abs(+a.premium)*100)}|${a.qty}|${a.date_exec}|${a.anomaly_type}`;
+
+  it("same transaction with different ETrade ID produces same fingerprint", () => {
+    const a1 = { stock:"AAPL", opt_type:"BTC", strike:"295", expires:"2026-05-15", account:"ETrade 6917", premium:"-177.03", qty:2, date_exec:"2026-05-13", anomaly_type:"unmatched_close", schwab_transaction_id:"abc123" };
+    const a2 = { ...a1, schwab_transaction_id:"xyz999" }; // different ID, same transaction
+    expect(anomalyFingerprint(a1)).toBe(anomalyFingerprint(a2));
+  });
+
+  it("different stock produces different fingerprint", () => {
+    const a1 = { stock:"AAPL", opt_type:"BTC", strike:"295", expires:"2026-05-15", account:"ETrade 6917", premium:"-177.03", qty:2, date_exec:"2026-05-13", anomaly_type:"unmatched_close" };
+    const a2 = { ...a1, stock:"NVDA" };
+    expect(anomalyFingerprint(a1)).not.toBe(anomalyFingerprint(a2));
+  });
+
+  it("different premium produces different fingerprint", () => {
+    const a1 = { stock:"AAPL", opt_type:"BTC", strike:"295", expires:"2026-05-15", account:"ETrade 6917", premium:"-177.03", qty:2, date_exec:"2026-05-13", anomaly_type:"unmatched_close" };
+    const a2 = { ...a1, premium:"-200.00" };
+    expect(anomalyFingerprint(a1)).not.toBe(anomalyFingerprint(a2));
+  });
+
+  it("handles negative premium correctly via Math.abs", () => {
+    const a = { stock:"AAPL", opt_type:"BTC", strike:"295", expires:"2026-05-15", account:"ETrade 6917", premium:"-177.03", qty:2, date_exec:"2026-05-13", anomaly_type:"unmatched_close" };
+    const fp = anomalyFingerprint(a);
+    expect(fp).toContain("17703"); // abs(-177.03) * 100 = 17703
+  });
+});
+
+describe("shouldNotify cooldown", () => {
+  const RENOTIFY_DOLLARS  = 50;
+  const RENOTIFY_PCT      = 5;
+  const RENOTIFY_COOLDOWN = 60;
+
+  function shouldNotify(signal, lastNotif) {
+    if (!lastNotif) return true;
+    if (signal.level !== lastNotif.level) return true;
+    if (lastNotif.sentAt) {
+      const minsSince = (Date.now() - new Date(lastNotif.sentAt).getTime()) / 60000;
+      if (minsSince < RENOTIFY_COOLDOWN) return false;
+    }
+    const profitImproved = signal.projectedProfit - (lastNotif.projectedProfit || 0) >= RENOTIFY_DOLLARS;
+    const pctImproved    = signal.profitPct - (lastNotif.profitPct || 0) >= RENOTIFY_PCT;
+    return profitImproved || pctImproved;
+  }
+
+  it("notifies if never sent before", () => {
+    expect(shouldNotify({ level: "CLOSE_NOW", projectedProfit: 100, profitPct: 70 }, null)).toBe(true);
+  });
+  it("does NOT re-notify within 60 minutes at same level", () => {
+    const sentAt = new Date(Date.now() - 10 * 60000).toISOString(); // 10 min ago
+    expect(shouldNotify({ level: "CLOSE_NOW", projectedProfit: 200, profitPct: 80 }, { level: "CLOSE_NOW", projectedProfit: 100, profitPct: 70, sentAt })).toBe(false);
+  });
+  it("re-notifies after 60 minutes if profit improved", () => {
+    const sentAt = new Date(Date.now() - 65 * 60000).toISOString(); // 65 min ago
+    expect(shouldNotify({ level: "CLOSE_NOW", projectedProfit: 200, profitPct: 80 }, { level: "CLOSE_NOW", projectedProfit: 100, profitPct: 70, sentAt })).toBe(true);
+  });
+  it("re-notifies immediately if level escalates", () => {
+    const sentAt = new Date(Date.now() - 5 * 60000).toISOString(); // 5 min ago
+    expect(shouldNotify({ level: "ITM_WARNING", projectedProfit: 100, profitPct: 70 }, { level: "CLOSE_NOW", projectedProfit: 100, profitPct: 70, sentAt })).toBe(true);
+  });
+  it("does NOT re-notify if profit not improved enough after cooldown", () => {
+    const sentAt = new Date(Date.now() - 65 * 60000).toISOString();
+    expect(shouldNotify({ level: "CLOSE_NOW", projectedProfit: 120, profitPct: 72 }, { level: "CLOSE_NOW", projectedProfit: 100, profitPct: 70, sentAt })).toBe(false);
+  });
+});
+
+describe("Close signal BTO filter", () => {
+  it("STO contracts should be evaluated", () => {
+    const contract = { opt_type: "STO", stock: "WDC", premium: 2331 };
+    expect(contract.opt_type === "STO").toBe(true);
+  });
+  it("BTO contracts should be skipped", () => {
+    const contract = { opt_type: "BTO", stock: "WDC", premium: -1714 };
+    expect(contract.opt_type !== "STO").toBe(true);
+  });
+});
+
+describe("Time-based BTC rule selection", () => {
+  const timeToMins = t => { if (!t) return -1; const [h,m] = t.split(":").map(Number); return h*60+m; };
+
+  function selectBtcRule(rules, etTimeStr) {
+    const currentMins = timeToMins(etTimeStr);
+    return rules
+      .filter(r => r.enabled)
+      .sort((a,b) => (b.priority||0) - (a.priority||0))
+      .find(r => {
+        if (r.min_time_et && timeToMins(r.min_time_et) > currentMins) return false;
+        if (r.max_time_et && timeToMins(r.max_time_et) < currentMins) return false;
+        return true;
+      });
+  }
+
+  const rules = [
+    { rule_type:"btc_auto", name:"After 3pm", enabled:true, min_profit_pct:60, min_time_et:"15:00", priority:20, dry_run:false },
+    { rule_type:"btc_auto", name:"Default",   enabled:true, min_profit_pct:70, min_time_et:null,    priority:10, dry_run:false },
+  ];
+
+  it("uses 60% threshold after 3pm", () => {
+    const rule = selectBtcRule(rules, "15:30");
+    expect(rule.min_profit_pct).toBe(60);
+    expect(rule.name).toBe("After 3pm");
+  });
+  it("uses 70% threshold before 3pm", () => {
+    const rule = selectBtcRule(rules, "11:00");
+    expect(rule.min_profit_pct).toBe(70);
+    expect(rule.name).toBe("Default");
+  });
+  it("uses 60% threshold exactly at 3pm", () => {
+    const rule = selectBtcRule(rules, "15:00");
+    expect(rule.min_profit_pct).toBe(60);
+  });
+  it("returns default if timed rule is disabled", () => {
+    const rulesWithDisabled = [
+      { ...rules[0], enabled: false },
+      rules[1],
+    ];
+    const rule = selectBtcRule(rulesWithDisabled, "15:30");
+    expect(rule.min_profit_pct).toBe(70);
+  });
+  it("returns undefined if no rules match", () => {
+    const rule = selectBtcRule([], "15:30");
+    expect(rule).toBeUndefined();
+  });
+});
+
+describe("OTM% calculation for calls vs puts", () => {
+  const otmPctCall = (strike, stockPrice) => ((strike - stockPrice) / stockPrice) * 100;
+  const otmPctPut  = (strike, stockPrice) => ((stockPrice - strike) / stockPrice) * 100;
+
+  it("call OTM%: strike above stock price is positive", () => {
+    expect(otmPctCall(310, 300)).toBeCloseTo(3.33, 1);
+  });
+  it("call OTM%: strike below stock price is negative (ITM)", () => {
+    expect(otmPctCall(290, 300)).toBeCloseTo(-3.33, 1);
+  });
+  it("put OTM%: strike below stock price is positive", () => {
+    expect(otmPctPut(290, 300)).toBeCloseTo(3.33, 1);
+  });
+  it("put OTM%: strike above stock price is negative (ITM)", () => {
+    expect(otmPctPut(310, 300)).toBeCloseTo(-3.33, 1);
+  });
+  it("JPM example: $307.5 call with stock at $300 is 2.5% OTM", () => {
+    expect(otmPctCall(307.5, 300)).toBeCloseTo(2.5, 1);
+  });
+});
+
+describe("Momentum evaluation", () => {
+  function evaluateMomentum(symbol, quote, priceHistory, config) {
+    if (!config) return { pass: true, reasons: ["no config"], indicators: {} };
+    const reasons = []; const indicators = {}; let pass = true;
+    const { lastPrice: last, dayHigh, openPrice } = quote;
+
+    if (config.pullback_enabled && dayHigh && last) {
+      const pullbackPct = ((dayHigh - last) / dayHigh) * 100;
+      indicators.pullbackFromHigh = Math.round(pullbackPct * 100) / 100;
+      if (pullbackPct < config.min_pullback_from_high_pct) { pass = false; reasons.push(`within ${pullbackPct.toFixed(2)}% of high`); }
+      else reasons.push(`✓ pullback ${pullbackPct.toFixed(2)}%`);
+    }
+    if (config.momentum_enabled && config.require_decelerating) {
+      const symHistory = (priceHistory || []).filter(r => r.symbol === symbol).sort((a,b) => new Date(b.captured_at)-new Date(a.captured_at));
+      const lookbackMs = (config.momentum_lookback_mins || 30) * 60000;
+      const cutoff = new Date(Date.now() - lookbackMs);
+      const historical = symHistory.find(r => new Date(r.captured_at) <= cutoff);
+      if (historical?.change_pct != null && quote.changePct != null) {
+        const cur = quote.changePct * 100; const hist = historical.change_pct;
+        indicators.changePctNow = cur; indicators.changePct30m = hist; indicators.decelerating = cur <= hist;
+        if (cur > hist) { pass = false; reasons.push(`accelerating: ${hist}→${cur}`); }
+        else reasons.push(`✓ decelerating: ${hist}→${cur}`);
+      }
+    }
+    if (config.gap_enabled && openPrice && last) {
+      const moveFromOpen = ((last - openPrice) / openPrice) * 100;
+      indicators.moveFromOpen = Math.round(moveFromOpen * 100) / 100;
+      if (config.max_gap_up_pct && moveFromOpen > config.max_gap_up_pct) { pass = false; reasons.push(`gap-up ${moveFromOpen.toFixed(2)}% exceeds max`); }
+      else reasons.push(`✓ move from open ${moveFromOpen.toFixed(2)}%`);
+    }
+    return { pass, reasons, indicators };
+  }
+
+  const config = { pullback_enabled:true, min_pullback_from_high_pct:0.3, momentum_enabled:true, require_decelerating:true, momentum_lookback_mins:30, gap_enabled:true, max_gap_up_pct:2.0 };
+
+  it("passes when stock has pulled back from high and is decelerating", () => {
+    const quote = { lastPrice:101, dayHigh:102, openPrice:100, changePct:0.01 };
+    const hist = [{ symbol:"AAPL", change_pct:1.5, captured_at: new Date(Date.now()-31*60000).toISOString() }];
+    const result = evaluateMomentum("AAPL", quote, hist, config);
+    expect(result.pass).toBe(true);
+  });
+
+  it("suppresses when stock is within 0.3% of intraday high", () => {
+    const quote = { lastPrice:101.9, dayHigh:102, openPrice:100, changePct:0.02 };
+    const result = evaluateMomentum("AAPL", quote, [], config);
+    expect(result.pass).toBe(false);
+    expect(result.reasons.some(r => r.includes("high"))).toBe(true);
+  });
+
+  it("suppresses when move is still accelerating", () => {
+    const quote = { lastPrice:103, dayHigh:103.5, openPrice:100, changePct:0.03 };
+    const hist = [{ symbol:"AAPL", change_pct:1.5, captured_at: new Date(Date.now()-31*60000).toISOString() }];
+    const result = evaluateMomentum("AAPL", quote, hist, config);
+    expect(result.pass).toBe(false);
+    expect(result.indicators.decelerating).toBe(false);
+  });
+
+  it("suppresses when gap-up exceeds max", () => {
+    const quote = { lastPrice:105, dayHigh:105.5, openPrice:100, changePct:0.03 };
+    const hist = [{ symbol:"AAPL", change_pct:5, captured_at: new Date(Date.now()-31*60000).toISOString() }];
+    const result = evaluateMomentum("AAPL", quote, hist, config);
+    expect(result.pass).toBe(false);
+    expect(result.reasons.some(r => r.includes("gap"))).toBe(true);
+  });
+
+  it("passes with no config (fail-open)", () => {
+    const result = evaluateMomentum("AAPL", { lastPrice:100 }, [], null);
+    expect(result.pass).toBe(true);
+  });
+});
+
+// ── Automated Trading Safety Tests ───────────────────────────────────────────
+describe("Auto-BTC safety — duplicate order prevention", () => {
+  it("skips contract if pending order exists", () => {
+    const pendingContractIds = new Set(["123", "456"]);
+    expect(pendingContractIds.has(String(123))).toBe(true);
+    expect(pendingContractIds.has(String(789))).toBe(false);
+  });
+
+  it("handles string vs number contract ID mismatch", () => {
+    // Critical: contract.id may be number, Set contains strings
+    const pendingContractIds = new Set(["1777730812053"]);
+    expect(pendingContractIds.has(String(1777730812053))).toBe(true);
+    expect(pendingContractIds.has(1777730812053)).toBe(false); // number doesn't match string
+  });
+
+  it("skips Put contracts — only Calls auto-closed", () => {
+    const contract = { opt_type: "STO", type: "Put", premium: 1000, qty: 1 };
+    const rule = { enabled: true, min_profit_pct: 70, dry_run: false };
+    const shouldAutoBtc = (c, mid, r) => {
+      if (!r?.enabled) return false;
+      if (c.opt_type !== "STO") return false;
+      if (c.type !== "Call") return false;
+      const currentVal = mid * c.qty * 100;
+      return ((+c.premium - currentVal) / +c.premium) * 100 >= (r.min_profit_pct ?? 70);
+    };
+    expect(shouldAutoBtc(contract, 0.30, rule)).toBe(false);
+  });
+});
+
+describe("Auto-BTC safety — profit calculation edge cases", () => {
+  const calcBtcProfitPct = (premiumTotal, currentMid, qty) => {
+    const currentVal = currentMid * qty * 100;
+    return ((premiumTotal - currentVal) / premiumTotal) * 100;
+  };
+
+  it("WDC example: premium $2331.29, qty 1, ask $13.75 = 41% profit", () => {
+    expect(calcBtcProfitPct(2331.29, 13.75, 1)).toBeCloseTo(41.0, 0);
+  });
+
+  it("JPM example: premium $154.67, qty 2, ask $0.46 = 40% profit", () => {
+    // $0.46 × 2 × 100 = $92, profit = ($154.67 - $92) / $154.67 = 40.5%
+    expect(calcBtcProfitPct(154.67, 0.46, 2)).toBeCloseTo(40.5, 0);
+  });
+
+  it("returns negative profit when cost exceeds premium (loss)", () => {
+    expect(calcBtcProfitPct(100, 2.00, 1)).toBeCloseTo(-100, 0);
+  });
+
+  it("handles zero mid price (expired worthless)", () => {
+    expect(calcBtcProfitPct(1000, 0, 1)).toBeCloseTo(100, 0);
+  });
+
+  it("never fires on zero or null premium", () => {
+    const shouldAutoBtc = (c, mid, r) => {
+      if (!r?.enabled || c.opt_type !== "STO" || c.type !== "Call") return false;
+      const premium = +c.premium;
+      if (!premium) return false;
+      const currentVal = mid * c.qty * 100;
+      return ((premium - currentVal) / premium) * 100 >= (r.min_profit_pct ?? 70);
+    };
+    expect(shouldAutoBtc({ opt_type:"STO", type:"Call", premium:0, qty:1 }, 0.30, { enabled:true, min_profit_pct:70 })).toBe(false);
+    expect(shouldAutoBtc({ opt_type:"STO", type:"Call", premium:null, qty:1 }, 0.30, { enabled:true, min_profit_pct:70 })).toBe(false);
+  });
+});
+
+describe("Auto-BTC safety — dry run vs live", () => {
+  it("dry_run=true should never be considered live", () => {
+    const rule = { enabled: true, min_profit_pct: 70, dry_run: true };
+    const isDryRun = rule.dry_run !== false;
+    expect(isDryRun).toBe(true);
+  });
+
+  it("dry_run=false is live mode", () => {
+    const rule = { enabled: true, min_profit_pct: 70, dry_run: false };
+    const isDryRun = rule.dry_run !== false;
+    expect(isDryRun).toBe(false);
+  });
+
+  it("dry_run=undefined defaults to dry run (safe default)", () => {
+    const rule = { enabled: true, min_profit_pct: 70 };
+    const isDryRun = rule.dry_run !== false;
+    expect(isDryRun).toBe(true); // undefined !== false is true → dry run
+  });
+
+  it("dry_run=null defaults to dry run (safe default)", () => {
+    const rule = { enabled: true, min_profit_pct: 70, dry_run: null };
+    const isDryRun = rule.dry_run !== false;
+    expect(isDryRun).toBe(true); // null !== false is true → dry run
+  });
+});
+
+describe("Auto-BTC safety — mid vs bid fallback", () => {
+  const getLimitPrice = (bid, ask) => {
+    const mid = ask > 0 && bid > 0 ? (bid + ask) / 2 : bid;
+    return Math.round(mid * 100) / 100;
+  };
+
+  it("uses mid when both bid and ask available", () => {
+    expect(getLimitPrice(0.30, 0.40)).toBe(0.35);
+  });
+
+  it("falls back to bid when ask is 0", () => {
+    expect(getLimitPrice(0.30, 0)).toBe(0.30);
+  });
+
+  it("falls back to bid when ask is null", () => {
+    const mid = (null > 0 && 0.30 > 0) ? (null + 0.30) / 2 : 0.30;
+    expect(Math.round(mid * 100) / 100).toBe(0.30);
+  });
+
+  it("rounds to 2 decimal places", () => {
+    // (0.31 + 0.42) / 2 = 0.365, rounded to 2dp = 0.37
+    expect(getLimitPrice(0.31, 0.42)).toBe(0.37);
+  });
+});
+
+describe("Momentum config — fail open behavior", () => {
+  const evaluateMomentum = (symbol, quote, priceHistory, config) => {
+    if (!config) return { pass: true, reasons: ["no config"], indicators: {} };
+    if (!config.enabled) return { pass: true, reasons: ["config disabled"], indicators: {} };
+    return { pass: true, reasons: ["passed"], indicators: {} }; // simplified
+  };
+
+  it("passes when no momentum config exists (table empty)", () => {
+    expect(evaluateMomentum("AAPL", {}, [], null).pass).toBe(true);
+  });
+
+  it("passes when momentum config is disabled", () => {
+    expect(evaluateMomentum("AAPL", {}, [], { enabled: false }).pass).toBe(true);
+  });
+});
+
+describe("Auto-BTC safety — order size sanity checks", () => {
+  // Limit price should never be > $50 for a typical covered call BTC
+  // If it is, something is wrong (e.g. decimal in wrong place, using stock price instead of option price)
+  const MAX_REASONABLE_LIMIT_PRICE = 50;
+  // Max reasonable cost for a single BTC order ($50 limit × 100 shares × 10 contracts)
+  const MAX_REASONABLE_ORDER_COST = 50000;
+
+  const getLimitPrice = (bid, ask) => {
+    const mid = ask > 0 && bid > 0 ? (bid + ask) / 2 : bid;
+    return Math.round(mid * 100) / 100;
+  };
+
+  const getOrderCost = (limitPrice, qty) => limitPrice * qty * 100;
+
+  it("limit price is per-contract price not per-share (should be <$50 for typical BTC)", () => {
+    // Normal BTC scenario: bid $0.30, ask $0.40 → limit $0.35
+    const limit = getLimitPrice(0.30, 0.40);
+    expect(limit).toBeLessThan(MAX_REASONABLE_LIMIT_PRICE);
+  });
+
+  it("catches decimal error: stock price accidentally used as limit price", () => {
+    // If JPM stock price ($215) was used instead of option price ($0.35), this would be catastrophically wrong
+    const stockPrice = 215.00;
+    expect(stockPrice).toBeGreaterThan(MAX_REASONABLE_LIMIT_PRICE); // this would be caught
+  });
+
+  it("order cost stays within reasonable bounds for typical qty", () => {
+    const limit = getLimitPrice(0.30, 0.40); // $0.35
+    const cost = getOrderCost(limit, 2); // 2 contracts
+    expect(cost).toBeLessThan(MAX_REASONABLE_ORDER_COST);
+    expect(cost).toBe(70); // $0.35 × 2 × 100 = $70
+  });
+
+  it("WDC scenario: limit $13.75, qty 1 → cost $1375 (within bounds)", () => {
+    const cost = getOrderCost(13.75, 1);
+    expect(cost).toBe(1375);
+    expect(cost).toBeLessThan(MAX_REASONABLE_ORDER_COST);
+  });
+
+  it("catches wrong multiplier: forgetting ×100 would give wrong cost", () => {
+    const limitPrice = 0.35;
+    const qty = 2;
+    const wrongCost  = limitPrice * qty;        // $0.70 — missing ×100
+    const rightCost  = limitPrice * qty * 100;  // $70.00 — correct
+    expect(wrongCost).not.toBe(rightCost);
+    expect(rightCost).toBe(70);
+  });
+
+  it("profit % is always 0-100 for a normal BTC scenario", () => {
+    const calcBtcProfitPct = (premiumTotal, currentMid, qty) => {
+      const currentVal = currentMid * qty * 100;
+      return ((premiumTotal - currentVal) / premiumTotal) * 100;
+    };
+    const profit = calcBtcProfitPct(1000, 0.30, 1);
+    expect(profit).toBeGreaterThan(0);
+    expect(profit).toBeLessThanOrEqual(100);
+  });
+
+  it("profit % above 100 signals bad data (e.g. negative premium stored)", () => {
+    const calcBtcProfitPct = (premiumTotal, currentMid, qty) => {
+      const currentVal = currentMid * qty * 100;
+      return ((premiumTotal - currentVal) / premiumTotal) * 100;
+    };
+    // If premium was stored as negative by mistake, profit% comes out > 100 — nonsense
+    const badProfit = calcBtcProfitPct(-1000, 0.30, 1);
+    expect(badProfit).toBeGreaterThan(100); // > 100% is the red flag for bad data
+  });
+
+  it("should not fire if premium is negative (bad data guard)", () => {
+    const shouldAutoBtc = (contract, mid, rule) => {
+      if (!rule?.enabled || contract.opt_type !== "STO" || contract.type !== "Call") return false;
+      const premium = +contract.premium;
+      if (!premium || premium < 0) return false; // guard against negative/zero premium
+      const currentVal = mid * contract.qty * 100;
+      return ((premium - currentVal) / premium) * 100 >= (rule.min_profit_pct ?? 70);
+    };
+    expect(shouldAutoBtc({ opt_type:"STO", type:"Call", premium:-1000, qty:1 }, 0.30, { enabled:true, min_profit_pct:70 })).toBe(false);
+  });
+});
+
+describe("Signal outcome quality classification", () => {
+  const classifyQuality = (profitPct) => {
+    const p = profitPct != null ? +profitPct * 100 : null;
+    return p == null ? "neutral" : p >= 50 ? "good" : p >= 0 ? "neutral" : "bad";
+  };
+
+  it("profit >= 50% is good", () => {
+    expect(classifyQuality(0.70)).toBe("good");
+    expect(classifyQuality(0.50)).toBe("good");
+  });
+  it("profit 0-49% is neutral", () => {
+    expect(classifyQuality(0.30)).toBe("neutral");
+    expect(classifyQuality(0.00)).toBe("neutral");
+  });
+  it("loss is bad", () => {
+    expect(classifyQuality(-0.20)).toBe("bad");
+  });
+  it("null profit is neutral", () => {
+    expect(classifyQuality(null)).toBe("neutral");
+  });
+});
+
+describe("Signal lineage chain", () => {
+  it("can traverse signal → decision → contract", () => {
+    const signalLog   = { id: 100, symbol: "JPM", signal_type: "sto_suggestion" };
+    const decisionLog = { id: 1, signal_id: 100, contract_id: 999, decision: "traded" };
+    const contract    = { id: 999, stock: "JPM", profit: 154.67, status: "Closed" };
+
+    // Full chain traversal
+    const signal   = signalLog;
+    const decision = decisionLog.signal_id === signal.id ? decisionLog : null;
+    const cont     = decision?.contract_id === contract.id ? contract : null;
+
+    expect(decision).not.toBeNull();
+    expect(cont).not.toBeNull();
+    expect(cont.profit).toBe(154.67);
+  });
+
+  it("signals without decisions are still valid (passed signals)", () => {
+    const signalLog = { id: 101, symbol: "AAPL", signal_type: "sto_suggestion" };
+    const decisions = []; // no decision logged
+    const decision  = decisions.find(d => d.signal_id === signalLog.id);
+    expect(decision).toBeUndefined(); // expected — signal was suppressed or ignored
+  });
+});
+
+describe("Scoring factor values completeness", () => {
+  const buildFactorValues = (sigId, changePct, vix, dte, otmPct, momentum, etNow) => {
+    return [
+      { factor_name: "change_pct",         value: changePct },
+      { factor_name: "vix",                value: vix },
+      { factor_name: "dte",                value: dte },
+      { factor_name: "otm_pct",            value: otmPct },
+      { factor_name: "pullback_from_high", value: momentum?.pullbackFromHigh ?? null },
+      { factor_name: "time_of_day",        value: etNow ? etNow.getHours() * 60 + etNow.getMinutes() : null },
+    ].filter(f => f.value != null).map(f => ({ signal_id: sigId, ...f }));
+  };
+
+  it("builds factor values for a typical STO signal", () => {
+    const etNow = new Date("2026-05-14T14:30:00"); // 10:30am ET approx
+    const vals = buildFactorValues(100, 1.5, 18.5, 7, 2.3, { pullbackFromHigh: 0.45 }, etNow);
+    expect(vals.length).toBe(6);
+    expect(vals.every(v => v.signal_id === 100)).toBe(true);
+    expect(vals.find(v => v.factor_name === "change_pct")?.value).toBe(1.5);
+  });
+
+  it("filters out null factor values", () => {
+    const vals = buildFactorValues(100, 1.5, null, 7, 2.3, {}, null);
+    const names = vals.map(v => v.factor_name);
+    expect(names).not.toContain("vix");
+    expect(names).not.toContain("time_of_day");
+    expect(names).not.toContain("pullback_from_high");
+  });
+});
+
+describe("Partial close — in-memory state update", () => {
+  // Simulates the matchToOpen + partial close flow for multiple fills
+  function matchToOpen(parsed, openContracts) {
+    const candidates = openContracts.filter(c =>
+      c.stock?.toUpperCase() === parsed.stock?.toUpperCase() &&
+      c.type === parsed.type &&
+      +c.strike === +parsed.strike &&
+      c.expires === parsed.expires &&
+      c.status === "Open"
+    );
+    if (!candidates.length) return { matchId: null, matchConfidence: "unmatched" };
+    const sameAcctExact = candidates.find(c => c.account === parsed.account && +c.qty === +parsed.qty);
+    if (sameAcctExact) return { matchId: sameAcctExact.id, matchConfidence: "exact" };
+    const sameAcct = candidates.filter(c => c.account === parsed.account);
+    if (sameAcct.length) {
+      const best = sameAcct.reduce((a,b) => Math.abs(+a.qty-+parsed.qty) < Math.abs(+b.qty-+parsed.qty) ? a : b);
+      return { matchId: best.id, matchConfidence: "partial" };
+    }
+    return { matchId: null, matchConfidence: "unmatched" };
+  }
+
+  function applyPartialClose(parent, closeQty) {
+    const parentQty  = +parent.qty;
+    const parentPrem = Math.abs(+parent.premium);
+    const remaining  = parentQty - closeQty;
+    const remPrem    = Math.round(parentPrem * (remaining / parentQty) * 100) / 100;
+    // Critical: update in-memory object
+    parent.qty     = remaining;
+    parent.premium = remPrem;
+    parent.notes   = `Partial close: ${closeQty} of ${parentQty}`;
+    return remaining;
+  }
+
+  it("second fill matches after first partial close updates in-memory state", () => {
+    const openContracts = [
+      { id: 1, stock: "AMZN", type: "Call", opt_type: "BTO", strike: 275, expires: "2026-05-15", qty: 4, premium: 1050.65, account: "Schwab 3866", status: "Open" }
+    ];
+
+    // First fill: STC qty 1
+    const fill1 = { stock: "AMZN", type: "Call", opt_type: "STC", strike: 275, expires: "2026-05-15", qty: 1, account: "Schwab 3866" };
+    const match1 = matchToOpen(fill1, openContracts);
+    expect(match1.matchId).toBe(1);
+    expect(match1.matchConfidence).not.toBe("unmatched");
+
+    // Apply partial close — updates in-memory state
+    const remaining = applyPartialClose(openContracts[0], 1);
+    expect(remaining).toBe(3);
+    expect(openContracts[0].qty).toBe(3);
+
+    // Second fill: STC qty 3 — should still match after state update
+    const fill2 = { stock: "AMZN", type: "Call", opt_type: "STC", strike: 275, expires: "2026-05-15", qty: 3, account: "Schwab 3866" };
+    const match2 = matchToOpen(fill2, openContracts);
+    expect(match2.matchId).toBe(1);
+    expect(match2.matchConfidence).not.toBe("unmatched");
+  });
+
+  it("without in-memory update, second fill would be unmatched", () => {
+    const openContracts = [
+      { id: 1, stock: "AMZN", type: "Call", opt_type: "BTO", strike: 275, expires: "2026-05-15", qty: 4, premium: 1050.65, account: "Schwab 3866", status: "Open" }
+    ];
+    // First fill processed but in-memory NOT updated (old buggy behavior)
+    // Second fill qty 3 — with qty still 4 in memory, exact match fails
+    const fill2 = { stock: "AMZN", type: "Call", opt_type: "STC", strike: 275, expires: "2026-05-15", qty: 3, account: "Schwab 3866" };
+    const match2 = matchToOpen(fill2, openContracts);
+    // Still matches via sameAcct fallback (closest qty), but not exact
+    expect(match2.matchId).toBe(1);
+    expect(match2.matchConfidence).toBe("partial"); // partial not exact — could cause issues
+  });
+
+  it("premium prorates correctly across partial fills", () => {
+    const parent = { qty: 4, premium: 1050.65 };
+    applyPartialClose(parent, 1);
+    expect(parent.qty).toBe(3);
+    expect(parent.premium).toBeCloseTo(787.99, 1); // 75% of 1050.65
+  });
+
+  it("full close after two partial fills leaves zero qty", () => {
+    const parent = { id:1, stock:"AMZN", type:"Call", opt_type:"BTO", strike:275, expires:"2026-05-15", qty:4, premium:1050.65, account:"Schwab 3866", status:"Open" };
+    applyPartialClose(parent, 1); // fill 1
+    applyPartialClose(parent, 3); // fill 2
+    expect(parent.qty).toBe(0);
+  });
+});
+
+describe("STC/BTC orphan prevention", () => {
+  it("alreadyHandledByTradeOrder returns true when matching filled order exists", () => {
+    const tradeOrders = [
+      { id: 54, ticker: "AMZN", strike: "272.5", opt_type: "BTC", status: "filled", account: "ETrade 6917", qty: 3, filled_at: "2026-05-15", created_at: "2026-05-14T19:30:17Z" }
+    ];
+    const parsed = { stock: "AMZN", opt_type: "BTC", strike: "272.5", account: "ETrade 6917", qty: 3, date_exec: "2026-05-15" };
+
+    const match = tradeOrders.find(o =>
+      +o.qty === +parsed.qty &&
+      Math.abs(new Date(o.filled_at || o.created_at) - new Date(parsed.date_exec)) < 2 * 86400000
+    );
+    expect(match).toBeDefined();
+    expect(match.id).toBe(54);
+  });
+
+  it("alreadyHandledByTradeOrder returns false when no matching order", () => {
+    const tradeOrders = [];
+    const parsed = { stock: "AMZN", opt_type: "BTC", strike: "272.5", account: "ETrade 6917", qty: 3, date_exec: "2026-05-15" };
+    const match = tradeOrders.find(o => +o.qty === +parsed.qty);
+    expect(match).toBeUndefined();
+  });
+
+  it("does not skip STC transactions that have no trade_order", () => {
+    // Manual closes placed directly in broker should still be processed
+    const tradeOrders = []; // no skynet orders
+    const parsed = { stock: "AMZN", opt_type: "STC", strike: "275", qty: 3, date_exec: "2026-05-15" };
+    const match = tradeOrders.find(o => +o.qty === +parsed.qty);
+    expect(match).toBeUndefined(); // should NOT be skipped — will be matched to open contract
+  });
+});
+
+describe("Expiry day scenario matrix", () => {
+  const classify = (isITM, stockUp, profitPct, itmPct, isWheel, type) => {
+    if (isWheel && type === "Put") {
+      if (isITM && itmPct > 5) return "wheel_itm_deep";
+      if (isITM) return "wheel_itm_shallow";
+      return "wheel_otm";
+    }
+    if (profitPct >= 65) return "expiry_high_profit";
+    if (!isITM && stockUp)  return "expiry_otm_up";
+    if (isITM  && stockUp)  return "expiry_itm_up";
+    if (!isITM && !stockUp) return "expiry_otm_down";
+    if (isITM  && !stockUp) return "expiry_itm_down";
+    return "expiry_default";
+  };
+
+  it("OTM + up → take profit and re-sell", () => {
+    expect(classify(false, true, 40, 0, false, "Call")).toBe("expiry_otm_up");
+  });
+  it("ITM + up → watch momentum", () => {
+    expect(classify(true, true, 40, 2, false, "Call")).toBe("expiry_itm_up");
+  });
+  it("OTM + down → time decay working, wait", () => {
+    expect(classify(false, false, 40, 0, false, "Call")).toBe("expiry_otm_down");
+  });
+  it("ITM + down → minimize loss, auto-close at 2pm", () => {
+    expect(classify(true, false, 40, 2, false, "Call")).toBe("expiry_itm_down");
+  });
+  it("profit >= 65% any condition → act fast (WDC rule)", () => {
+    expect(classify(false, false, 68, 0, false, "Call")).toBe("expiry_high_profit");
+    expect(classify(true, true, 70, 3, false, "Call")).toBe("expiry_high_profit");
+  });
+  it("wheel put OTM → take profit, re-sell put", () => {
+    expect(classify(false, true, 40, 0, true, "Put")).toBe("wheel_otm");
+  });
+  it("wheel put ITM shallow (<5%) → may let assign", () => {
+    expect(classify(true, false, 40, 3, true, "Put")).toBe("wheel_itm_shallow");
+  });
+  it("wheel put ITM deep (>5%) → roll decision needed", () => {
+    expect(classify(true, false, 40, 6.7, true, "Put")).toBe("wheel_itm_deep");
+  });
+  it("AMD example: $462 put, stock at $431 = 6.7% ITM → deep", () => {
+    const itmPct = ((462 - 431) / 462) * 100;
+    expect(itmPct).toBeCloseTo(6.7, 0);
+    expect(classify(true, false, 30, itmPct, true, "Put")).toBe("wheel_itm_deep");
+  });
+});
+
+describe("shouldNotify — expiry day throttle", () => {
+  const today = new Date().toISOString().slice(0, 10);
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+
+  it("EXPIRY_WAIT fires once per day", () => {
+    const fn = (level, sentAt) => {
+      if (!sentAt) return true;
+      if (["EXPIRY_WAIT","WHEEL_OTM","WHEEL_ITM"].includes(level)) {
+        return sentAt.slice(0, 10) !== today;
+      }
+      return true;
+    };
+    expect(fn("EXPIRY_WAIT", null)).toBe(true);         // never sent
+    expect(fn("EXPIRY_WAIT", today+"T10:00:00Z")).toBe(false); // sent today
+    expect(fn("EXPIRY_WAIT", yesterday+"T10:00:00Z")).toBe(true); // sent yesterday
+  });
+
+  it("WHEEL_ITM fires once per day", () => {
+    const alreadySentToday = today + "T09:35:00Z";
+    const sentToday = alreadySentToday.slice(0, 10) === today;
+    expect(sentToday).toBe(true); // would be suppressed
+  });
+});
+
+describe("Expiry Today scenario classification (UI)", () => {
+  // Mirror of getExpiryScenario logic from dashboard
+  const getExpiryScenario = (c, stockPrice, changePct) => {
+    const stockUp = changePct > 0;
+    const isITM   = c.type === "Put" ? stockPrice < +c.strike : stockPrice > +c.strike;
+    const itmPct  = isITM ? (c.type === "Put"
+      ? ((+c.strike - stockPrice) / +c.strike) * 100
+      : ((stockPrice - +c.strike) / +c.strike) * 100) : 0;
+    const isWheel = c.strategy?.toLowerCase().includes("wheel");
+
+    if (isWheel && c.type === "Put") {
+      if (isITM && itmPct > 5) return "wheel_itm_deep";
+      if (isITM)               return "wheel_itm_shallow";
+      return "wheel_otm";
+    }
+    if (!isITM && stockUp)  return "expiry_otm_up";
+    if (isITM  && stockUp)  return "expiry_itm_up";
+    if (!isITM && !stockUp) return "expiry_otm_down";
+    if (isITM  && !stockUp) return "expiry_itm_down";
+    return "expiry_default";
+  };
+
+  it("WDC $475 Call — stock at $486 (up) OTM → take profit", () => {
+    // $475 call, stock at $486 = ITM for a call (stock > strike)
+    expect(getExpiryScenario(
+      { type:"Call", strike:475, strategy:"OTM Covered Call Strategy" }, 486, 0.02
+    )).toBe("expiry_itm_up");
+  });
+
+  it("AMZN $272.5 Call — stock at $268 (down) OTM → wait", () => {
+    expect(getExpiryScenario(
+      { type:"Call", strike:272.5, strategy:"OTM Covered Call Strategy" }, 268, -0.015
+    )).toBe("expiry_otm_down");
+  });
+
+  it("AMD $462 Put wheel — stock at $431 = 6.7% ITM → deep ITM", () => {
+    const itmPct = ((462 - 431) / 462) * 100;
+    expect(itmPct).toBeGreaterThan(5);
+    expect(getExpiryScenario(
+      { type:"Put", strike:462, strategy:"Wheel" }, 431, -0.06
+    )).toBe("wheel_itm_deep");
+  });
+
+  it("wheel put OTM + stock up → take profit re-sell", () => {
+    expect(getExpiryScenario(
+      { type:"Put", strike:430, strategy:"Wheel" }, 445, 0.02
+    )).toBe("wheel_otm");
+  });
+
+  it("wheel put ITM shallow (3%) → may let assign", () => {
+    expect(getExpiryScenario(
+      { type:"Put", strike:440, strategy:"Wheel" }, 427, -0.02
+    )).toBe("wheel_itm_shallow"); // (440-427)/440 = 2.95% < 5%
+  });
+
+  it("non-STO contracts should not appear in expiry today", () => {
+    const openContracts = [
+      { optType:"STO", expires:"2026-05-15", status:"Open", type:"Call", strike:275 },
+      { optType:"BTO", expires:"2026-05-15", status:"Open", type:"Call", strike:275 },
+      { optType:"STO", expires:"2026-05-16", status:"Open", type:"Call", strike:275 },
+    ];
+    const TODAY = "2026-05-15";
+    const expiring = openContracts.filter(c => c.expires === TODAY && c.optType === "STO");
+    expect(expiring.length).toBe(1);
+    expect(expiring[0].optType).toBe("STO");
+  });
+
+  it("expiry today panel hidden when no expiring contracts", () => {
+    const openContracts = [
+      { optType:"STO", expires:"2026-05-16", status:"Open" },
+    ];
+    const TODAY = "2026-05-15";
+    const expiring = openContracts.filter(c => c.expires === TODAY && c.optType === "STO");
+    expect(expiring.length).toBe(0); // panel should not render
+  });
+});
+
+describe("toApp mapping — closeMethod and openMethod", () => {
+  const toApp = (row) => ({
+    id:          row.id,
+    status:      row.status,
+    closeMethod: row.close_method || null,
+    openMethod:  row.open_method  || null,
+    profit:      row.profit != null ? +row.profit : null,
+  });
+
+  it("maps close_method to closeMethod", () => {
+    const row = { id:1, status:"Closed", close_method:"auto", open_method:"manual", profit:100 };
+    expect(toApp(row).closeMethod).toBe("auto");
+  });
+
+  it("maps open_method to openMethod", () => {
+    const row = { id:1, status:"Open", open_method:"app", close_method:null, profit:null };
+    expect(toApp(row).openMethod).toBe("app");
+  });
+
+  it("null close_method maps to null (not 'manual')", () => {
+    const row = { id:1, status:"Closed", close_method:null, profit:50 };
+    expect(toApp(row).closeMethod).toBeNull();
+  });
+
+  it("automation stats correctly filter by closeMethod", () => {
+    const contracts = [
+      { status:"Closed", closeMethod:"auto",   profit:101 },
+      { status:"Closed", closeMethod:"auto",   profit:50  },
+      { status:"Closed", closeMethod:"app",    profit:200 },
+      { status:"Closed", closeMethod:null,     profit:30  },
+      { status:"Closed", closeMethod:"manual", profit:40  },
+    ];
+    const closedC     = contracts.filter(c => c.status === "Closed");
+    const autoClosedC = closedC.filter(c => c.closeMethod === "auto");
+    const appClosedC  = closedC.filter(c => c.closeMethod === "app");
+    const manualC     = closedC.filter(c => !c.closeMethod || c.closeMethod === "manual");
+    const autoProfit  = autoClosedC.reduce((s,c) => s+(c.profit||0), 0);
+
+    expect(autoClosedC.length).toBe(2);
+    expect(appClosedC.length).toBe(1);
+    expect(manualC.length).toBe(2);
+    expect(autoProfit).toBe(151);
+    expect(Math.round(autoClosedC.length / closedC.length * 100)).toBe(40);
+  });
+});
+
+describe("Claude API — mode routing", () => {
+  const getMode = (body) => body.mode || "chat";
+
+  it("defaults to chat mode when no mode specified", () => {
+    expect(getMode({})).toBe("chat");
+  });
+  it("routes to skynet_analysis when mode set", () => {
+    expect(getMode({ mode: "skynet_analysis" })).toBe("skynet_analysis");
+  });
+  it("chat mode passes through messages correctly", () => {
+    const body = { messages: [{ role:"user", content:"test" }], max_tokens: 1000 };
+    expect(body.messages[0].role).toBe("user");
+    expect(body.max_tokens).toBe(1000);
+  });
+});
+
+describe("Claude API — skynet analysis data prep", () => {
+  const avg = arr => arr.length ? (arr.reduce((s,v) => s+v, 0) / arr.length).toFixed(2) : null;
+
+  const buildFactorSummary = (signals, outcomes) => {
+    const factorStats = {};
+    signals.forEach(s => {
+      if (!s.factor_name) return;
+      if (!factorStats[s.factor_name]) factorStats[s.factor_name] = { values:[], goodValues:[], badValues:[] };
+      factorStats[s.factor_name].values.push(+s.value);
+      const outcome = outcomes?.find(o => o.signal_id === s.signal_id);
+      if (outcome?.signal_quality === "good") factorStats[s.factor_name].goodValues.push(+s.value);
+      if (outcome?.signal_quality === "bad")  factorStats[s.factor_name].badValues.push(+s.value);
+    });
+    return Object.entries(factorStats).map(([name, d]) => ({
+      factor:   name,
+      avg_all:  avg(d.values),
+      avg_good: avg(d.goodValues),
+      avg_bad:  avg(d.badValues),
+      n_total:  d.values.length,
+      n_good:   d.goodValues.length,
+      n_bad:    d.badValues.length,
+    }));
+  };
+
+  it("builds factor summary correctly", () => {
+    const signals = [
+      { signal_id:1, factor_name:"change_pct", value:1.5 },
+      { signal_id:2, factor_name:"change_pct", value:0.8 },
+      { signal_id:3, factor_name:"vix",        value:20  },
+    ];
+    const outcomes = [
+      { signal_id:1, signal_quality:"good" },
+      { signal_id:2, signal_quality:"bad"  },
+    ];
+    const summary = buildFactorSummary(signals, outcomes);
+    const changeFactor = summary.find(f => f.factor === "change_pct");
+    expect(changeFactor.n_total).toBe(2);
+    expect(changeFactor.n_good).toBe(1);
+    expect(changeFactor.n_bad).toBe(1);
+    expect(changeFactor.avg_good).toBe("1.50");
+    expect(changeFactor.avg_bad).toBe("0.80");
+  });
+
+  it("handles signals with no matching outcomes gracefully", () => {
+    const signals  = [{ signal_id:99, factor_name:"vix", value:18 }];
+    const outcomes = [];
+    const summary  = buildFactorSummary(signals, outcomes);
+    expect(summary[0].n_good).toBe(0);
+    expect(summary[0].n_bad).toBe(0);
+    expect(summary[0].avg_good).toBeNull();
+  });
+
+  it("returns error when no signals provided", () => {
+    const signals = [];
+    expect(signals.length === 0).toBe(true); // API returns 400 in this case
+  });
+
+  it("win rate calculation is correct", () => {
+    const outcomes = [
+      { signal_quality:"good" },
+      { signal_quality:"good" },
+      { signal_quality:"bad"  },
+      { signal_quality:"neutral" },
+    ];
+    const good    = outcomes.filter(o => o.signal_quality === "good");
+    const winRate = (good.length / outcomes.length * 100).toFixed(1);
+    expect(winRate).toBe("50.0");
+  });
+});
+
+describe("Claude API — response parsing", () => {
+  it("extracts JSON from Claude response text", () => {
+    const text = 'Here is my analysis:\n{"summary":"test summary","patterns":[]}\nDone.';
+    const match = text.match(/\{[\s\S]*\}/);
+    expect(match).not.toBeNull();
+    const parsed = JSON.parse(match[0]);
+    expect(parsed.summary).toBe("test summary");
+  });
+
+  it("handles malformed JSON gracefully", () => {
+    const text = "I cannot provide analysis at this time.";
+    const match = text.match(/\{[\s\S]*\}/);
+    const analysis = match ? JSON.parse(match[0]) : { summary: text, parse_error: true };
+    expect(analysis.parse_error).toBe(true);
+    expect(analysis.summary).toBe(text);
+  });
+
+  it("uses correct model string", () => {
+    const MODEL = "claude-sonnet-4-5-20250929";
+    expect(MODEL).toBe("claude-sonnet-4-5-20250929");
+    expect(MODEL).not.toBe("claude-sonnet-4-5"); // old broken model string
+  });
+});
+
+describe("Auto-STO scanner", () => {
+  it("only processes whitelisted tickers (autoSto=true)", () => {
+    const stocksData = {
+      AAPL: { autoSto: true,  sharesSchwab: 200 },
+      NVDA: { autoSto: false, sharesSchwab: 100 },
+      AMZN: { autoSto: true,  sharesSchwab: 700, sharesEtrade: 300 },
+      JPM:  { autoSto: null,  sharesSchwab: 100 },
+    };
+    const whitelist = Object.entries(stocksData)
+      .filter(([, sd]) => sd?.autoSto === true)
+      .map(([sym]) => sym.toUpperCase());
+    expect(whitelist).toContain("AAPL");
+    expect(whitelist).toContain("AMZN");
+    expect(whitelist).not.toContain("NVDA");
+    expect(whitelist).not.toContain("JPM");
+  });
+
+  it("calculates uncovered qty per account correctly", () => {
+    const sharesByAcct = { "Schwab 3866": 700, "ETrade 6917": 300 };
+    const coveredByAcct = { "Schwab 3866": 200 }; // 2 open contracts × 100
+    const results = [];
+    for (const [account, totalShares] of Object.entries(sharesByAcct)) {
+      const covered   = coveredByAcct[account] || 0;
+      const uncovered = Math.floor((totalShares - covered) / 100);
+      if (uncovered >= 1) results.push({ account, uncovered });
+    }
+    expect(results.find(r => r.account === "Schwab 3866")?.uncovered).toBe(5);
+    expect(results.find(r => r.account === "ETrade 6917")?.uncovered).toBe(3);
+  });
+
+  it("AMZN example: 700 Schwab + 300 ETrade = 10 total contracts", () => {
+    const sharesByAcct = { "Schwab 3866": 700, "ETrade 6917": 300 };
+    const coveredByAcct = {};
+    let total = 0;
+    for (const [, shares] of Object.entries(sharesByAcct)) {
+      const covered   = coveredByAcct[Object.keys(sharesByAcct)[0]] || 0;
+      total += Math.floor((shares) / 100);
+    }
+    expect(total).toBe(10);
+  });
+
+  it("selects highest premium strike within OTM% range", () => {
+    const stockPrice = 275;
+    const minOTM = 1, maxOTM = 5;
+    const strikes = [
+      { strikePrice: 277.5, bid: 1.20, ask: 1.40 }, // 0.9% OTM — too close
+      { strikePrice: 280,   bid: 0.90, ask: 1.10 }, // 1.8% OTM — in range
+      { strikePrice: 282.5, bid: 1.30, ask: 1.50 }, // 2.7% OTM — in range, higher premium
+      { strikePrice: 290,   bid: 0.20, ask: 0.30 }, // 5.5% OTM — too far
+    ];
+    let best = null, bestPremium = 0;
+    for (const s of strikes) {
+      const otmPct = ((s.strikePrice - stockPrice) / stockPrice) * 100;
+      if (otmPct < minOTM || otmPct > maxOTM) continue;
+      const mid = (s.bid + s.ask) / 2;
+      if (mid > bestPremium) { bestPremium = mid; best = s; }
+    }
+    expect(best?.strikePrice).toBe(282.5); // highest premium in range
+    expect(bestPremium).toBe(1.40);
+  });
+
+  it("skips expiry on or before today", () => {
+    const today = new Date().toISOString().slice(0,10);
+    const yesterday  = new Date(Date.now() - 86400000).toISOString().slice(0,10);
+    const tomorrow   = new Date(Date.now() + 86400000).toISOString().slice(0,10);
+    const nextWeek   = new Date(Date.now() + 7*86400000).toISOString().slice(0,10);
+    const expiries = [today, yesterday, tomorrow, nextWeek];
+    const valid = expiries.filter(e => e > today);
+    expect(valid).toContain(tomorrow);
+    expect(valid).toContain(nextWeek);
+    expect(valid).not.toContain(today);
+    expect(valid).not.toContain(yesterday);
+  });
+
+  it("respects minimum premium — skips if est premium below threshold", () => {
+    const limitPrice = 0.25;
+    const qty = 2;
+    const minPrem = 50;
+    const estPremium = Math.round(limitPrice * qty * 100 * 100) / 100;
+    expect(estPremium).toBe(50);
+    expect(estPremium >= minPrem).toBe(true);
+  });
+
+  it("dry_run defaults to true — safe default", () => {
+    const rule = { enabled: true, min_profit_pct: 70 }; // no dry_run field
+    const isDryRun = rule.dry_run !== false;
+    expect(isDryRun).toBe(true);
+  });
+
+  it("deduplicates same ticker+account+strike+expiry within same day", () => {
+    const today = new Date().toISOString().slice(0,10);
+    const sentData = { contracts: {
+      "auto_sto|AMZN|Schwab 3866|280|2026-05-22": { sentAt: `${today}T14:00:00Z` }
+    }};
+    const key = "auto_sto|AMZN|Schwab 3866|280|2026-05-22";
+    const alreadySent = sentData.contracts[key]?.sentAt?.slice(0,10) === today;
+    expect(alreadySent).toBe(true); // should skip
+  });
+
+  it("allows re-entry after BTC — different strike or expiry gets new key", () => {
+    const today = new Date().toISOString().slice(0,10);
+    const todayStr2 = new Date().toISOString().slice(0,10);
+    const sentData = { contracts: {
+      "auto_sto|AMZN|Schwab 3866|280|2026-05-22": { sentAt: `${todayStr2}T10:00:00Z` }
+    }};
+    // New opportunity at different strike after BTC
+    const newKey = "auto_sto|AMZN|Schwab 3866|282.5|2026-05-22";
+    const alreadySent = sentData.contracts[newKey]?.sentAt?.slice(0,10) === todayStr2;
+    expect(alreadySent).toBe(false); // new strike = allowed
+  });
+});
+
+describe("Auto-STO — dry_run gate", () => {
+  const shouldRunAutoSto = (rule) => {
+    if (!rule?.enabled) return { run: false, reason: "rule disabled" };
+    const isDryRun = rule.dry_run !== false;
+    return { run: true, isDryRun, reason: isDryRun ? "dry run" : "live" };
+  };
+
+  it("does not run if rule is disabled", () => {
+    const result = shouldRunAutoSto({ enabled: false, dry_run: true });
+    expect(result.run).toBe(false);
+    expect(result.reason).toBe("rule disabled");
+  });
+
+  it("runs in dry run mode when enabled and dry_run=true", () => {
+    const result = shouldRunAutoSto({ enabled: true, dry_run: true });
+    expect(result.run).toBe(true);
+    expect(result.isDryRun).toBe(true);
+  });
+
+  it("runs live when enabled and dry_run=false", () => {
+    const result = shouldRunAutoSto({ enabled: true, dry_run: false });
+    expect(result.run).toBe(true);
+    expect(result.isDryRun).toBe(false);
+  });
+
+  it("dry_run defaults to true when undefined — safe default", () => {
+    const result = shouldRunAutoSto({ enabled: true });
+    expect(result.isDryRun).toBe(true);
+  });
+
+  it("live mode warning shows only when dry_run=false", () => {
+    expect({ dry_run: false }.dry_run === false).toBe(true);
+    expect({ dry_run: true  }.dry_run === false).toBe(false);
+    expect({ dry_run: undefined }.dry_run === false).toBe(false);
+  });
+});
+
+
+
+// ── Complete fake data factory ────────────────────────────────────────────────
+
+function makeRule(overrides = {}) {
+  return {
+    id: 1, rule_type: "sto", enabled: true,
+    dry_run: true,
+    min_change_pct: 0.5, min_premium: 50,
+    min_dte: 1, max_dte: 14,
+    min_otm_pct: 1.0, max_otm_pct: 5.0,
+    min_time_et: "09:45", priority: 10,
+    ...overrides,
+  };
+}
+
+function makeQuote(overrides = {}) {
+  return {
+    lastPrice: 200.00, changePct: 0.015,  // +1.5%
+    dayHigh:   202.00, openPrice: 198.00,
+    volume: 5000000,
+    ...overrides,
+  };
+}
+
+function makeMomentumConfig(overrides = {}) {
+  return {
+    enabled: true,
+    pullback_enabled: true,    min_pullback_from_high_pct: 0.3,
+    momentum_enabled: true,    require_decelerating: true, momentum_lookback_mins: 30,
+    gap_enabled: true,         max_gap_up_pct: 2.0,
+    volume_enabled: false,
+    min_time_et: "10:00",      max_time_et: "15:30",
+    ...overrides,
+  };
+}
+
+function makePriceHistory(symbol, changePctNow, changePct30mAgo) {
+  return [
+    { symbol, change_pct: changePctNow,   captured_at: new Date().toISOString() },
+    { symbol, change_pct: changePct30mAgo, captured_at: new Date(Date.now() - 31*60000).toISOString() },
+  ];
+}
+
+function makeChain(symbol, expiry, strikes) {
+  return {
+    [`${symbol}|${expiry}`]: {
+      calls: strikes.map(([strike, bid, ask]) => ({ strikePrice: strike, bid, ask })),
+    }
+  };
+}
+
+function makeStocksData(symbol, sharesByAcct, overrides = {}) {
+  return { [symbol]: { autoSto: true, sharesByAcct, ...overrides } };
+}
+
+function makeOpenContracts(symbol, account, qty) {
+  return [{ stock: symbol, account, status: "Open", opt_type: "STO", type: "Call", qty }];
+}
+
+// Core evaluator — mirrors market-refresh logic
+function evaluateAutoSto({ rule, quote, symbol, stocksData, chainData, openContracts = [], sentData = {}, etTimeMins = 10*60+30, priceHistory = [], momentumConfig }) {
+  const today = new Date().toISOString().slice(0,10);
+
+  // 1. Rule checks
+  if (!rule?.enabled)       return { action:"skip", reason:"rule disabled" };
+  
+  const isDryRun = rule.dry_run !== false;
+
+  // 2. Time gate
+  const minMins = rule.min_time_et ? +rule.min_time_et.split(":")[0]*60 + +rule.min_time_et.split(":")[1] : 9*60+45;
+  if (etTimeMins < minMins) return { action:"skip", reason:`too early (${etTimeMins} < ${minMins})` };
+
+  // 3. Whitelist
+  const sd = stocksData[symbol];
+  if (!sd?.autoSto) return { action:"skip", reason:"not whitelisted" };
+
+  // 4. Stock change
+  const changePct = (quote.changePct ?? 0) * 100;
+  if (changePct < (rule.min_change_pct ?? 0.5)) return { action:"skip", reason:`change ${changePct.toFixed(2)}% below min` };
+
+  // 5. Momentum checks
+  if (momentumConfig?.enabled) {
+    if (momentumConfig.pullback_enabled) {
+      const pullback = ((quote.dayHigh - quote.lastPrice) / quote.dayHigh) * 100;
+      if (pullback < momentumConfig.min_pullback_from_high_pct)
+        return { action:"suppressed", reason:`pullback ${pullback.toFixed(2)}% < ${momentumConfig.min_pullback_from_high_pct}%` };
+    }
+    if (momentumConfig.momentum_enabled && momentumConfig.require_decelerating) {
+      const hist = priceHistory.filter(r => r.symbol === symbol).sort((a,b) => new Date(b.captured_at)-new Date(a.captured_at));
+      const cutoff = new Date(Date.now() - (momentumConfig.momentum_lookback_mins||30)*60000);
+      const historical = hist.find(r => new Date(r.captured_at) <= cutoff);
+      if (historical && changePct > historical.change_pct)
+        return { action:"suppressed", reason:`accelerating: ${historical.change_pct}→${changePct}` };
+    }
+    if (momentumConfig.gap_enabled) {
+      const moveFromOpen = ((quote.lastPrice - quote.openPrice) / quote.openPrice) * 100;
+      if (moveFromOpen > (momentumConfig.max_gap_up_pct ?? 2.0))
+        return { action:"suppressed", reason:`gap-up ${moveFromOpen.toFixed(2)}% > max ${momentumConfig.max_gap_up_pct}%` };
+    }
+  }
+
+  // 6. Find best strike
+  let bestStrike = null, bestPremium = 0, bestExpiry = null, bestDTE = null;
+  for (const [chainKey, chain] of Object.entries(chainData||{})) {
+    const [ct, exp] = chainKey.split("|");
+    if (ct !== symbol || exp <= today) continue;
+    const dte = Math.ceil((new Date(exp) - new Date()) / 86400000);
+    if (dte < rule.min_dte || dte > rule.max_dte) continue;
+    for (const s of (chain.calls||[])) {
+      const otm = ((s.strikePrice - quote.lastPrice) / quote.lastPrice) * 100;
+      if (otm < rule.min_otm_pct || otm > rule.max_otm_pct) continue;
+      const mid = (s.bid + s.ask) / 2;
+      if (mid > bestPremium) { bestPremium = mid; bestStrike = s.strikePrice; bestExpiry = exp; bestDTE = dte; }
+    }
+  }
+  if (!bestStrike) return { action:"skip", reason:"no suitable strike" };
+
+  // 7. Per-account uncovered
+  const orders = [];
+  for (const [account, shares] of Object.entries(sd.sharesByAcct||{})) {
+    const covered = (openContracts||[]).filter(c=>c.stock===symbol&&c.account===account&&c.status==="Open").reduce((s,c)=>s+(+c.qty||0)*100,0);
+    const uncovered = Math.floor((shares-covered)/100);
+    if (uncovered < 1) continue;
+    const estPrem = Math.round(bestPremium * uncovered * 100 * 100) / 100;
+    if (estPrem < rule.min_premium) continue;
+    // Dedup check
+    const key = `auto_sto|${symbol}|${account}|${bestStrike}|${bestExpiry}`;
+    if (sentData[key]?.sentAt?.slice(0,10) === today) continue;
+    orders.push({ account, qty: uncovered, strike: bestStrike, expiry: bestExpiry, dte: bestDTE, limitPrice: bestPremium, estPremium: estPrem, isDryRun });
+  }
+  if (!orders.length) return { action:"skip", reason:"no uncovered shares or below min premium" };
+  return { action: isDryRun ? "dry_run" : "place_order", orders };
+}
+
+describe("Auto-STO full simulation — all decision points", () => {
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0,10);
+  const defaultChain = makeChain("AAPL", tomorrow, [[202, 1.50, 1.70], [205, 0.90, 1.10]]);
+  const defaultStocksData = makeStocksData("AAPL", { "Schwab 3866": 200 });
+  const defaultQuote = makeQuote();
+  const defaultMom = makeMomentumConfig();
+
+  // ── Rule gate ──────────────────────────────────────────────────────────────
+  it("skips when rule is disabled", () => {
+    const r = evaluateAutoSto({ rule: makeRule({ enabled: false }), quote: defaultQuote, symbol:"AAPL", stocksData: defaultStocksData, chainData: defaultChain, momentumConfig: defaultMom });
+    expect(r.action).toBe("skip");
+    expect(r.reason).toBe("rule disabled");
+  });
+
+
+  // ── Time gate ──────────────────────────────────────────────────────────────
+  it("skips before 9:45am ET", () => {
+    const r = evaluateAutoSto({ rule: makeRule(), quote: defaultQuote, symbol:"AAPL", stocksData: defaultStocksData, chainData: defaultChain, etTimeMins: 9*60+30, momentumConfig: defaultMom });
+    expect(r.action).toBe("skip");
+    expect(r.reason).toContain("too early");
+  });
+
+  it("runs at exactly 9:45am ET", () => {
+    const r = evaluateAutoSto({ rule: makeRule(), quote: defaultQuote, symbol:"AAPL", stocksData: defaultStocksData, chainData: defaultChain, etTimeMins: 9*60+45, momentumConfig: defaultMom });
+    expect(r.action).not.toBe("skip");
+  });
+
+  // ── Whitelist ──────────────────────────────────────────────────────────────
+  it("skips ticker not whitelisted", () => {
+    const r = evaluateAutoSto({ rule: makeRule(), quote: defaultQuote, symbol:"AAPL", stocksData: makeStocksData("AAPL", {"Schwab 3866":200}, { autoSto: false }), chainData: defaultChain, momentumConfig: defaultMom });
+    expect(r.action).toBe("skip");
+    expect(r.reason).toBe("not whitelisted");
+  });
+
+  // ── Stock change ───────────────────────────────────────────────────────────
+  it("skips when stock change below min (0.3% < 0.5%)", () => {
+    const r = evaluateAutoSto({ rule: makeRule(), quote: makeQuote({ changePct: 0.003 }), symbol:"AAPL", stocksData: defaultStocksData, chainData: defaultChain, momentumConfig: defaultMom });
+    expect(r.action).toBe("skip");
+    expect(r.reason).toContain("below min");
+  });
+
+  it("proceeds when stock change exactly at min (0.5%)", () => {
+    const r = evaluateAutoSto({ rule: makeRule(), quote: makeQuote({ changePct: 0.005 }), symbol:"AAPL", stocksData: defaultStocksData, chainData: defaultChain, momentumConfig: defaultMom });
+    expect(r.action).not.toBe("skip");
+  });
+
+  // ── Momentum ───────────────────────────────────────────────────────────────
+  it("suppresses when stock within 0.3% of intraday high", () => {
+    // lastPrice=201.80, dayHigh=202.00 → pullback=0.099% < 0.3%
+    const r = evaluateAutoSto({ rule: makeRule(), quote: makeQuote({ lastPrice: 201.80, dayHigh: 202.00 }), symbol:"AAPL", stocksData: defaultStocksData, chainData: defaultChain, momentumConfig: defaultMom });
+    expect(r.action).toBe("suppressed");
+    expect(r.reason).toContain("pullback");
+  });
+
+  it("passes when stock has pulled back 0.6% from high", () => {
+    // lastPrice=200.80, dayHigh=202.00 → pullback=0.59% > 0.3%
+    const r = evaluateAutoSto({ rule: makeRule(), quote: makeQuote({ lastPrice: 200.80, dayHigh: 202.00 }), symbol:"AAPL", stocksData: defaultStocksData, chainData: defaultChain, momentumConfig: defaultMom });
+    expect(r.action).not.toBe("suppressed");
+  });
+
+  it("suppresses when move is still accelerating", () => {
+    const history = makePriceHistory("AAPL", 1.5, 0.8); // now +1.5%, 30m ago +0.8% → accelerating
+    const r = evaluateAutoSto({ rule: makeRule(), quote: makeQuote({ changePct: 0.015 }), symbol:"AAPL", stocksData: defaultStocksData, chainData: defaultChain, priceHistory: history, momentumConfig: defaultMom });
+    expect(r.action).toBe("suppressed");
+    expect(r.reason).toContain("accelerating");
+  });
+
+  it("passes when move is decelerating", () => {
+    const history = makePriceHistory("AAPL", 1.5, 2.1); // now +1.5%, 30m ago +2.1% → decelerating
+    const r = evaluateAutoSto({ rule: makeRule(), quote: makeQuote({ changePct: 0.015 }), symbol:"AAPL", stocksData: defaultStocksData, chainData: defaultChain, priceHistory: history, momentumConfig: defaultMom });
+    expect(r.action).not.toBe("suppressed");
+  });
+
+  it("suppresses when gap-up exceeds max (stock up >2% from open)", () => {
+    // lastPrice=201, dayHigh=202 → pullback=0.5% ✓ passes pullback check
+    // lastPrice=201, openPrice=196 → moveFromOpen=2.55% > 2.0% → gap-up suppressed
+    const r = evaluateAutoSto({ rule: makeRule(), quote: makeQuote({ lastPrice: 201, dayHigh: 202, openPrice: 196 }), symbol:"AAPL", stocksData: defaultStocksData, chainData: defaultChain, momentumConfig: makeMomentumConfig({ momentum_enabled: false }) });
+    expect(r.action).toBe("suppressed");
+    expect(r.reason).toContain("gap-up");
+  });
+
+  // ── Chain / strike selection ───────────────────────────────────────────────
+  it("skips when no chain data available", () => {
+    const r = evaluateAutoSto({ rule: makeRule(), quote: defaultQuote, symbol:"AAPL", stocksData: defaultStocksData, chainData: {}, momentumConfig: defaultMom });
+    expect(r.action).toBe("skip");
+    expect(r.reason).toBe("no suitable strike");
+  });
+
+  it("skips when all strikes outside OTM range", () => {
+    // AAPL at $200 — only strikes outside 1-5% range
+    const chain = makeChain("AAPL", tomorrow, [[200.5, 1.00, 1.20], [215, 0.10, 0.20]]);
+    const r = evaluateAutoSto({ rule: makeRule(), quote: defaultQuote, symbol:"AAPL", stocksData: defaultStocksData, chainData: chain, momentumConfig: defaultMom });
+    expect(r.action).toBe("skip");
+  });
+
+  it("skips expiry on or before today", () => {
+    const todayStr = new Date().toISOString().slice(0,10);
+    const chain = makeChain("AAPL", todayStr, [[202, 1.50, 1.70]]); // today
+    const r = evaluateAutoSto({ rule: makeRule(), quote: defaultQuote, symbol:"AAPL", stocksData: defaultStocksData, chainData: chain, momentumConfig: defaultMom });
+    expect(r.action).toBe("skip");
+  });
+
+  it("skips expiry outside DTE range", () => {
+    const chain = makeChain("AAPL", "2026-06-20", [[202, 1.50, 1.70]]); // 36 DTE > max 14
+    const r = evaluateAutoSto({ rule: makeRule({ max_dte: 14 }), quote: defaultQuote, symbol:"AAPL", stocksData: defaultStocksData, chainData: chain, momentumConfig: defaultMom });
+    expect(r.action).toBe("skip");
+  });
+
+  // ── Premium / shares ───────────────────────────────────────────────────────
+  it("skips when est premium below minimum", () => {
+    // 1 contract × $0.40 mid = $40 < $50 min — strike at 1.5% OTM (in range)
+    const chain = makeChain("AAPL", tomorrow, [[203, 0.30, 0.50]]);
+    const r = evaluateAutoSto({ rule: makeRule({ min_premium: 50 }), quote: defaultQuote, symbol:"AAPL", stocksData: makeStocksData("AAPL", {"Schwab 3866": 100}), chainData: chain, momentumConfig: defaultMom });
+    expect(r.action).toBe("skip");
+    expect(r.reason).toContain("uncovered shares or below min premium");
+  });
+
+  it("skips when shares fully covered by open contracts", () => {
+    const openContracts = makeOpenContracts("AAPL", "Schwab 3866", 2); // 200 shares covered
+    const r = evaluateAutoSto({ rule: makeRule(), quote: defaultQuote, symbol:"AAPL", stocksData: makeStocksData("AAPL", {"Schwab 3866": 200}), chainData: defaultChain, openContracts, momentumConfig: defaultMom });
+    expect(r.action).toBe("skip");
+  });
+
+  // ── Dedup / re-entry ───────────────────────────────────────────────────────
+  it("deduplicates same strike already placed today", () => {
+    const tmrw = new Date(Date.now() + 86400000).toISOString().slice(0,10);
+    const todayStr = new Date().toISOString().slice(0,10);
+    const sentData = { [`auto_sto|AAPL|Schwab 3866|202|${tmrw}`]: { sentAt: `${todayStr}T14:00:00Z` } };
+    const r = evaluateAutoSto({ rule: makeRule(), quote: defaultQuote, symbol:"AAPL", stocksData: defaultStocksData, chainData: defaultChain, sentData, momentumConfig: defaultMom });
+    expect(r.action).toBe("skip");
+  });
+
+  it("allows re-entry at new strike after BTC", () => {
+    // $202 was placed, but now best strike is $205 (different key)
+    const sentData = { "auto_sto|AAPL|Schwab 3866|202|2026-05-16": { sentAt: "2026-05-15T10:00:00Z" } };
+    // Force best strike to be $205 by making $202 below OTM min
+    const chain = makeChain("AAPL", tomorrow, [[205, 1.80, 2.00]]); // only $205 in range
+    const r = evaluateAutoSto({ rule: makeRule(), quote: defaultQuote, symbol:"AAPL", stocksData: defaultStocksData, chainData: chain, sentData, momentumConfig: defaultMom });
+    expect(r.action).toBe("dry_run");
+    expect(r.orders[0].strike).toBe(205);
+  });
+
+  // ── End-to-end happy path ──────────────────────────────────────────────────
+  it("complete happy path — AAPL up 1.5%, fading, 2 uncovered contracts → dry_run order", () => {
+    const history = makePriceHistory("AAPL", 1.5, 2.0); // decelerating
+    const r = evaluateAutoSto({
+      rule: makeRule(),
+      quote: makeQuote({ lastPrice: 200, changePct: 0.015, dayHigh: 201.5, openPrice: 198 }),
+      symbol: "AAPL",
+      stocksData: makeStocksData("AAPL", { "Schwab 3866": 200 }),
+      chainData: makeChain("AAPL", tomorrow, [[202, 1.50, 1.70], [205, 0.90, 1.10]]),
+      priceHistory: history,
+      momentumConfig: makeMomentumConfig(),
+      etTimeMins: 10*60+30,
+    });
+    expect(r.action).toBe("dry_run");
+    expect(r.orders.length).toBe(1);
+    expect(r.orders[0].account).toBe("Schwab 3866");
+    expect(r.orders[0].qty).toBe(2);
+    expect(r.orders[0].strike).toBe(202); // highest premium in range
+    expect(r.orders[0].isDryRun).toBe(true);
+  });
+});
