@@ -1,11 +1,15 @@
 // api/schwab-auth.js
 // Consolidated Schwab OAuth handler — replaces schwab-auth.js, schwab-callback.js, schwab-token-refresh.js
 //
-// Actions:
-//   GET  (no action)          — Step 1: redirect user to Schwab login page
-//   GET  ?action=callback     — Step 2: Schwab redirects here with ?code=... after user approves
-//   GET  ?action=refresh      — Daily token keeper: refresh access+refresh tokens (called by GitHub Actions/cron)
-//   GET  ?action=status       — Check token health: days left, last run, etc.
+// Routes:
+//   GET  (no action, no code) — Step 1: redirect user to Schwab login page
+//   GET  ?code=...            — Step 2: Schwab redirects here after login (auto-detected by ?code= param)
+//   GET  ?action=refresh      — Daily token keeper: resets 7-day refresh window (called by cron)
+//   GET  ?action=status       — Check token health
+//
+// NOTE: Schwab does not allow query params in registered callback URLs.
+// Callback is detected by presence of ?code= param, not ?action=callback.
+// Registered callback URL: https://options-tracker-five.vercel.app/api/schwab-auth
 
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
 const SUPABASE_KEY = process.env.VITE_SUPABASE_ANON_KEY;
@@ -14,33 +18,16 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  const action = req.query.action;
+  const { action, code, error: oauthError } = req.query;
 
-  // ── No action / default: Step 1 — redirect to Schwab login ─────────────────
-  if (!action) {
-    const clientId    = process.env.SCHWAB_CLIENT_ID;
-    const callbackUrl = process.env.SCHWAB_CALLBACK_URL || "https://options-tracker-five.vercel.app/api/schwab-auth?action=callback";
-
-    const params = new URLSearchParams({
-      client_id:     clientId,
-      redirect_uri:  callbackUrl,
-      response_type: "code",
-      scope:         "readonly",
-    });
-
-    return res.redirect(`https://api.schwabapi.com/v1/oauth/authorize?${params}`);
-  }
-
-  // ── action=callback: Step 2 — exchange code for tokens ─────────────────────
-  if (action === "callback") {
-    const { code, error } = req.query;
-    if (error) return res.status(400).send(`Auth error: ${error}`);
-    if (!code)  return res.status(400).send("No authorization code received");
+  // ── Step 2: Schwab redirected back with ?code= after user login ─────────────
+  if (code || oauthError) {
+    if (oauthError) return res.status(400).send(`Auth error: ${oauthError}`);
 
     try {
       const clientId     = process.env.SCHWAB_CLIENT_ID;
       const clientSecret = process.env.SCHWAB_CLIENT_SECRET;
-      const callbackUrl  = process.env.SCHWAB_CALLBACK_URL || "https://options-tracker-five.vercel.app/api/schwab-auth?action=callback";
+      const callbackUrl  = process.env.SCHWAB_CALLBACK_URL || "https://options-tracker-five.vercel.app/api/schwab-auth";
 
       const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
       const tokenRes = await fetch("https://api.schwabapi.com/v1/oauth/token", {
@@ -85,6 +72,21 @@ export default async function handler(req, res) {
     }
   }
 
+  // ── Step 1: No code yet — redirect user to Schwab login ────────────────────
+  if (!action) {
+    const clientId    = process.env.SCHWAB_CLIENT_ID;
+    const callbackUrl = process.env.SCHWAB_CALLBACK_URL || "https://options-tracker-five.vercel.app/api/schwab-auth";
+
+    const params = new URLSearchParams({
+      client_id:     clientId,
+      redirect_uri:  callbackUrl,
+      response_type: "code",
+      scope:         "readonly",
+    });
+
+    return res.redirect(`https://api.schwabapi.com/v1/oauth/authorize?${params}`);
+  }
+
   // ── action=refresh: Daily token keeper — resets 7-day refresh window ────────
   if (action === "refresh") {
     const secret   = process.env.CRON_SECRET;
@@ -106,7 +108,7 @@ export default async function handler(req, res) {
       }
 
       const daysLeft = ((t.refreshTokenExpiresAt - Date.now()) / 86400000).toFixed(1);
-      const creds = Buffer.from(`${process.env.SCHWAB_CLIENT_ID}:${process.env.SCHWAB_CLIENT_SECRET}`).toString("base64");
+      const creds    = Buffer.from(`${process.env.SCHWAB_CLIENT_ID}:${process.env.SCHWAB_CLIENT_SECRET}`).toString("base64");
       const tokenRes = await fetch("https://api.schwabapi.com/v1/oauth/token", {
         method: "POST",
         headers: { Authorization: `Basic ${creds}`, "Content-Type": "application/x-www-form-urlencoded" },
