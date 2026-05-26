@@ -232,7 +232,51 @@ async function alreadyHandledByTradeOrder(parsed) {
 }
 
 // ── Commit a transaction to contracts table ───────────────────────────────────
-async function commitTx(parsed, matchId, openContracts, stocksData) {
+async function commitTx(parsed, matchId, openContracts, stocksData, committedClosers = {}) {
+
+  // ── BTC/STC split fill merge: if a same-day closer for same stock/strike/expires/account
+  // already exists in this batch (in-memory), merge into it instead of inserting a new row.
+  // This handles Schwab split fills where one BTC order executes in multiple fills.
+  if (["BTC","STC"].includes(parsed.opt_type)) {
+    const normalizeExp = e => { if (!e) return ""; const d = new Date(e); return isNaN(d) ? String(e) : d.toISOString().slice(0,10); };
+    const closerKey = `${parsed.stock?.toUpperCase()}|${parsed.opt_type}|${parseFloat(parsed.strike)}|${normalizeExp(parsed.expires)}|${parsed.account}|${parsed.date_exec}`;
+    const existingCloser = committedClosers[closerKey];
+    if (existingCloser) {
+      // Merge this fill into the already-committed closer row
+      const newQty     = (+existingCloser.qty || 0) + (+parsed.qty || 0);
+      const newPremium = Math.round(((+existingCloser.premium || 0) + (+parsed.premium || 0)) * 100) / 100;
+      const daysHeld   = existingCloser.parent?.date_exec
+        ? Math.ceil((new Date(parsed.date_exec) - new Date(existingCloser.parent.date_exec)) / 86400000)
+        : null;
+      const profit     = existingCloser.parent
+        ? Math.round(((+existingCloser.parent.premium || 0) + newPremium) * 100) / 100
+        : null;
+      const profitPct  = profit != null && existingCloser.parent?.premium
+        ? Math.round((profit / Math.abs(+existingCloser.parent.premium)) * 10000) / 10000
+        : null;
+      await sbPatch("contracts", existingCloser.id, {
+        qty:     newQty,
+        premium: newPremium,
+        ...(profit    != null ? { profit }     : {}),
+        ...(profitPct != null ? { profit_pct: profitPct } : {}),
+        ...(daysHeld  != null ? { days_held: daysHeld }  : {}),
+        notes: `Split fill merged: +${parsed.qty} @ $${parsed.premium} (tx: ${parsed.schwab_transaction_id})`,
+      });
+      // Update in-memory tracker
+      existingCloser.qty     = newQty;
+      existingCloser.premium = newPremium;
+      // Also update parent cost_to_close on STO row
+      if (existingCloser.parent) {
+        await sbPatch("contracts", existingCloser.parent.id, {
+          cost_to_close: Math.abs(newPremium),
+          ...(profit    != null ? { profit }     : {}),
+          ...(profitPct != null ? { profit_pct: profitPct } : {}),
+        });
+      }
+      console.log(`[auto-import] BTC split fill merged: ${parsed.stock} $${parsed.strike} ${parsed.expires} qty +${parsed.qty} into contract ${existingCloser.id} (total qty now ${newQty})`);
+      return true;
+    }
+  }
 
   // ── Partial fill merge: if opening order (STO/BTO) matches an existing open
   // contract on same stock + opt_type + strike + expires + account + date_exec,
@@ -333,6 +377,20 @@ async function commitTx(parsed, matchId, openContracts, stocksData) {
       schwab_transaction_id: parsed.schwab_transaction_id,
     });
     console.log(`[auto-import] new open added to in-memory list: ${parsed.stock} ${parsed.opt_type} $${parsed.strike} qty ${parsed.qty} @ ${parsed.account}`);
+  }
+
+  // ── Track newly inserted BTC/STC so subsequent split fills can merge into it
+  if (["BTC","STC"].includes(parsed.opt_type)) {
+    const normalizeExp = e => { if (!e) return ""; const d = new Date(e); return isNaN(d) ? String(e) : d.toISOString().slice(0,10); };
+    const closerKey = `${parsed.stock?.toUpperCase()}|${parsed.opt_type}|${parseFloat(parsed.strike)}|${normalizeExp(parsed.expires)}|${parsed.account}|${parsed.date_exec}`;
+    const parent = matchId ? openContracts.find(c => c.id === matchId) : null;
+    committedClosers[closerKey] = {
+      id:      insertedId,
+      qty:     +parsed.qty,
+      premium: +parsed.premium,
+      parent,
+    };
+    console.log(`[auto-import] closer tracked for split fill detection: ${closerKey}`);
   }
 
   // If closer, update parent
@@ -584,8 +642,9 @@ export default async function handler(req, res) {
     });
     if (!allTxs.length) return res.status(200).json({ ok: true, committed: 0, anomalies: 0, reason: "no new transactions" });
 
-    const committed  = [];
-    const anomalies  = [];
+    const committed       = [];
+    const anomalies       = [];
+    const committedClosers = {}; // tracks BTC/STC inserts for split fill merging
 
     for (const tx of allTxs) {
       // Handle EXPIRED — close the matching STO/BTO with full profit/loss
@@ -642,7 +701,7 @@ export default async function handler(req, res) {
 
       // Auto-commit exact and partial matches, and all opens
       try {
-        const wasCommitted = await commitTx(tx, matchId, openContracts, stocksData);
+        const wasCommitted = await commitTx(tx, matchId, openContracts, stocksData, committedClosers);
         if (wasCommitted) committed.push(tx);
         // Update openContracts in memory so subsequent matches see updated state
         if (matchId && !["STO","BTO"].includes(tx.opt_type)) {
