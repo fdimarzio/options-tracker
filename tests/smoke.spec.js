@@ -10,7 +10,11 @@ const PIN      = process.env.PLAYWRIGHT_PIN || "";
 
 async function login(page) {
   await page.goto(BASE_URL);
-  await page.waitForSelector("text=Enter PIN", { timeout: 10000 });
+  // Step 1: user selection screen — click the user button
+  await page.waitForSelector("text=SELECT USER", { timeout: 10000 });
+  await page.click("button:has-text('Enter PIN to continue')");
+  // Step 2: PIN keypad — enter digits
+  await page.waitForSelector("text=Enter 4-digit PIN", { timeout: 10000 });
   for (const digit of PIN.split("")) {
     await page.click(`button:has-text("${digit}")`);
   }
@@ -25,7 +29,9 @@ test("login with correct PIN works", async ({ page }) => {
 
 test("wrong PIN shows error", async ({ page }) => {
   await page.goto(BASE_URL);
-  await page.waitForSelector("text=Enter PIN");
+  await page.waitForSelector("text=SELECT USER", { timeout: 10000 });
+  await page.click("button:has-text('Enter PIN to continue')");
+  await page.waitForSelector("text=Enter 4-digit PIN", { timeout: 10000 });
   // Click wrong digits
   for (const digit of "0000") {
     await page.click(`button:has-text("${digit}")`);
