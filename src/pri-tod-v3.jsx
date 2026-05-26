@@ -3246,7 +3246,7 @@ function ImportDailyTab({ contracts, supabase }) {
     .filter(c => c.dateExec === TODAY && c.createdVia === "Auto Import")
     .sort((a,b) => new Date(b.createdAt||0) - new Date(a.createdAt||0));
   const todayAnomalies = (anomalies||[])
-    .filter(a => (a.created_at||"").slice(0,10) === TODAY)
+    .filter(a => (a.created_at||"").slice(0,10) === TODAY && a.anomaly_type !== "resolved")
     .sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0));
   const manualToday = (contracts||[])
     .filter(c => c.dateExec === TODAY && c.createdVia !== "Auto Import")
@@ -3307,6 +3307,14 @@ function ImportDailyTab({ contracts, supabase }) {
                 <span style={{fontSize:11, fontWeight:700, color:"#e6edf3"}}>{a.stock||a.symbol||"?"}</span>
                 <span style={{fontSize:9, color:"#ff4560", background:"#ff456015", border:"1px solid #ff456033", borderRadius:3, padding:"1px 6px"}}>{a.anomaly_type||a.opt_type||"anomaly"}</span>
                 <span style={{fontSize:9, color:"#484f58"}}>{a.strike ? "$"+a.strike : ""} {a.expires||""}</span>
+                <button
+                  onClick={async () => {
+                    if (!supabase || !a.id) return;
+                    await supabase.from("import_anomalies").update({ anomaly_type: "resolved", notes: (a.notes||"") + " [dismissed by user]" }).eq("id", a.id);
+                    setAnomalies(prev => prev.filter(x => x.id !== a.id));
+                  }}
+                  style={{marginLeft:"auto", fontSize:9, color:"#484f58", background:"none", border:"1px solid #30363d", borderRadius:3, padding:"1px 8px", cursor:"pointer", fontFamily:"monospace"}}
+                >dismiss</button>
               </div>
               <div style={{fontSize:9, color:"#8b949e"}}>{a.notes||a.note||"No details"}</div>
             </div>
