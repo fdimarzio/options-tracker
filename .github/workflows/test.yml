@@ -47,7 +47,19 @@ jobs:
         run: npm ci
 
       - name: Install Playwright browsers
-        run: npx playwright install chromium --with-deps
+        run: npx playwright install chromium webkit --with-deps
+
+      - name: Verify PIN secret is set
+        run: |
+          if [ -z "$PLAYWRIGHT_PIN" ]; then
+            echo "ERROR: PLAYWRIGHT_PIN secret is not set in GitHub repository secrets"
+            echo "Go to: Settings → Secrets → Actions → New repository secret"
+            echo "Name: PLAYWRIGHT_PIN, Value: your 4-digit PIN"
+            exit 1
+          fi
+          echo "PIN secret is set (${#PLAYWRIGHT_PIN} digits)"
+        env:
+          PLAYWRIGHT_PIN: ${{ secrets.PLAYWRIGHT_PIN }}
 
       - name: Run smoke tests
         run: npx playwright test tests/smoke.spec.js
