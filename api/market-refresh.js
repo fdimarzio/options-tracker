@@ -1212,11 +1212,17 @@ export default async function handler(req, res) {
           captured_at: lastRefresh,
         }));
       if (snapshotRows.length) {
-        await fetch(`${SUPABASE_URL}/rest/v1/price_snapshots`, {
+        const psRes = await fetch(`${SUPABASE_URL}/rest/v1/price_snapshots`, {
           method: "POST",
           headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
           body: JSON.stringify(snapshotRows),
         });
+        if (!psRes.ok) {
+          const psErr = await psRes.text();
+          console.warn(`[market-refresh] price_snapshots insert failed (${psRes.status}): ${psErr}`);
+        } else {
+          console.log(`[market-refresh] price_snapshots: wrote ${snapshotRows.length} rows`);
+        }
         // Purge snapshots older than 2 days
         await fetch(`${SUPABASE_URL}/rest/v1/price_snapshots?captured_at=lt.${new Date(Date.now() - 2*86400000).toISOString()}`, {
           method: "DELETE",
