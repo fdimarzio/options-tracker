@@ -1798,6 +1798,41 @@ export default async function handler(req, res) {
                   continue;
                 }
 
+                // ── Snapshot-based filters (RSI, trend, SMA alignment) ─────────────
+                // Driven by stoRuleAuto.momentum_filters:
+                // {
+                //   max_rsi:            70,          // skip if RSI overbought
+                //   min_rsi:            30,          // skip if RSI oversold (optional)
+                //   require_trend:      ["bullish","neutral"],  // allowed trend regimes
+                //   min_sma_alignment:  1            // 1=price>SMA20>SMA50, 2=all three aligned
+                // }
+                const mf = stoRuleAuto.momentum_filters;
+                if (mf) {
+                  const trend = trendBySymbol[symbol];
+                  if (trend) {
+                    if (mf.max_rsi != null && trend.rsi14 != null && trend.rsi14 > +mf.max_rsi) {
+                      console.log(`[auto-sto] ${symbol} skipped — RSI ${trend.rsi14.toFixed(1)} > max ${mf.max_rsi}`);
+                      continue;
+                    }
+                    if (mf.min_rsi != null && trend.rsi14 != null && trend.rsi14 < +mf.min_rsi) {
+                      console.log(`[auto-sto] ${symbol} skipped — RSI ${trend.rsi14.toFixed(1)} < min ${mf.min_rsi}`);
+                      continue;
+                    }
+                    if (Array.isArray(mf.require_trend) && mf.require_trend.length && trend.trend_regime) {
+                      if (!mf.require_trend.includes(trend.trend_regime)) {
+                        console.log(`[auto-sto] ${symbol} skipped — trend_regime "${trend.trend_regime}" not in [${mf.require_trend.join(",")}]`);
+                        continue;
+                      }
+                    }
+                    if (mf.min_sma_alignment != null && trend.sma_alignment != null && trend.sma_alignment < +mf.min_sma_alignment) {
+                      console.log(`[auto-sto] ${symbol} skipped — sma_alignment ${trend.sma_alignment} < min ${mf.min_sma_alignment}`);
+                      continue;
+                    }
+                  } else {
+                    console.log(`[auto-sto] ${symbol} — no trend data for momentum filters, proceeding`);
+                  }
+                }
+
                 // Get uncovered shares per account for this ticker
                 const sdTicker = updatedSD[symbol] || {};
                 const sharesByAcct = sdTicker.sharesByAcct || {};
@@ -1836,13 +1871,18 @@ export default async function handler(req, res) {
                   const dte = Math.ceil((new Date(chainExpiry) - new Date()) / 86400000);
                   if (dte < minDTE || dte > maxDTE) continue;
 
-                  // Effective min OTM scales with DTE:
-                  // ≤3 days:  minOTM (rule value, e.g. 1%)
-                  // 4-7 days: minOTM * 1.5 (e.g. 1.5%)
-                  // 8-14 days: minOTM * 2.5 (e.g. 2.5%)
-                  const effectiveMinOTM = dte <= 3  ? minOTM
-                                        : dte <= 7  ? minOTM * 1.5
-                                        : minOTM * 2.5;
+                  // Effective min OTM — table-driven via stoRuleAuto.otm_dte_table
+                  // Table format: [{ max_dte: 3, min_otm_pct: 1.75 }, { max_dte: 7, min_otm_pct: 2.00 }, ...]
+                  // Rows sorted ascending by max_dte; first row where dte <= max_dte wins.
+                  // Falls back to minOTM (rule-level) if no table defined.
+                  let effectiveMinOTM = minOTM;
+                  const otmDteTable = stoRuleAuto.otm_dte_table;
+                  if (Array.isArray(otmDteTable) && otmDteTable.length) {
+                    const sorted = [...otmDteTable].sort((a, b) => a.max_dte - b.max_dte);
+                    const match  = sorted.find(row => dte <= row.max_dte);
+                    if (match) effectiveMinOTM = +match.min_otm_pct;
+                    else effectiveMinOTM = +sorted[sorted.length - 1].min_otm_pct;
+                  }
 
                   for (const strike of (chain.calls || [])) {
                     const otmPct = ((strike.strikePrice - stockPrice) / stockPrice) * 100;
