@@ -7,12 +7,14 @@ import crypto from "crypto";
 
 const SUPABASE_URL  = process.env.VITE_SUPABASE_URL;
 const SUPABASE_KEY  = process.env.VITE_SUPABASE_ANON_KEY;
+const SUPABASE_SVC_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_ANON_KEY; // service key for token rows
 const SCHWAB_BASE   = "https://api.schwabapi.com";
 const APP_URL       = "https://options-tracker-five.vercel.app";
 const CUTOVER_DATE  = "2026-05-10";
 
 // ── Supabase helpers ──────────────────────────────────────────────────────────
 const sbHeaders = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" };
+const svcHeaders = { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json" }; // service key — token rows only
 
 async function sbGet(path) {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { headers: sbHeaders });
@@ -43,9 +45,73 @@ async function sbUpsert(table, body) {
   return r.json().catch(() => null);
 }
 
+// ── Fetch nearest option_snapshot to a given timestamp ───────────────────────
+// Returns entry/exit context fields ready to spread onto a contract row.
+// Wraps in try/catch so a snapshot miss never blocks the import.
+async function fetchNearestSnapshot(symbol, strike, expiry, optType, timestamp, prefix = "entry") {
+  try {
+    if (!symbol || !strike || !expiry || !optType || !timestamp) return {};
+    // Normalise opt_type to what option_snapshots stores ("call" / "put")
+    const snapOptType = optType === "Put" ? "put" : "call";
+    // Query ±4 hours around the timestamp to catch pre/post market imports
+    const ts   = new Date(timestamp);
+    const from = new Date(ts.getTime() - 4 * 3600000).toISOString();
+    const to   = new Date(ts.getTime() + 4 * 3600000).toISOString();
+    const qs   = new URLSearchParams({
+      symbol:      `eq.${symbol.toUpperCase()}`,
+      strike:      `eq.${parseFloat(strike)}`,
+      expiry:      `eq.${expiry}`,
+      opt_type:    `eq.${snapOptType}`,
+      snapshot_at: `gte.${from}`,
+      // Use PostgREST range filter for upper bound
+    });
+    const path = `option_snapshots?symbol=eq.${encodeURIComponent(symbol.toUpperCase())}&strike=eq.${parseFloat(strike)}&expiry=eq.${expiry}&opt_type=eq.${snapOptType}&snapshot_at=gte.${from}&snapshot_at=lte.${to}&order=snapshot_at.asc&limit=500&select=id,snapshot_at,iv,delta,theta,vega,bid,ask,dte,stock_price,stock_change_pct,otm_pct,vix,rsi14,sma20,sma50,sma200,sma_alignment,trend_regime`;
+    const rows = await sbGet(path);
+    if (!Array.isArray(rows) || !rows.length) {
+      console.log(`[auto-import] no snapshot found for ${symbol} ${optType} $${strike} ${expiry} near ${timestamp}`);
+      return {};
+    }
+    // Pick the row closest in time to the target timestamp
+    const tgt = ts.getTime();
+    const best = rows.reduce((a, b) =>
+      Math.abs(new Date(a.snapshot_at).getTime() - tgt) <= Math.abs(new Date(b.snapshot_at).getTime() - tgt) ? a : b
+    );
+    const p = prefix;
+    const result = {
+      [`${p}_snapshot_id`]:       best.id,
+      [`${p}_iv`]:                best.iv             ?? null,
+      [`${p}_delta`]:             best.delta          ?? null,
+      [`${p}_bid`]:               best.bid            ?? null,
+      [`${p}_ask`]:               best.ask            ?? null,
+      [`${p}_dte`]:               best.dte            ?? null,
+      [`${p}_stock_price`]:       best.stock_price    ?? null,
+      [`${p}_stock_chg_pct`]:     best.stock_change_pct ?? null,
+      [`${p}_otm_pct`]:           best.otm_pct        ?? null,
+      [`${p}_vix`]:               best.vix            ?? null,
+      [`${p}_rsi14`]:             best.rsi14          ?? null,
+      [`${p}_trend_regime`]:      best.trend_regime   ?? null,
+    };
+    // entry-only: exit columns don't include full SMA set
+    if (p === "entry") {
+      result[`${p}_theta`]         = best.theta         ?? null;
+      result[`${p}_vega`]          = best.vega          ?? null;
+      result[`${p}_sma20`]         = best.sma20         ?? null;
+      result[`${p}_sma50`]         = best.sma50         ?? null;
+      result[`${p}_sma200`]        = best.sma200        ?? null;
+      result[`${p}_sma_alignment`] = best.sma_alignment ?? null;
+    }
+    return result;
+  } catch (e) {
+    console.warn(`[auto-import] fetchNearestSnapshot failed for ${symbol} ${strike} ${expiry}:`, e.message);
+    return {};
+  }
+}
+
 // ── Schwab token ──────────────────────────────────────────────────────────────
 async function getValidToken() {
-  const rows = await sbGet(`col_prefs?select=cols&id=eq.schwab_tokens`);
+  // Use service key — schwab_tokens is protected from anon access
+  const res  = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.schwab_tokens`, { headers: svcHeaders });
+  const rows = await res.json();
   const t    = rows?.[0]?.cols;
   if (!t?.accessToken) throw new Error("No Schwab tokens");
   if (t.accessTokenExpiresAt > Date.now() + 120000) return t.accessToken;
@@ -58,7 +124,12 @@ async function getValidToken() {
   });
   const n = await tr.json();
   if (!n.access_token) throw new Error(`Token refresh failed: ${JSON.stringify(n)}`);
-  await sbPost("col_prefs", { id: "schwab_tokens", cols: { ...t, accessToken: n.access_token, refreshToken: n.refresh_token || t.refreshToken, accessTokenExpiresAt: Date.now() + (n.expires_in * 1000) }, updated_at: new Date().toISOString() }, "resolution=merge-duplicates");
+  // Write back with service key
+  await fetch(`${SUPABASE_URL}/rest/v1/col_prefs`, {
+    method: "POST",
+    headers: { ...svcHeaders, Prefer: "resolution=merge-duplicates" },
+    body: JSON.stringify({ id: "schwab_tokens", cols: { ...t, accessToken: n.access_token, refreshToken: n.refresh_token || t.refreshToken, accessTokenExpiresAt: Date.now() + (n.expires_in * 1000) }, updated_at: new Date().toISOString() }),
+  });
   return n.access_token;
 }
 
@@ -83,7 +154,9 @@ function buildOAuthHeader(method, url, accessToken, accessTokenSecret, params = 
 }
 
 async function etradeGet(path, queryParams = {}) {
-  const rows = await sbGet(`col_prefs?select=cols&id=eq.etrade_tokens`);
+  // Use service key — etrade_tokens is protected from anon access
+  const etr  = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.etrade_tokens`, { headers: svcHeaders });
+  const rows = await etr.json();
   const t    = rows?.[0]?.cols;
   if (!t?.accessToken || !t?.accessTokenSecret) throw new Error("No ETrade tokens");
   const urlBase    = `${ETRADE_BASE}${path}`;
@@ -334,7 +407,10 @@ async function commitTx(parsed, matchId, openContracts, stocksData, committedClo
     strike:   +parsed.strike,
     expires:  parsed.expires,
     qty:      +parsed.qty,
-    premium:  parsed.premium,
+    // Enforce sign: BTO/BTC = cash out (negative), STO/STC = cash in (positive)
+    premium:  ["BTO","BTC"].includes(parsed.opt_type) ? -Math.abs(parsed.premium || 0)
+            : ["STO","STC"].includes(parsed.opt_type) ?  Math.abs(parsed.premium || 0)
+            : parsed.premium,
     date_exec: parsed.date_exec,
     account:  parsed.account,
     status:   ["BTC","STC","ASSIGNED"].includes(parsed.opt_type) ? "Closed" : "Open",
@@ -356,6 +432,20 @@ async function commitTx(parsed, matchId, openContracts, stocksData, committedClo
   }
   const insertedId = Array.isArray(inserted) ? inserted[0]?.id : inserted?.id;
   if (!insertedId) return; // Already existed
+
+  // ── Stamp entry context snapshot onto new STO/BTO ────────────────────────
+  if (["STO","BTO"].includes(parsed.opt_type) && insertedId) {
+    try {
+      const entryCtx = await fetchNearestSnapshot(
+        parsed.stock, parsed.strike, parsed.expires, parsed.type,
+        parsed.date_exec || new Date().toISOString(), "entry"
+      );
+      if (Object.keys(entryCtx).length) {
+        await sbPatch("contracts", insertedId, entryCtx);
+        console.log(`[auto-import] entry snapshot stamped on contract ${insertedId} (snapshot ${entryCtx.entry_snapshot_id})`);
+      }
+    } catch(e) { console.warn("[auto-import] entry snapshot stamp failed:", e.message); }
+  }
 
   // ── KEY FIX: push newly inserted STO/BTO into openContracts immediately so
   // subsequent transactions in the same batch can find and merge into it,
@@ -411,15 +501,77 @@ async function commitTx(parsed, matchId, openContracts, stocksData, committedClo
       if (isPartial) {
         const remainingQty  = parentQty - closeQty;
         const remainingPrem = Math.round(parentPrem * (remainingQty / parentQty) * 100) / 100;
+        const closedPrem    = Math.round(parentPrem * (closeQty / parentQty) * 100) / 100;
+
+        // ── Close the original row for the qty that was actually closed ────────
         await sbPatch("contracts", matchId, {
-          qty:     remainingQty,
-          premium: (parent.opt_type === "STO" || parent.opt_type === "BTO") ? remainingPrem : -remainingPrem,
-          notes:   `Partial close: ${closeQty} of ${parentQty} on ${parsed.date_exec}, profit $${profit}`,
+          qty:           closeQty,
+          premium:       (parent.opt_type === "STO" || parent.opt_type === "BTO") ? closedPrem : -closedPrem,
+          status:        "Closed",
+          cost_to_close: costToClose,
+          close_date:    parsed.date_exec,
+          profit,
+          profit_pct:    profitPct,
+          days_held:     daysHeld,
+          closed_by_id:  insertedId,
+          notes:         `Partial close: ${closeQty} of ${parentQty} on ${parsed.date_exec}`,
         });
-        // Update in-memory so subsequent fills can match the reduced qty
-        parent.qty     = remainingQty;
-        parent.premium = (parent.opt_type === "STO" || parent.opt_type === "BTO") ? remainingPrem : -remainingPrem;
-        parent.notes   = `Partial close: ${closeQty} of ${parentQty} on ${parsed.date_exec}, profit $${profit}`;
+
+        // ── Stamp exit context snapshot on closed row ─────────────────────
+        try {
+          const exitCtx = await fetchNearestSnapshot(
+            parsed.stock, parsed.strike, parsed.expires, parsed.type,
+            parsed.date_exec || new Date().toISOString(), "exit"
+          );
+          if (Object.keys(exitCtx).length) {
+            await sbPatch("contracts", matchId, exitCtx);
+            console.log(`[auto-import] exit snapshot stamped on partial close ${matchId} (snapshot ${exitCtx.exit_snapshot_id})`);
+          }
+        } catch(e) { console.warn("[auto-import] exit snapshot stamp (partial) failed:", e.message); }
+
+        // ── Insert a new open row for the remaining qty ────────────────────────
+        const remainingRow = {
+          stock:       parent.stock,
+          type:        parent.type,
+          opt_type:    parent.opt_type,
+          strike:      parent.strike,
+          expires:     parent.expires,
+          qty:         remainingQty,
+          premium:     (parent.opt_type === "STO" || parent.opt_type === "BTO") ? remainingPrem : -remainingPrem,
+          status:      "Open",
+          date_exec:   parent.date_exec,
+          account:     parent.account,
+          broker:      parent.broker || null,
+          strategy:    parent.strategy || null,
+          notes:       `Remaining ${remainingQty} of ${parentQty} after partial close ${parsed.date_exec}`,
+          created_via: "Auto Import",
+        };
+        const newOpenRow = await sbPost("contracts", remainingRow, "resolution=ignore-duplicates,return=representation");
+        const newOpenId  = Array.isArray(newOpenRow) ? newOpenRow[0]?.id : newOpenRow?.id;
+
+        // ── Carry entry context from closed parent onto new open row ──────
+        if (newOpenId) {
+          try {
+            const entryCtx = await fetchNearestSnapshot(
+              parent.stock, parent.strike, parent.expires, parent.type,
+              parent.date_exec || new Date().toISOString(), "entry"
+            );
+            if (Object.keys(entryCtx).length) {
+              await sbPatch("contracts", newOpenId, entryCtx);
+              console.log(`[auto-import] entry snapshot carried to remaining open row ${newOpenId}`);
+            }
+          } catch(e) { console.warn("[auto-import] entry snapshot carry failed:", e.message); }
+        }
+
+        // Update in-memory: replace the closed parent with the new open row
+        if (newOpenId) {
+          parent.id      = newOpenId;
+          parent.qty     = remainingQty;
+          parent.premium = remainingRow.premium;
+          parent.status  = "Open";
+          parent.notes   = remainingRow.notes;
+        }
+        console.log(`[auto-import] partial close: ${parent.stock} ${parent.opt_type} $${parent.strike} — closed ${closeQty}, remaining ${remainingQty}, profit $${profit}`);
       } else {
         await sbPatch("contracts", matchId, {
           closed_by_id:         insertedId,
@@ -431,6 +583,18 @@ async function commitTx(parsed, matchId, openContracts, stocksData, committedClo
           days_held:            daysHeld,
           stock_price_at_close: parsed.price_at_execution || null,
         });
+
+        // ── Stamp exit context snapshot ───────────────────────────────────
+        try {
+          const exitCtx = await fetchNearestSnapshot(
+            parsed.stock, parsed.strike, parsed.expires, parsed.type,
+            parsed.date_exec || new Date().toISOString(), "exit"
+          );
+          if (Object.keys(exitCtx).length) {
+            await sbPatch("contracts", matchId, exitCtx);
+            console.log(`[auto-import] exit snapshot stamped on contract ${matchId} (snapshot ${exitCtx.exit_snapshot_id})`);
+          }
+        } catch(e) { console.warn("[auto-import] exit snapshot stamp failed:", e.message); }
 
         // ── Mark any submitted trade_orders for this contract as filled ──────
         try {
@@ -550,10 +714,13 @@ export default async function handler(req, res) {
     const stocksData = sdRows?.[0]?.cols || {};
 
     // Load existing IDs to skip already-committed transactions
-    const [existingContracts, existingPending] = await Promise.all([
+    const [existingContracts, existingPending, closerContractsRaw] = await Promise.all([
       sbGet(`contracts?select=schwab_transaction_id,stock,opt_type,strike,expires,account,premium,qty,date_exec,notes&schwab_transaction_id=not.is.null&date_exec=gte.${CUTOVER_DATE}`),
       sbGet(`pending_transactions?select=schwab_transaction_id`),
+      // Also load STC/BTC closer rows (which may have no schwab_transaction_id) for composite fingerprinting
+      sbGet(`contracts?select=stock,opt_type,strike,expires,account,premium,qty,date_exec&opt_type=in.(STC,BTC)&date_exec=gte.${CUTOVER_DATE}`),
     ]);
+    const closerContracts = Array.isArray(closerContractsRaw) ? closerContractsRaw : [];
     const existingIds = new Set([
       ...existingContracts.map(r => String(r.schwab_transaction_id)),
       ...existingPending.map(r => String(r.schwab_transaction_id)),
@@ -563,7 +730,10 @@ export default async function handler(req, res) {
     const normalizeExpires = e => { if (!e) return ""; const d = new Date(e); return isNaN(d) ? String(e) : d.toISOString().slice(0,10); };
     const normalizeStrike  = s => String(parseFloat(s));
     const makeFingerprint  = r => `${r.stock}|${r.opt_type}|${normalizeStrike(r.strike)}|${normalizeExpires(r.expires)}|${r.account}|${Math.round(Math.abs(+r.premium)*100)}|${r.qty}|${r.date_exec}`;
-    const existingFingerprints = new Set(existingContracts.map(makeFingerprint));
+    const existingFingerprints = new Set([
+      ...existingContracts.map(makeFingerprint),
+      ...closerContracts.map(makeFingerprint),  // include STC/BTC rows without tx IDs
+    ]);
     // Also add fingerprints for each individual partial fill already merged into a contract.
     // A merged contract has notes like "Partial fill merged: 1 @ $77.34 on 2026-05-14 (tx: 12345)"
     // We reconstruct the original partial fill fingerprint so it won't be re-imported.

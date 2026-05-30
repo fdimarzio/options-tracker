@@ -4,6 +4,7 @@
 
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
 const SUPABASE_KEY = process.env.VITE_SUPABASE_ANON_KEY;
+const SUPABASE_SVC_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_ANON_KEY; // service key for token rows
 const SCHWAB_BASE  = "https://api.schwabapi.com";
 const APP_URL      = "https://options-tracker-five.vercel.app";
 
@@ -17,7 +18,7 @@ function isMarketHours() {
 
 async function getValidToken() {
   const res  = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.schwab_tokens`, {
-    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+    headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` },
   });
   const t = (await res.json())?.[0]?.cols;
   if (!t?.accessToken) throw new Error("No Schwab tokens");
@@ -33,7 +34,7 @@ async function getValidToken() {
   if (!n.access_token) throw new Error("Token refresh failed");
   await fetch(`${SUPABASE_URL}/rest/v1/col_prefs`, {
     method: "POST",
-    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
+    headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
     body: JSON.stringify({ id: "schwab_tokens", cols: { ...t, accessToken: n.access_token, refreshToken: n.refresh_token || t.refreshToken, accessTokenExpiresAt: Date.now() + (n.expires_in * 1000) }, updated_at: new Date().toISOString() }),
   });
   return n.access_token;
@@ -1191,7 +1192,7 @@ export default async function handler(req, res) {
     let pendingContractIds = new Set();
     try {
       const pendingOrders = await fetch(
-        `${SUPABASE_URL}/rest/v1/trade_orders?select=contract_id&status=in.(pending_approval,dry_run_approved,submitted)`,
+        `${SUPABASE_URL}/rest/v1/trade_orders?select=contract_id&status=in.(pending_approval,submitted)`,
         { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
       ).then(r => r.json());
       pendingContractIds = new Set((Array.isArray(pendingOrders) ? pendingOrders : []).map(o => String(o.contract_id)));
@@ -1200,10 +1201,10 @@ export default async function handler(req, res) {
     // ── Write price snapshots for momentum tracking ─────────────────────────
     try {
       const snapshotRows = Object.entries(quotes)
-        .filter(([, q]) => q.lastPrice != null)
+        .filter(([, q]) => q.lastPrice != null || q.mark != null)
         .map(([sym, q]) => ({
           symbol:      sym,
-          price:       q.lastPrice,
+          price:       q.lastPrice ?? q.mark,
           change_pct:  q.changePct != null ? q.changePct * 100 : null,
           day_high:    q.dayHigh,
           day_low:     q.dayLow,
@@ -1230,6 +1231,12 @@ export default async function handler(req, res) {
         });
       }
     } catch(e) { console.warn("[market-refresh] price snapshot write failed:", e.message); }
+
+    // ── Pre-compute trend features per symbol (used by snapshots + STO scanner) ──
+    const trendBySymbol = {};
+    for (const sym of Object.keys(dailyCandles)) {
+      trendBySymbol[sym] = computeTrendFeatures(dailyCandles[sym] || [], quotes[sym]?.lastPrice);
+    }
 
     // ── Write option chain snapshots for simulation ─────────────────────────
     // Fetches live chains for all open-position tickers, stores 8 OTM + 8 ITM
@@ -1260,11 +1267,7 @@ export default async function handler(req, res) {
           snapVix = vixData?.["$VIX"]?.quote?.lastPrice ?? vixData?.["$VIX"]?.lastPrice ?? null;
         } catch(e) {}
 
-        // Pre-compute trend features per symbol from daily candles
-        const trendBySymbol = {};
-        for (const sym of finalSnapTickers) {
-          trendBySymbol[sym] = computeTrendFeatures(dailyCandles[sym] || [], quotes[sym]?.lastPrice);
-        }
+        // trendBySymbol hoisted to handler scope for STO scanner access
 
         await Promise.all(finalSnapTickers.map(async symbol => {
           try {
@@ -1476,7 +1479,10 @@ export default async function handler(req, res) {
       console.log(`[signal] ${contract.stock} $${contract.strike} ${contract.type} — ask:${chainEntry?.ask} bid:${chainEntry?.bid} mid:${signal.mid?.toFixed(3)} costToClose:$${signal.costToClose} profit:${signal.profitPct?.toFixed(1)}% premium:$${contract.premium} level:${signal.level}`);
 
       const lastNotif = sentData.contracts[String(contract.id)];
-      if (!shouldNotify(signal, lastNotif)) continue;
+      // If auto_execute is on for any btc_auto rule, don't let dedup block CLOSE_NOW
+      const hasLiveAutoRule = (Array.isArray(signalRules) ? signalRules : [])
+        .some(r => r.rule_type === "btc_auto" && r.enabled && r.auto_execute && !r.dry_run);
+      if (!shouldNotify(signal, lastNotif) && !(signal.level === "CLOSE_NOW" && hasLiveAutoRule)) continue;
 
       const notif = buildNotification(contract, signal, quotes);
       notifications.push({ contract, signal, notif });
@@ -1611,8 +1617,11 @@ export default async function handler(req, res) {
           // ── Stock change check ─────────────────────────────────────────────
           if (rule.min_change_pct != null && changePct < +rule.min_change_pct) continue;
 
-          // ── Momentum check ────────────────────────────────────────────────
-          const momentum = evaluateMomentum(symbol, stockQ, priceHistory, momentumConfig);
+          // ── Momentum check (pullback, deceleration, gap-up) ──────────────
+          // Uses rule.momentum_filters — consolidated from sto_momentum_config
+          const momCfg = rule.momentum_filters || momentumConfig;
+          if (momCfg && !momCfg.momentum_enabled && momCfg.require_decelerating) momCfg.momentum_enabled = true;
+          const momentum = evaluateMomentum(symbol, stockQ, priceHistory, momCfg);
           if (!momentum.pass) {
             console.log(`[sto] ${symbol} suppressed by momentum: ${momentum.reasons.filter(r=>!r.startsWith("✓")).join("; ")}`);
             const supSigId = await logSignal({ signal_type: "sto_suggestion", symbol, account, stock_price: stockPrice, change_pct: changePct, vix, time_of_day: etNow.toTimeString().slice(0, 8), day_of_week: etNow.getDay(), suggested_qty: suggestQty, rule_id: rule?.id ?? null, pushed: false, notes: `momentum suppressed: ${momentum.reasons.join("; ")}` });
@@ -1636,13 +1645,44 @@ export default async function handler(req, res) {
           console.log(`[sto] ${symbol} passed momentum: ${momentum.reasons.join("; ")}`);
           if (rule.max_change_pct != null && changePct > +rule.max_change_pct) continue;
 
+          // ── Momentum filters (RSI, trend regime, SMA alignment) ─────────
+          // Driven by rule.momentum_filters jsonb column on signal_rules
+          const mfRule = rule.momentum_filters;
+          if (mfRule) {
+            const trend = trendBySymbol[symbol];
+            let mfSkip = false;
+            if (trend) {
+              if (mfRule.max_rsi != null && trend.rsi14 != null && trend.rsi14 > +mfRule.max_rsi) {
+                console.log(`[sto] ${symbol} skipped — RSI ${trend.rsi14.toFixed(1)} > max ${mfRule.max_rsi}`);
+                mfSkip = true;
+              }
+              if (!mfSkip && mfRule.min_rsi != null && trend.rsi14 != null && trend.rsi14 < +mfRule.min_rsi) {
+                console.log(`[sto] ${symbol} skipped — RSI ${trend.rsi14.toFixed(1)} < min ${mfRule.min_rsi}`);
+                mfSkip = true;
+              }
+              if (!mfSkip && Array.isArray(mfRule.require_trend) && mfRule.require_trend.length && trend.trend_regime) {
+                if (!mfRule.require_trend.includes(trend.trend_regime)) {
+                  console.log(`[sto] ${symbol} skipped — trend "${trend.trend_regime}" not in [${mfRule.require_trend.join(",")}]`);
+                  mfSkip = true;
+                }
+              }
+              if (!mfSkip && mfRule.min_sma_alignment != null && trend.sma_alignment != null && trend.sma_alignment < +mfRule.min_sma_alignment) {
+                console.log(`[sto] ${symbol} skipped — sma_alignment ${trend.sma_alignment} < min ${mfRule.min_sma_alignment}`);
+                mfSkip = true;
+              }
+            } else {
+              console.log(`[sto] ${symbol} — no trend data for momentum filters, proceeding`);
+            }
+            if (mfSkip) continue;
+          }
+
           // ── VIX check ─────────────────────────────────────────────────────
           if (rule.min_vix != null && vix != null && vix < +rule.min_vix) continue;
           if (rule.max_vix != null && vix != null && vix > +rule.max_vix) continue;
 
           const minDTE  = rule.min_dte  ?? 1;
           const maxDTE  = rule.max_dte  ?? 14;
-          const minOTM  = rule.min_otm_pct ?? 1;
+          const baseMinOTM = rule.min_otm_pct ?? 1;
           const maxOTM  = rule.max_otm_pct ?? 10;
           const minPrem = rule.min_premium  ?? 50;
 
@@ -1654,14 +1694,26 @@ export default async function handler(req, res) {
             const dte = Math.ceil((new Date(chainExpiry) - new Date()) / 86400000);
             if (dte < minDTE || dte > maxDTE) continue;
 
+            // ── Table-driven OTM by DTE ────────────────────────────────
+            // otm_dte_table: [{ max_dte: 3, min_otm_pct: 1.75 }, { max_dte: 7, min_otm_pct: 2.0 }, ...]
+            // Falls back to rule-level min_otm_pct if no table defined
+            let effectiveMinOTM = baseMinOTM;
+            const otmDteTable = rule.otm_dte_table;
+            if (Array.isArray(otmDteTable) && otmDteTable.length) {
+              const sorted = [...otmDteTable].sort((a, b) => a.max_dte - b.max_dte);
+              const match  = sorted.find(row => dte <= row.max_dte);
+              if (match) effectiveMinOTM = +match.min_otm_pct;
+              else effectiveMinOTM = +sorted[sorted.length - 1].min_otm_pct;
+            }
+
             for (const strike of (chain.calls || [])) {
               // OTM% for calls: how far above current price is the strike
               const otmPct = ((strike.strikePrice - stockPrice) / stockPrice) * 100;
-              if (otmPct < minOTM || otmPct > maxOTM) continue;
+              if (otmPct < effectiveMinOTM || otmPct > maxOTM) continue;
               const mid = (strike.bid != null && strike.ask != null) ? (strike.bid + strike.ask) / 2 : strike.mark ?? 0;
               const premiumEst = Math.round(mid * suggestQty * 100 * 100) / 100;
               if (premiumEst < minPrem) continue;
-              matchingOpps.push({ strike: strike.strikePrice, expiry: chainExpiry, dte, otmPct: Math.round(otmPct * 10) / 10, bid: strike.bid, ask: strike.ask, mid: Math.round(mid * 100) / 100, premiumEst, iv: strike.volatility });
+              matchingOpps.push({ strike: strike.strikePrice, expiry: chainExpiry, dte, otmPct: Math.round(otmPct * 10) / 10, bid: strike.bid, ask: strike.ask, mid: Math.round(mid * 100) / 100, premiumEst, iv: strike.volatility, effectiveMinOTM });
             }
           }
 
@@ -1798,7 +1850,9 @@ export default async function handler(req, res) {
                 }
 
                 // Momentum check
-                const momentum = evaluateMomentum(symbol, stockQ, priceHistory, momentumConfig);
+                const autoMomCfg = rule?.momentum_filters || momentumConfig;
+                if (autoMomCfg && !autoMomCfg.momentum_enabled && autoMomCfg.require_decelerating) autoMomCfg.momentum_enabled = true;
+                const momentum = evaluateMomentum(symbol, stockQ, priceHistory, autoMomCfg);
                 if (!momentum.pass) {
                   console.log(`[auto-sto] ${symbol} suppressed by momentum: ${momentum.reasons.filter(r=>!r.startsWith("✓")).join("; ")}`);
                   continue;
