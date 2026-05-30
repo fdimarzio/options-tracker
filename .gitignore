@@ -25,3 +25,6 @@ dist-ssr
 
 .vercel
 .env*.local
+.env.backtest
+session_summary_*.md
+backfill-snapshots.mjs
