@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
-import { fetchQuotes, fetchOpenPositionChains, findOptionForContract, fetchPositions, schwabGet } from "./schwab.js";
+import { fetchQuotes, fetchOpenPositionChains, findOptionForContract, fetchPositions, schwabGet, buildOCCSymbol, fetchOptionQuotes } from "./schwab.js";
 import { BarChart, Bar, ComposedChart, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { createClient } from "@supabase/supabase-js";
 
@@ -303,6 +303,282 @@ const ChartTip = ({active,payload,label}) => {
 };
 
 // ── Coin / Loss animation overlay ─────────────────────────────────────────────
+// ── Contract Decay Chart ──────────────────────────────────────────────────────
+// Single chart: stock price (left axis, grey line) + option value (right axis, red curve)
+// Strike price = dotted horizontal line. Blue dot = today.
+function ContractDecayChart({ contract, stocksData }) {
+  const { dateExec, expires, premium, priceAtExecution, currentPrice, type, strike, optType, qty, stock } = contract;
+  if (!expires || !dateExec || !premium) return null;
+
+  const nd = x => { const a=Math.abs(x),t=1/(1+0.2316419*a),d=0.3989423*Math.exp(-0.5*a*a);let p=d*t*(0.3193815+t*(-0.3565638+t*(1.7814779+t*(-1.8212560+t*1.3302744))));return x>=0?1-p:p; };
+  const bsP = (S,K,T,r,sig,call) => { if(T<=0||sig<=0)return call?Math.max(0,S-K):Math.max(0,K-S); const d1=(Math.log(S/K)+(r+0.5*sig*sig)*T)/(sig*Math.sqrt(T)),d2=d1-sig*Math.sqrt(T); return call?S*nd(d1)-K*Math.exp(-r*T)*nd(d2):K*Math.exp(-r*T)*nd(-d2)-S*nd(-d1); };
+
+  const today = new Date(); today.setHours(0,0,0,0);
+  const execDate  = new Date(dateExec + 'T00:00:00');
+  const expDate   = new Date(expires  + 'T00:00:00');
+  const totalDays  = Math.max(1, Math.round((expDate - execDate) / 86400000));
+  const daysElapsed = Math.max(0, Math.min(totalDays, Math.round((today - execDate) / 86400000)));
+  const daysLeft    = Math.max(0, Math.round((expDate - today) / 86400000));
+
+  const isSTO  = optType === 'STO';
+  const isCall = type === 'Call';
+  const K      = +strike;
+  const r      = 0.05;
+  const S0     = priceAtExecution || K;
+  const liveStock = stocksData?.[stock]?.currentPrice ?? null;
+  const premPerShare = Math.abs(premium) / Math.max(1, qty) / 100;
+
+  // Back-solve IV from entry premium
+  let sigma = 0.40;
+  for (let i = 0; i < 60; i++) {
+    const T0 = totalDays / 365;
+    const p  = bsP(S0, K, T0, r, sigma, isCall);
+    const vega = S0 * Math.sqrt(T0) * 0.3989423 * Math.exp(-0.5 * ((Math.log(S0/K)+(r+0.5*sigma*sigma)*T0)/(sigma*Math.sqrt(T0)))**2);
+    if (Math.abs(p - premPerShare) < 0.0005) break;
+    sigma = Math.max(0.01, Math.min(5, sigma - (p - premPerShare) / (vega || 0.01)));
+  }
+
+  // Option value at each day
+  const optPts = Array.from({length: totalDays + 1}, (_, d) => ({
+    d, val: Math.max(0, bsP(S0, K, Math.max(0,(totalDays-d)/365), r, sigma, isCall))
+  }));
+
+  // Current option value
+  const curOptVal  = currentPrice != null ? Math.abs(currentPrice) : optPts[daysElapsed]?.val ?? 0;
+  const pnlPct     = isSTO && premPerShare > 0 ? ((premPerShare - curOptVal) / premPerShare) * 100 : null;
+  const pnlDollar  = isSTO ? (premPerShare - curOptVal) * qty * 100 : null;
+  const pnlColor   = (pnlDollar ?? 0) >= 0 ? '#00ff88' : '#ff4560';
+  const liveS      = liveStock ?? S0;
+  const isITM      = isCall ? liveS > K : liveS < K;
+  const itmColor   = isITM ? '#ff4560' : '#00ff88';
+
+  // Chart dimensions — single panel
+  const W   = 432;
+  const H   = 150;
+  const PAD = { top: 16, right: 46, bottom: 26, left: 52 };
+  const cW  = W - PAD.left - PAD.right;
+  const cH  = H - PAD.top  - PAD.bottom;
+
+  const sX = d => PAD.left + (d / totalDays) * cW;
+
+  // ── Left axis: stock price ──
+  // Range centers on strike ±12%, but must include both S0 and liveStock
+  const pad12 = K * 0.12;
+  const sMin = Math.min(K - pad12, S0 * 0.97, liveS * 0.97);
+  const sMax = Math.max(K + pad12, S0 * 1.03, liveS * 1.03);
+  const scaleS = v => PAD.top + cH - ((v - sMin) / (sMax - sMin)) * cH;
+
+  const strikeY    = scaleS(K);
+  const entryStockY = scaleS(S0);
+  const liveStockY  = scaleS(liveS);
+  const todayX      = sX(daysElapsed);
+
+  // ── Right axis: option value ──
+  const scaleO = v => PAD.top + cH - (Math.min(v, premPerShare) / premPerShare) * cH;
+
+  const optCurvePath = optPts.map((p,i) => `${i===0?'M':'L'}${sX(p.d).toFixed(1)},${scaleO(p.val).toFixed(1)}`).join(' ');
+  const optAreaPath  = optCurvePath + ` L${sX(totalDays).toFixed(1)},${(PAD.top+cH).toFixed(1)} L${PAD.left},${(PAD.top+cH).toFixed(1)} Z`;
+  const todayOptY    = scaleO(curOptVal);
+
+  // Stock line: entry → today
+  const stockLinePath = `M${sX(0)},${entryStockY.toFixed(1)} L${todayX},${liveStockY.toFixed(1)}`;
+
+  // DANI 80% target day
+  const target80Day = optPts.findIndex(p => p.val <= premPerShare * 0.20);
+  const target80X   = target80Day >= 0 ? sX(target80Day) : null;
+
+  const gradId = `dcg_${contract.id}`;
+
+  // X labels
+  const xLabels = [
+    { d: 0,          label: 'Entry' },
+    { d: Math.round(totalDays/2), label: `${Math.round(totalDays/2)}d` },
+    { d: totalDays,  label: 'Exp' },
+  ];
+
+  // Right-axis option price ticks
+  const optTicks = [0, 0.5, 1].map(f => ({
+    f, val: premPerShare * f, y: scaleO(premPerShare * f)
+  }));
+
+  // Left-axis stock price ticks: sMin, K, sMax
+  const stockTicks = [
+    { v: sMin, label: `$${sMin.toFixed(0)}` },
+    { v: K,    label: `$${K.toFixed(0)}` },
+    { v: sMax, label: `$${sMax.toFixed(0)}` },
+  ];
+
+  return (
+    <div style={{background:'#080c12',borderRadius:8,padding:'10px 12px',border:'1px solid #1c2128',marginTop:10}}>
+
+      {/* Stats row */}
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+        <span style={{fontFamily:'monospace',fontSize:8,color:'#3a4050',letterSpacing:'0.07em'}}>THETA DECAY</span>
+        <div style={{display:'flex',gap:10}}>
+          {liveStock != null && (
+            <div style={{textAlign:'right'}}>
+              <div style={{fontSize:7,color:'#3a4050',fontFamily:'monospace'}}>STOCK</div>
+              <div style={{fontSize:10,color:'#c9d1d9',fontFamily:'monospace'}}>${liveStock.toFixed(2)}</div>
+            </div>
+          )}
+          <div style={{textAlign:'right'}}>
+            <div style={{fontSize:7,color:'#3a4050',fontFamily:'monospace'}}>STATUS</div>
+            <div style={{fontSize:10,color:itmColor,fontFamily:'monospace',fontWeight:700}}>{isITM?'ITM':'OTM'}</div>
+          </div>
+          <div style={{textAlign:'right'}}>
+            <div style={{fontSize:7,color:'#3a4050',fontFamily:'monospace'}}>DTE</div>
+            <div style={{fontSize:10,color:daysLeft<=3?'#ff4560':daysLeft<=7?'#ffd166':'#c9d1d9',fontFamily:'monospace'}}>{daysLeft}d</div>
+          </div>
+          <div style={{textAlign:'right'}}>
+            <div style={{fontSize:7,color:'#3a4050',fontFamily:'monospace'}}>EST IV</div>
+            <div style={{fontSize:10,color:'#c9d1d9',fontFamily:'monospace'}}>{(sigma*100).toFixed(0)}%</div>
+          </div>
+          {pnlPct != null && (
+            <div style={{textAlign:'right'}}>
+              <div style={{fontSize:7,color:'#3a4050',fontFamily:'monospace'}}>RETAINED</div>
+              <div style={{fontSize:10,color:pnlColor,fontFamily:'monospace',fontWeight:700}}>{Math.min(100,Math.max(0,pnlPct)).toFixed(0)}%</div>
+            </div>
+          )}
+          {pnlDollar != null && (
+            <div style={{textAlign:'right'}}>
+              <div style={{fontSize:7,color:'#3a4050',fontFamily:'monospace'}}>P&L</div>
+              <div style={{fontSize:10,color:pnlColor,fontFamily:'monospace',fontWeight:700}}>{pnlDollar>=0?'+':''}{f$(pnlDollar)}</div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <svg width={W} height={H} style={{display:'block',maxWidth:'100%',overflow:'visible'}}>
+        <defs>
+          <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%"   stopColor="#ff4560" stopOpacity="0.22"/>
+            <stop offset="100%" stopColor="#ff4560" stopOpacity="0.02"/>
+          </linearGradient>
+        </defs>
+
+        {/* Chart background */}
+        <rect x={PAD.left} y={PAD.top} width={cW} height={cH} fill="#0a0e14" rx="2"/>
+
+        {/* ── Left axis: stock price ticks ── */}
+        {stockTicks.map(({v,label}) => {
+          const y = scaleS(v);
+          return (
+            <g key={v}>
+              <line x1={PAD.left-3} y1={y} x2={PAD.left} y2={y} stroke="#3a4050" strokeWidth="0.5"/>
+              <text x={PAD.left-5} y={y+3} textAnchor="end" fontSize="7" fill="#3a4050" fontFamily="monospace">{label}</text>
+            </g>
+          );
+        })}
+        <text x={PAD.left-30} y={PAD.top+cH/2} textAnchor="middle" fontSize="7" fill="#3a4050" fontFamily="monospace"
+          transform={`rotate(-90,${PAD.left-30},${PAD.top+cH/2})`}>Stock ($)</text>
+
+        {/* ── Right axis: option value ticks ── */}
+        {optTicks.map(({val,y}) => (
+          <g key={val}>
+            <line x1={PAD.left+cW} y1={y} x2={PAD.left+cW+3} y2={y} stroke="#ff456060" strokeWidth="0.5"/>
+            <text x={PAD.left+cW+5} y={y+3} fontSize="7" fill="#ff456080" fontFamily="monospace">${val.toFixed(2)}</text>
+          </g>
+        ))}
+        <text x={PAD.left+cW+38} y={PAD.top+cH/2} textAnchor="middle" fontSize="7" fill="#ff456060" fontFamily="monospace"
+          transform={`rotate(90,${PAD.left+cW+38},${PAD.top+cH/2})`}>Option ($)</text>
+
+        {/* Horizontal grid lines (align to stock axis) */}
+        {stockTicks.map(({v}) => (
+          <line key={v} x1={PAD.left} y1={scaleS(v)} x2={PAD.left+cW} y2={scaleS(v)}
+            stroke="#1c2128" strokeWidth="0.5"/>
+        ))}
+
+        {/* ITM shade: for calls shade above strike, for puts shade below */}
+        {isCall
+          ? <rect x={PAD.left} y={PAD.top} width={cW} height={Math.max(0,strikeY-PAD.top)} fill="#ff456006"/>
+          : <rect x={PAD.left} y={strikeY} width={cW} height={Math.max(0,PAD.top+cH-strikeY)} fill="#ff456006"/>
+        }
+
+        {/* ── Strike price dotted horizontal line ── */}
+        <line x1={PAD.left} y1={strikeY} x2={PAD.left+cW} y2={strikeY}
+          stroke="#8b949e" strokeWidth="1.5" strokeDasharray="6,3" opacity="0.8"/>
+        <text x={PAD.left+cW-2} y={strikeY-3} textAnchor="end" fontSize="7" fill="#8b949e" fontFamily="monospace">
+          Strike ${K.toFixed(2)}
+        </text>
+
+        {/* ── Option value filled area + decay curve (drawn before stock so stock is on top) ── */}
+        <path d={optAreaPath}  fill={`url(#${gradId})`}/>
+        <path d={optCurvePath} fill="none" stroke="#ff4560" strokeWidth="1.8" strokeLinecap="round"/>
+
+        {/* DANI 80% target vertical */}
+        {target80X != null && (
+          <g>
+            <line x1={target80X} y1={PAD.top} x2={target80X} y2={PAD.top+cH}
+              stroke="#00ff88" strokeWidth="1" strokeDasharray="3,3" opacity="0.45"/>
+            <text x={target80X+2} y={PAD.top+8} fontSize="7" fill="#00ff88" fontFamily="monospace" opacity="0.7">80%</text>
+          </g>
+        )}
+
+        {/* ── Stock price line (entry → today) ── */}
+        <path d={stockLinePath} fill="none" stroke="#c9d1d9" strokeWidth="1.6" strokeLinecap="round"/>
+
+        {/* Entry stock dot */}
+        <circle cx={sX(0)} cy={entryStockY} r="3" fill="#58a6ff" stroke="#0a0e14" strokeWidth="1.5"/>
+        <text x={sX(0)+5} y={entryStockY-3} fontSize="7" fill="#58a6ff80" fontFamily="monospace">${S0.toFixed(0)}</text>
+
+        {/* Today vertical */}
+        {daysElapsed > 0 && daysElapsed < totalDays && (
+          <line x1={todayX} y1={PAD.top} x2={todayX} y2={PAD.top+cH}
+            stroke="#58a6ff" strokeWidth="0.8" strokeDasharray="2,2" opacity="0.35"/>
+        )}
+
+        {/* Live stock price dot */}
+        <circle cx={todayX} cy={liveStockY} r="4" fill={itmColor} stroke="#0a0e14" strokeWidth="1.5"/>
+        {liveStock != null && (
+          <text x={todayX+(liveStockY < strikeY+12 ? 6 : -6)} y={liveStockY-4}
+            textAnchor={liveStockY < strikeY+12 ? 'start' : 'end'}
+            fontSize="7" fill={itmColor} fontFamily="monospace">${liveStock.toFixed(2)}</text>
+        )}
+
+        {/* Today dot on option curve */}
+        <circle cx={todayX} cy={todayOptY} r="4" fill="#58a6ff" stroke="#0a0e14" strokeWidth="1.5"/>
+
+        {/* ── X-axis ── */}
+        <line x1={PAD.left} y1={PAD.top+cH} x2={PAD.left+cW} y2={PAD.top+cH} stroke="#21262d" strokeWidth="1"/>
+        {xLabels.map(({d,label}) => (
+          <text key={d} x={sX(d)} y={PAD.top+cH+11}
+            textAnchor={d===0?'start':d===totalDays?'end':'middle'}
+            fontSize="7" fill="#3a4050" fontFamily="monospace">{label}</text>
+        ))}
+        {daysElapsed > 2 && daysElapsed < totalDays - 2 && (
+          <text x={todayX} y={PAD.top+cH+11} textAnchor="middle" fontSize="7" fill="#58a6ff" fontFamily="monospace">Now</text>
+        )}
+
+        {/* Legend */}
+        <g transform={`translate(${PAD.left},${H-3})`}>
+          <line x1="0" y1="-1" x2="10" y2="-1" stroke="#c9d1d9" strokeWidth="1.5"/>
+          <text x="13" y="2" fontSize="7" fill="#555" fontFamily="monospace">stock</text>
+          <line x1="42" y1="-1" x2="52" y2="-1" stroke="#8b949e" strokeWidth="1.5" strokeDasharray="5,2"/>
+          <text x="55" y="2" fontSize="7" fill="#555" fontFamily="monospace">strike</text>
+          <line x1="92" y1="-1" x2="102" y2="-1" stroke="#ff4560" strokeWidth="1.5"/>
+          <text x="105" y="2" fontSize="7" fill="#555" fontFamily="monospace">option value</text>
+          {target80X != null && <>
+            <line x1="172" y1="-1" x2="182" y2="-1" stroke="#00ff88" strokeWidth="1" strokeDasharray="3,2"/>
+            <text x="185" y="2" fontSize="7" fill="#555" fontFamily="monospace">80% target</text>
+          </>}
+        </g>
+      </svg>
+
+      {/* Time progress bar */}
+      <div style={{marginTop:8}}>
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:3}}>
+          <span style={{fontSize:7,color:'#3a4050',fontFamily:'monospace'}}>TIME ELAPSED</span>
+          <span style={{fontSize:7,color:'#3a4050',fontFamily:'monospace'}}>{daysElapsed}d elapsed · {daysLeft}d left · {totalDays}d total</span>
+        </div>
+        <div style={{height:4,background:'#1c2128',borderRadius:2,overflow:'hidden'}}>
+          <div style={{height:'100%',width:`${(daysElapsed/totalDays*100).toFixed(1)}%`,
+            background:daysLeft<=3?'#ff4560':daysLeft<=7?'#ffd166':'#58a6ff',borderRadius:2}}/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CelebrationOverlay({profit, onDone}) {
   useEffect(() => { const t = setTimeout(onDone, 2800); return () => clearTimeout(t); }, []);
 
@@ -542,6 +818,14 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
     else {
       setRules(p => p.map(r => r.id === rule.id ? { ...r, ...changes } : r));
       setEdits(p => { const n = { ...p }; delete n[rule.id]; return n; });
+      // btc_auto: when switching to LIVE, cancel any stale dry_run_approved orders
+      // so they don't block the scanner from creating fresh live orders
+      if (rule.rule_type === "btc_auto" && changes.dry_run === false) {
+        await supabase.from("trade_orders")
+          .update({ status: "cancelled" })
+          .eq("dry_run", true)
+          .in("status", ["dry_run_approved", "pending_approval"]);
+      }
     }
     setSaving(null);
   };
@@ -599,7 +883,14 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
                     {/* Live/DryRun toggle — green=LIVE, yellow=DRY RUN */}
                     {(rule.rule_type === "btc_auto" || rule.rule_type === "sto") && (
                       <label style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",fontFamily:"monospace",fontSize:9,color:getEdit(rule,"dry_run") ? "#ffd166" : "#00ff88"}}>
-                        <div onClick={()=>setEdit(rule.id,"dry_run",!getEdit(rule,"dry_run"))}
+                        <div onClick={()=>{
+                            const newDryRun = !getEdit(rule,"dry_run");
+                            setEdit(rule.id,"dry_run",newDryRun);
+                            // btc_auto: auto_execute mirrors LIVE toggle
+                            if (rule.rule_type === "btc_auto") {
+                              setEdit(rule.id,"auto_execute",!newDryRun);
+                            }
+                          }}
                           style={{width:28,height:15,borderRadius:8,background:getEdit(rule,"dry_run") ? "#ffd166" : "#00ff88",position:"relative",cursor:"pointer",transition:"background .2s"}}>
                           <div style={{position:"absolute",top:2,left:getEdit(rule,"dry_run") ? 2 : 13,width:11,height:11,borderRadius:"50%",background:"#010409",transition:"left .2s"}}/>
                         </div>
@@ -692,6 +983,130 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
                     <input type="number" value={getEdit(rule,"priority")??""} onChange={e=>setEdit(rule.id,"priority",+e.target.value)} style={{background:"#0d1117",border:"1px solid #21262d",borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"monospace",color:"#c9d1d9",width:"100%"}} />
                   </div>
                 </div>
+
+                {/* ── OTM by DTE Table (STO rules only) ── */}
+                {rule.rule_type === "sto" && (() => {
+                  const table = getEdit(rule, "otm_dte_table") || [];
+                  const rows = Array.isArray(table) ? [...table].sort((a,b) => a.max_dte - b.max_dte) : [];
+                  return (
+                    <div style={{marginTop:12,padding:10,background:"#0d1117",border:"1px solid #1c2128",borderRadius:6}}>
+                      <div style={{fontFamily:"monospace",fontSize:9,color:"#58a6ff",marginBottom:8,letterSpacing:"0.05em"}}>📊 OTM % BY DTE TABLE</div>
+                      <div style={{fontFamily:"monospace",fontSize:8,color:"#3a4050",marginBottom:6}}>Shorter DTE → tighter OTM. Each row sets the minimum OTM% for contracts up to that DTE.</div>
+                      <div style={{display:"grid",gridTemplateColumns:"80px 100px 30px",gap:4,alignItems:"center"}}>
+                        <div style={{fontFamily:"monospace",fontSize:7,color:"#3a4050"}}>MAX DTE</div>
+                        <div style={{fontFamily:"monospace",fontSize:7,color:"#3a4050"}}>MIN OTM %</div>
+                        <div/>
+                        {rows.map((row, i) => (
+                          <div key={i} style={{display:"contents"}}>
+                            <input type="number" value={row.max_dte} onChange={e => {
+                              const updated = [...rows]; updated[i] = { ...updated[i], max_dte: +e.target.value };
+                              setEdit(rule.id, "otm_dte_table", updated);
+                            }} style={{background:"#161b22",border:"1px solid #21262d",borderRadius:3,padding:"3px 6px",fontSize:10,fontFamily:"monospace",color:"#c9d1d9",width:"100%"}} />
+                            <input type="number" step="0.25" value={row.min_otm_pct} onChange={e => {
+                              const updated = [...rows]; updated[i] = { ...updated[i], min_otm_pct: +e.target.value };
+                              setEdit(rule.id, "otm_dte_table", updated);
+                            }} style={{background:"#161b22",border:"1px solid #21262d",borderRadius:3,padding:"3px 6px",fontSize:10,fontFamily:"monospace",color:"#c9d1d9",width:"100%"}} />
+                            <button onClick={() => { const updated = rows.filter((_,j) => j!==i); setEdit(rule.id, "otm_dte_table", updated); }}
+                              style={{background:"transparent",border:"none",color:"#f85149",cursor:"pointer",fontSize:12,padding:0}}>×</button>
+                          </div>
+                        ))}
+                      </div>
+                      <button onClick={() => {
+                        const updated = [...rows, { max_dte: rows.length ? Math.max(...rows.map(r=>r.max_dte)) + 7 : 3, min_otm_pct: 2.0 }];
+                        setEdit(rule.id, "otm_dte_table", updated);
+                      }} style={{marginTop:6,background:"transparent",border:"1px dashed #21262d",borderRadius:3,padding:"3px 10px",fontSize:9,fontFamily:"monospace",color:"#58a6ff",cursor:"pointer"}}>+ Add Row</button>
+                    </div>
+                  );
+                })()}
+
+                {/* ── Unified Momentum Filters (STO rules only) ── */}
+                {rule.rule_type === "sto" && (() => {
+                  const mf = getEdit(rule, "momentum_filters") || {};
+                  const setMF = (field, val) => setEdit(rule.id, "momentum_filters", { ...mf, [field]: val });
+                  const trendOptions = ["bullish", "neutral", "bearish"];
+                  const currentTrends = Array.isArray(mf.require_trend) ? mf.require_trend : [];
+                  const toggleStyle = (on) => ({width:28,height:15,borderRadius:8,background:on?"#00ff88":"#21262d",position:"relative",cursor:"pointer",transition:"background .2s",display:"inline-block"});
+                  const thumbStyle = (on) => ({position:"absolute",top:2,left:on?13:2,width:11,height:11,borderRadius:"50%",background:"#010409",transition:"left .2s"});
+                  const sectionLabel = {fontFamily:"monospace",fontSize:9,letterSpacing:"0.05em",marginBottom:6,marginTop:10};
+                  const fieldLabel = {fontFamily:"monospace",fontSize:8,color:"#3a4050",marginBottom:3};
+                  const inputStyle = {background:"#161b22",border:"1px solid #21262d",borderRadius:3,padding:"3px 6px",fontSize:10,fontFamily:"monospace",color:"#c9d1d9",width:"100%"};
+                  return (
+                    <div style={{marginTop:8,padding:10,background:"#0d1117",border:"1px solid #1c2128",borderRadius:6}}>
+                      <div style={{fontFamily:"monospace",fontSize:9,color:"#ffd166",marginBottom:4,letterSpacing:"0.05em"}}>⚡ MOMENTUM FILTERS</div>
+                      <div style={{fontFamily:"monospace",fontSize:8,color:"#3a4050",marginBottom:8}}>All momentum checks for this STO rule. Toggle each gate individually.</div>
+
+                      {/* ── Intraday momentum gates ── */}
+                      <div style={{...sectionLabel,color:"#58a6ff"}}>INTRADAY GATES</div>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:8}}>
+                        <div style={{padding:8,background:"#161b22",borderRadius:4,border:"1px solid #1c2128"}}>
+                          <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
+                            <div onClick={()=>setMF("pullback_enabled",!mf.pullback_enabled)} style={toggleStyle(mf.pullback_enabled)}><div style={thumbStyle(mf.pullback_enabled)}/></div>
+                            <span style={{fontFamily:"monospace",fontSize:8,color:"#c9d1d9"}}>Pullback from high</span>
+                          </div>
+                          <div style={fieldLabel}>MIN PULLBACK %</div>
+                          <input type="number" step="0.1" value={mf.min_pullback_from_high_pct??""} onChange={e=>setMF("min_pullback_from_high_pct",e.target.value===""?null:+e.target.value)} style={inputStyle} placeholder="0.3" />
+                        </div>
+                        <div style={{padding:8,background:"#161b22",borderRadius:4,border:"1px solid #1c2128"}}>
+                          <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
+                            <div onClick={()=>setMF("require_decelerating",!mf.require_decelerating)} style={toggleStyle(mf.require_decelerating)}><div style={thumbStyle(mf.require_decelerating)}/></div>
+                            <span style={{fontFamily:"monospace",fontSize:8,color:"#c9d1d9"}}>Deceleration gate</span>
+                          </div>
+                          <div style={fieldLabel}>LOOKBACK MINS</div>
+                          <input type="number" value={mf.momentum_lookback_mins??""} onChange={e=>setMF("momentum_lookback_mins",e.target.value===""?null:+e.target.value)} style={inputStyle} placeholder="30" />
+                        </div>
+                        <div style={{padding:8,background:"#161b22",borderRadius:4,border:"1px solid #1c2128"}}>
+                          <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
+                            <div onClick={()=>setMF("gap_enabled",!mf.gap_enabled)} style={toggleStyle(mf.gap_enabled)}><div style={thumbStyle(mf.gap_enabled)}/></div>
+                            <span style={{fontFamily:"monospace",fontSize:8,color:"#c9d1d9"}}>Gap-up filter</span>
+                          </div>
+                          <div style={fieldLabel}>MAX GAP UP %</div>
+                          <input type="number" step="0.5" value={mf.max_gap_up_pct??""} onChange={e=>setMF("max_gap_up_pct",e.target.value===""?null:+e.target.value)} style={inputStyle} placeholder="2.0" />
+                        </div>
+                      </div>
+
+                      {/* ── Technical filters ── */}
+                      <div style={{...sectionLabel,color:"#58a6ff"}}>TECHNICAL FILTERS</div>
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))",gap:8}}>
+                        <div>
+                          <div style={fieldLabel}>MAX RSI</div>
+                          <input type="number" value={mf.max_rsi??""} onChange={e=>setMF("max_rsi",e.target.value===""?null:+e.target.value)} placeholder="75" style={inputStyle} />
+                        </div>
+                        <div>
+                          <div style={fieldLabel}>MIN RSI</div>
+                          <input type="number" value={mf.min_rsi??""} onChange={e=>setMF("min_rsi",e.target.value===""?null:+e.target.value)} placeholder="30" style={inputStyle} />
+                        </div>
+                        <div>
+                          <div style={fieldLabel}>MIN SMA ALIGN</div>
+                          <select value={mf.min_sma_alignment??""} onChange={e=>setMF("min_sma_alignment",e.target.value===""?null:+e.target.value)} style={inputStyle}>
+                            <option value="">Any</option>
+                            <option value="1">1 (P &gt; SMA20)</option>
+                            <option value="2">2 (P &gt; 20 &gt; 50)</option>
+                            <option value="3">3 (P &gt; 20 &gt; 50 &gt; 200)</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div style={{marginTop:8}}>
+                        <div style={fieldLabel}>ALLOWED TREND REGIMES</div>
+                        <div style={{display:"flex",gap:8}}>
+                          {trendOptions.map(t => {
+                            const active = currentTrends.includes(t);
+                            return (
+                              <label key={t} style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer",fontFamily:"monospace",fontSize:9,color:active?"#c9d1d9":"#3a4050"}}>
+                                <div onClick={() => {
+                                  const next = active ? currentTrends.filter(x=>x!==t) : [...currentTrends, t];
+                                  setMF("require_trend", next.length ? next : null);
+                                }} style={{width:14,height:14,borderRadius:3,border:"1px solid "+(active?"#58a6ff":"#21262d"),background:active?"#58a6ff20":"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:"#58a6ff"}}>
+                                  {active && "\u2713"}
+                                </div>
+                                {t}
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {hasEdits && (
                   <div style={{display:"flex",gap:8,marginTop:10,alignItems:"center"}}>
@@ -3390,6 +3805,7 @@ export default function App() {
   const [gOptType,setGOptType]   = useState("All");
   const [gType,setGType]         = useState("All");
 
+
   // Chart
   const [chartView,setChartView] = useState("monthly"); // daily/weekly/monthly
   const [chartDate,setChartDate] = useState("executed"); // executed/closed
@@ -3600,6 +4016,7 @@ export default function App() {
           rawContracts,
           pData, uData, nData, aiData, stratData,
           colData, sdData, chainCache, wlData,
+          wlNotesData, wlAlertsData, oppData,
           goalsData, bandsData, mxData, trData,
         ] = await Promise.all([
           loadContracts(),
@@ -3612,6 +4029,9 @@ export default function App() {
           loadPrefs("stocks_data"),
           loadPrefCols("last_chain_refresh"),
           loadPrefs("watchlist"),
+          loadPrefs("watchlist_notes"),
+          loadPrefs("watchlist_alerts"),
+          loadPrefs("opp_items"),
           loadPrefs("goals"),
           loadPrefs("profit_bands"),
           loadPrefs("dte_matrix"),
@@ -3650,6 +4070,9 @@ export default function App() {
         if (chainCache?.cols?.chains) setEtradeChains(chainCache.cols.chains);
         if (sdData?.cols) setStocksData(sdData.cols);
         if (wlData?.cols?.tickers) setWatchlist(wlData.cols.tickers);
+        if (wlNotesData?.cols) setWatchlistNotes(wlNotesData.cols);
+        if (wlAlertsData?.cols) setWatchlistAlerts(wlAlertsData.cols);
+        if (oppData?.cols) setOppItems(Array.isArray(oppData.cols) ? oppData.cols : []);
         if (goalsData?.cols) setGoals(goalsData.cols);
         if (bandsData?.cols) setBands(bandsData.cols);
         if (mxData?.cols) {
@@ -3702,6 +4125,38 @@ export default function App() {
     } catch(err) { console.error("persistPlan error:", err); }
   };
 
+  // ── Watchlist notes & alerts persistence ─────────────────────────────────
+  const saveWatchlistNote = async (ticker, note) => {
+    const updated = { ...watchlistNotes, [ticker]: note };
+    setWatchlistNotes(updated);
+    try { await supabase.from("col_prefs").upsert({ id: "watchlist_notes", cols: updated, updated_at: new Date().toISOString() }); } catch {}
+  };
+  const addWatchlistAlert = async (ticker, price) => {
+    const cur = watchlistAlerts[ticker] || [];
+    if (cur.includes(price)) return;
+    const updated = { ...watchlistAlerts, [ticker]: [...cur, price] };
+    setWatchlistAlerts(updated);
+    try { await supabase.from("col_prefs").upsert({ id: "watchlist_alerts", cols: updated, updated_at: new Date().toISOString() }); } catch {}
+  };
+  const removeWatchlistAlert = async (ticker, price) => {
+    const updated = { ...watchlistAlerts, [ticker]: (watchlistAlerts[ticker] || []).filter(a => a !== price) };
+    setWatchlistAlerts(updated);
+    try { await supabase.from("col_prefs").upsert({ id: "watchlist_alerts", cols: updated, updated_at: new Date().toISOString() }); } catch {}
+  };
+
+  // ── Opportunity items persistence ─────────────────────────────────────────
+  const persistOpps = async (items) => {
+    setOppItems(items);
+    try {
+      await supabase.from("col_prefs").upsert({ id: "opp_items", cols: items, updated_at: new Date().toISOString() });
+    } catch(err) { console.error("persistOpps error:", err); }
+  };
+  const saveOppItem = (item) => persistOpps([item, ...oppItems]);
+  const markOppDone = (id) => persistOpps(oppItems.map(o => o.id === id ? { ...o, status: "done" } : o));
+  const skipOppItem = (id) => persistOpps(oppItems.map(o => o.id === id ? { ...o, status: "skipped" } : o));
+  const deleteOppItem = (id) => persistOpps(oppItems.filter(o => o.id !== id));
+
+
   const persistCols = async (c) => {
     setCols(c);
     try {
@@ -3726,10 +4181,11 @@ export default function App() {
 
   // Get target % from OTM+DTE matrix for a contract
   const getMatrixTarget = (c) => {
-    if (!c.priceAtExecution || !c.strike || !c.expires) return null;
+    const refPrice = c.priceAtExecution || c.currentPrice;
+    if (!refPrice || !c.strike || !c.expires) return null;
     const otmPct = c.type==="Put"
-      ? ((c.priceAtExecution - c.strike) / c.priceAtExecution) * 100
-      : ((c.strike - c.priceAtExecution) / c.priceAtExecution) * 100;
+      ? ((refPrice - c.strike) / refPrice) * 100
+      : ((c.strike - refPrice) / refPrice) * 100;
     const today = new Date(); today.setHours(0,0,0,0);
     const exp = new Date(c.expires+"T12:00:00");
     const dte = Math.max(0, Math.round((exp - today) / 86400000));
@@ -3753,10 +4209,11 @@ export default function App() {
 
   // Compute OTM% and target profit % for a contract — uses matrix if available, falls back to bands
   const getContractBand = (c) => {
-    if (!c.priceAtExecution || !c.strike) return null;
+    const refPrice = c.priceAtExecution || c.currentPrice;
+    if (!refPrice || !c.strike) return null;
     const otmPct = c.type==="Put"
-      ? ((c.priceAtExecution - c.strike) / c.priceAtExecution) * 100
-      : ((c.strike - c.priceAtExecution) / c.priceAtExecution) * 100;
+      ? ((refPrice - c.strike) / refPrice) * 100
+      : ((c.strike - refPrice) / refPrice) * 100;
     // Try matrix first
     const mx = getMatrixTarget(c);
     if (mx) {
@@ -3962,7 +4419,7 @@ export default function App() {
   // Open Contract Value: STO = negative (liability at market), BTO = positive (asset at market)
   const openContractValue = openC.reduce((s,c) => {
     const lo = findOptionForContract(etradeChains || {}, c);
-    const mktVal = lo?.mark!=null ? lo.mark*(c.qty||1)*100
+    const mktVal = (lo?.bid!=null&&lo?.ask!=null) ? (lo.bid+lo.ask)/2*(c.qty||1)*100 : lo?.mark!=null ? lo.mark*(c.qty||1)*100
                  : lo?.last!=null ? lo.last*(c.qty||1)*100
                  : null; // no market data — exclude
     if (mktVal==null) return s;
@@ -3970,11 +4427,16 @@ export default function App() {
   }, 0);
   // Keep committedFunds for plan tab available-to-write calculation (still uses strike-based for puts)
   const stoLiability   = openC.filter(c=>c.optType==="STO"&&c.type==="Put").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
-  const btoAssetVal    = openC.filter(c=>c.optType==="BTO").reduce((s,c)=>{const lo=findOptionForContract(etradeChains||{},c);return s+(lo?.mark!=null?lo.mark*(c.qty||1)*100:Math.abs(c.premium||0));},0);
+  const btoAssetVal    = openC.filter(c=>c.optType==="BTO").reduce((s,c)=>{const lo=findOptionForContract(etradeChains||{},c);return s+((lo?.bid!=null&&lo?.ask!=null)?(lo.bid+lo.ask)/2*(c.qty||1)*100:lo?.mark!=null?lo.mark*(c.qty||1)*100:Math.abs(c.premium||0));},0);
   const committedFunds = stoLiability - btoAssetVal;
   const [etradeLastFetch, setEtradeLastFetch] = useState(null);
   const [schwabPositions, setSchwabPositions]   = useState([]);
   const [watchlist, setWatchlist]               = useState([]); // array of ticker strings
+  const [watchlistNotes, setWatchlistNotes]     = useState({});
+  const [watchlistAlerts, setWatchlistAlerts]   = useState({});
+  const [watchlistChainOpen, setWatchlistChainOpen] = useState({});
+  const [oppItems, setOppItems]                 = useState([]);
+  const [oppForm, setOppForm]                   = useState(null);
   const [watchlistInput, setWatchlistInput]     = useState("");
   const [stockContractFilter, setStockContractFilter] = useState("open"); // "open" | "all"
   // Option chain controls — per ticker, stored as { [ticker]: { strikes: 5, dates: 3 } }
@@ -4148,6 +4610,44 @@ export default function App() {
         setEtradeMsg("Fetching option chains…");
         try {
           freshChains = await fetchOpenPositionChains(openContracts);
+
+          // Patch live NBBO quotes into chains for all open contracts.
+          // Schwab's chain endpoint serves stale mark for low-volume options;
+          // the quotes endpoint always returns real-time bid/ask.
+          try {
+            const occMap = {}; // occSymbol -> { chainKey, type, strike }
+            for (const c of openContracts) {
+              const occ = buildOCCSymbol(c);
+              if (occ) occMap[occ] = { chainKey: `${c.stock.toUpperCase()}|${c.expires}`, type: c.type, strike: Number(c.strike) };
+            }
+            const occSymbols = Object.keys(occMap);
+            console.log("[optQuote] OCC symbols built:", occSymbols);
+            if (occSymbols.length) {
+              setEtradeMsg("Fetching live option quotes…");
+              const liveQuotes = await fetchOptionQuotes(occSymbols);
+              for (const [occ, q] of Object.entries(liveQuotes)) {
+                const { chainKey, type, strike } = occMap[occ] || {};
+                if (!chainKey) continue;
+                // Ensure chain bucket exists
+                if (!freshChains[chainKey]) freshChains[chainKey] = { calls: [], puts: [] };
+                const list = type === "Put" ? freshChains[chainKey].puts : freshChains[chainKey].calls;
+                const entry = list.find(o => Math.abs(Number(o.strike ?? o.strikePrice) - strike) < 0.01);
+                if (entry) {
+                  // Patch existing entry with live NBBO
+                  entry.bid = q.bid ?? entry.bid;
+                  entry.ask = q.ask ?? entry.ask;
+                  entry.last = q.last ?? entry.last;
+                } else {
+                  // Strike was outside strikeCount window — insert it from live quote
+                  list.push({ strike, bid: q.bid, ask: q.ask, last: q.last, mark: q.mark, strikePrice: strike });
+                  console.log("[optQuote] INSERTED", occ, "bid:", q.bid, "ask:", q.ask, "into", chainKey, "list now:", list.length);
+                }
+              }
+            }
+          } catch (qErr) {
+            console.warn("[etrade] live option quote patch failed:", qErr.message);
+          }
+
           setEtradeChains(freshChains);
         } catch (chainErr) {
           console.warn("[etrade] option chains unavailable in sandbox:", chainErr.message);
@@ -4185,30 +4685,32 @@ export default function App() {
   // Must be after applyQuotesToStocksData is declared
   useEffect(() => {
     let lastRefreshSeen = null;
+    let lastChainSeen = null;
 
     const pollRefresh = async () => {
       try {
+        // Poll quotes (market-refresh cron)
         const { data } = await supabase
           .from("col_prefs")
           .select("cols")
           .eq("id", "last_market_refresh")
           .maybeSingle();
 
-        if (!data?.cols?.lastRefresh) return;
-        if (data.cols.lastRefresh === lastRefreshSeen) return;
-        lastRefreshSeen = data.cols.lastRefresh;
-
-        const freshQuotes = data.cols.quotes || {};
-        if (Object.keys(freshQuotes).length > 0) {
-          await applyQuotesToStocksData(freshQuotes);
-          const t = new Date(data.cols.lastRefresh).toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"});
-          setEtradeMsg("Auto-refreshed at " + t);
+        if (data?.cols?.lastRefresh && data.cols.lastRefresh !== lastRefreshSeen) {
+          lastRefreshSeen = data.cols.lastRefresh;
+          const freshQuotes = data.cols.quotes || {};
+          if (Object.keys(freshQuotes).length > 0) {
+            await applyQuotesToStocksData(freshQuotes);
+            const t = new Date(data.cols.lastRefresh).toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"});
+            setEtradeMsg("Auto-refreshed at " + t);
+          }
         }
 
-        // Also load fresh chains if available
+        // Poll chains independently (chain-refresh cron runs separately)
         const { data: chainData } = await supabase
           .from("col_prefs").select("cols").eq("id","last_chain_refresh").maybeSingle();
-        if (chainData?.cols?.chains) {
+        if (chainData?.cols?.chains && chainData.cols.lastRefresh !== lastChainSeen) {
+          lastChainSeen = chainData.cols.lastRefresh;
           setEtradeChains(chainData.cols.chains);
         }
       } catch { /* network hiccup */ }
@@ -4258,9 +4760,9 @@ export default function App() {
         const cStrikes = data?.callExpDateMap?.[expKey] || {};
         const pStrikes = data?.putExpDateMap?.[expKey]  || {};
         for (const [, opts] of Object.entries(cStrikes)) for (const o of opts)
-          calls.push({ ticker, expiryDate:expDate, type:"Call", strike:o.strikePrice, bid:o.bid, ask:o.ask, last:o.last??o.mark??null, volume:o.totalVolume, openInterest:o.openInterest, iv:o.volatility, delta:o.delta, gamma:o.gamma, theta:o.theta, vega:o.vega, inTheMoney:o.inTheMoney });
+          calls.push({ ticker, expiryDate:expDate, type:"Call", strike:o.strikePrice, bid:o.bid, ask:o.ask, mark:o.mark??(o.bid+o.ask)/2, last:o.last??o.mark??null, volume:o.totalVolume, openInterest:o.openInterest, iv:o.volatility, delta:o.delta, gamma:o.gamma, theta:o.theta, vega:o.vega, inTheMoney:o.inTheMoney });
         for (const [, opts] of Object.entries(pStrikes)) for (const o of opts)
-          puts.push({ ticker, expiryDate:expDate, type:"Put", strike:o.strikePrice, bid:o.bid, ask:o.ask, last:o.last??o.mark??null, volume:o.totalVolume, openInterest:o.openInterest, iv:o.volatility, delta:o.delta, gamma:o.gamma, theta:o.theta, vega:o.vega, inTheMoney:o.inTheMoney });
+          puts.push({ ticker, expiryDate:expDate, type:"Put", strike:o.strikePrice, bid:o.bid, ask:o.ask, mark:o.mark??(o.bid+o.ask)/2, last:o.last??o.mark??null, volume:o.totalVolume, openInterest:o.openInterest, iv:o.volatility, delta:o.delta, gamma:o.gamma, theta:o.theta, vega:o.vega, inTheMoney:o.inTheMoney });
       }
       setEtradeChains(prev => ({ ...prev, [`${ticker.toUpperCase()}|live`]: { calls, puts, fetchedAt: Date.now() } }));
     } catch(e) { console.warn("[schwab] chain fetch failed:", ticker, e.message); }
@@ -4302,27 +4804,63 @@ export default function App() {
 
   // Monthly/weekly for Analytics — dateMode: "exec" (default) or "close"
   const mkPeriodData = (list, view, dateMode="exec") => {
+    const toKey = (dateStr) => {
+      if (!dateStr) return null;
+      const d = dateStr.slice(0,10);
+      if (view === "monthly") return d.slice(0,7);
+      if (view === "weekly") { const dt = new Date(d+"T12:00:00"); const wm = new Date(dt); wm.setDate(dt.getDate()-dt.getDay()+1); return wm.toISOString().slice(0,10); }
+      return d;
+    };
     const map = {};
-    list.forEach(c => {
-      const d = c.dateExec?.slice(0,10); if (!d) return;
-      let key;
-      if (view === "monthly") { key = d.slice(0,7); }
-      else if (view === "weekly") { const dt = new Date(d+"T12:00:00"); const wm = new Date(dt); wm.setDate(dt.getDate()-dt.getDay()+1); key = wm.toISOString().slice(0,10); }
-      else { key = d; }
-      if (!map[key]) map[key] = {key, premium:0, profit:0, contracts:0};
-      map[key].premium   += (c.premium||0);
-      map[key].contracts += 1;
-      // For profit: use closeDate bucket if dateMode==="close", else use same exec bucket
-      if (c.status==="Closed" && c.profit!=null) {
-        const profitDate = dateMode==="close" && c.closeDate ? c.closeDate.slice(0,10) : d;
-        let pk;
-        if (view === "monthly") { pk = profitDate.slice(0,7); }
-        else if (view === "weekly") { const dt = new Date(profitDate+"T12:00:00"); const wm = new Date(dt); wm.setDate(dt.getDate()-dt.getDay()+1); pk = wm.toISOString().slice(0,10); }
-        else { pk = profitDate; }
-        if (!map[pk]) map[pk] = {key:pk, premium:0, profit:0, contracts:0};
-        map[pk].profit += c.profit;
-      }
-    });
+    const ensureBucket = (key) => { if (key && !map[key]) map[key] = {key, premium:0, profit:0, contracts:0}; };
+
+    if (dateMode === "accounting") {
+      // Accounting mode: cash basis — when was cash received or paid?
+      // Only process originals (STO/BTO), skip BTC/STC child rows.
+      //
+      // CLOSED trades: split into two legs
+      //   Open leg (premium) → dateExec bucket. STO=+cash in, BTO=-cash out
+      //   Close leg (costToClose) → closeDate bucket. Always cash out (negate positive value)
+      //
+      // OPEN trades: only the open leg has occurred
+      //   Open STO → premium already received = +cash in on dateExec
+      //   Open BTO → premium already paid = -cash out on dateExec
+      list.filter(c => ["STO","BTO"].includes(c.optType)).forEach(c => {
+        const openKey = toKey(c.dateExec);
+        if (!openKey) return;
+        ensureBucket(openKey);
+        map[openKey].premium   += (c.premium || 0);
+        map[openKey].contracts += 1;
+        // Open leg: STO premium is positive (cash in), BTO premium is negative (cash out)
+        map[openKey].profit    += (c.premium || 0);
+
+        // Close leg: only if closed and has costToClose
+        if (c.status === "Closed" && c.costToClose != null) {
+          const closeKey = toKey(c.closeDate || c.dateExec);
+          ensureBucket(closeKey);
+          // STO close = buy back = cash OUT → negate costToClose
+          // BTO close = sell = cash IN → add costToClose
+          if (c.optType === "STO") map[closeKey].profit -= (c.costToClose || 0);
+          else                     map[closeKey].profit += (c.costToClose || 0);
+        }
+      });
+    } else {
+      // exec or close mode — original behavior
+      list.forEach(c => {
+        const d = c.dateExec?.slice(0,10); if (!d) return;
+        const openKey = toKey(d);
+        ensureBucket(openKey);
+        map[openKey].premium   += (c.premium||0);
+        map[openKey].contracts += 1;
+        if (c.status==="Closed" && c.profit!=null) {
+          const profitDate = dateMode==="close" && c.closeDate ? c.closeDate.slice(0,10) : d;
+          const pk = toKey(profitDate);
+          ensureBucket(pk);
+          map[pk].profit += c.profit;
+        }
+      });
+    }
+
     const ns = ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
     return Object.values(map).sort((a,b)=>a.key.localeCompare(b.key)).map(v => {
       if (view==="monthly") { const [yr,mo]=v.key.split("-"); v.label=ns[+mo]+" "+yr.slice(2); }
@@ -4371,11 +4909,42 @@ export default function App() {
   }; // { ticker, expiry, optType, strike, bid, ask, mid }
 
   const profitDateField = (c) => profitDateMode==="close" ? (c.closeDate || c.dateExec) : c.dateExec;
-  const profitMTD = closedC.filter(c=>profitDateField(c)?.startsWith(thisMonth)).reduce((s,c)=>s+(c.profit||0),0);
-  const profitYTD = closedC.filter(c=>profitDateField(c)?.startsWith(thisYear)).reduce((s,c)=>s+(c.profit||0),0);
+
+  // ── Accounting mode: split each trade into open-leg (premium) and close-leg (cost_to_close)
+  // Premium (cash received) → attributed to dateExec (open date)
+  // Cost to close (cash paid) → attributed to closeDate
+  // This matches how brokerages report for tax purposes
+  const accountingByPeriod = (contracts, periodPrefix) => {
+    let total = 0;
+    for (const c of contracts) {
+      if (!["STO","BTO"].includes(c.optType)) continue;
+      // Open leg: premium in the open period (STO=+cash in, BTO=-cash out)
+      if (c.dateExec?.startsWith(periodPrefix)) {
+        total += (c.premium || 0);
+      }
+      // Close leg: STO close = buy back = cash out (-), BTO close = sell = cash in (+)
+      if (c.status === "Closed" && c.costToClose != null) {
+        const cd = c.closeDate || c.dateExec;
+        if (cd?.startsWith(periodPrefix)) {
+          if (c.optType === "STO") total -= (c.costToClose || 0);
+          else                     total += (c.costToClose || 0);
+        }
+      }
+    }
+    return total;
+  };
+
+  const profitMTD = profitDateMode === "accounting"
+    ? accountingByPeriod(allF, thisMonth)
+    : closedC.filter(c=>profitDateField(c)?.startsWith(thisMonth)).reduce((s,c)=>s+(c.profit||0),0);
+  const profitYTD = profitDateMode === "accounting"
+    ? accountingByPeriod(allF, thisYear)
+    : closedC.filter(c=>profitDateField(c)?.startsWith(thisYear)).reduce((s,c)=>s+(c.profit||0),0);
   // Daily
   const todayKey = new Date().toISOString().slice(0,10);
-  const profitToday = closedC.filter(c=>profitDateField(c)?.startsWith(todayKey)).reduce((s,c)=>s+(c.profit||0),0);
+  const profitToday = profitDateMode === "accounting"
+    ? accountingByPeriod(allF, todayKey)
+    : closedC.filter(c=>profitDateField(c)?.startsWith(todayKey)).reduce((s,c)=>s+(c.profit||0),0);
   const premToday   = allF.filter(c=>c.dateExec?.startsWith(todayKey)).reduce((s,c)=>s+(c.premium||0),0);
   const periodData = mkPeriodData(allF, analyticsView, profitDateMode);
 
@@ -4870,6 +5439,8 @@ ${JSON.stringify(summary, null, 1)}`;
                 )}
                 {c.notes && <div style={{marginTop:8,fontSize:10,color:"#555",fontStyle:"italic"}}>"{c.notes}"</div>}
               </div>
+              {/* Decay chart */}
+              <ContractDecayChart contract={c} stocksData={stocksData} />
               {c.status==="Closed" && (() => {
                 // Find the btc_auto signal that closed this contract
                 const closeSig = c.closeMethod === "auto"
@@ -5507,25 +6078,7 @@ ${JSON.stringify(summary, null, 1)}`;
             </div>
           </div>
         </div>
-        <div style={{display:"flex",gap:2,flex:1,overflowX:"auto",WebkitOverflowScrolling:"touch",scrollbarWidth:"none",msOverflowStyle:"none",justifyContent:"flex-start",padding:"0 4px"}}>
-          {["dashboard","contracts","analytics","plan","stocks","signalrules"].map(n=>{
-            const tabLabel = n === "signalrules" ? "🤖 skynet" : n;
-            return (
-            <button key={n} onClick={()=>setTab(n)} style={{background:tab===n?"#00ff8814":"transparent",color:tab===n?"#00ff88":"#444",border:tab===n?"1px solid #00ff8825":"1px solid transparent",borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"monospace",letterSpacing:"0.05em",textTransform:"uppercase",whiteSpace:"nowrap",flexShrink:0,position:"relative"}}>
-              {tabLabel}
-
-            </button>
-            );
-          })}
-        </div>
         <div style={{display:"flex",alignItems:"center",gap:5,flexShrink:0,marginLeft:"auto"}}>
-          {/* Zoom controls */}
-          <div style={{display:"flex",alignItems:"center",gap:1,background:"#0d1117",border:"1px solid #1c2128",borderRadius:5,padding:"2px 3px"}}>
-            <button onClick={()=>{const s=Math.max(0.7,+(uiScale-0.1).toFixed(1));setUiScale(s);try{localStorage.setItem("pri_ui_scale",s);}catch{}}} style={{background:"transparent",border:"none",color:"#555",fontSize:14,lineHeight:1,padding:"0 4px",width:20,height:20}} title="Zoom out">−</button>
-            <span style={{fontSize:8,fontFamily:"monospace",color:"#3a4050",minWidth:28,textAlign:"center"}}>{Math.round(uiScale*100)}%</span>
-            <button onClick={()=>{const s=Math.min(1.5,+(uiScale+0.1).toFixed(1));setUiScale(s);try{localStorage.setItem("pri_ui_scale",s);}catch{}}} style={{background:"transparent",border:"none",color:"#555",fontSize:14,lineHeight:1,padding:"0 4px",width:20,height:20}} title="Zoom in">+</button>
-          </div>
-          <Tag color="green">{openC.length}</Tag>
           <div onClick={()=>setShowProfile(true)} style={{width:26,height:26,borderRadius:"50%",background:`${authUser.color}20`,border:`2px solid ${authUser.color}50`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"monospace",fontWeight:700,color:authUser.color,fontSize:9,flexShrink:0,cursor:"pointer"}} title={authUser.name}>{authUser.initials}</div>
           <div ref={menuRef} style={{position:"relative"}}>
             <button onClick={()=>setShowMenu(p=>!p)} style={{background:"transparent",border:"1px solid #1c2128",borderRadius:5,padding:"4px 6px",display:"flex",flexDirection:"column",gap:2.5,alignItems:"center",justifyContent:"center",width:28,height:28}}>
@@ -5572,8 +6125,8 @@ ${JSON.stringify(summary, null, 1)}`;
               {(gTicker!=="All"||gOptType!=="All"||gType!=="All") && <button onClick={()=>{setGTicker("All");setGOptType("All");setGType("All");}} style={{background:"#ff456018",color:"#ff4560",border:"1px solid #ff456030",borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"monospace"}}>✕</button>}
               <div style={{marginLeft:"auto",display:"flex",gap:3,alignItems:"center"}}>
                 <span style={{fontSize:7,color:"#3a4050",fontFamily:"monospace"}}>PROFIT BY</span>
-                {["exec","close"].map(m=>(
-                  <button key={m} onClick={()=>setProfitDateMode(m)} style={{background:profitDateMode===m?"#00ff8814":"transparent",color:profitDateMode===m?"#00ff88":"#2a3040",border:profitDateMode===m?"1px solid #00ff8825":"1px solid #1c2128",borderRadius:4,padding:"2px 7px",fontSize:8,fontFamily:"monospace"}}>{m==="exec"?"Open Date":"Close Date"}</button>
+                {["exec","close","accounting"].map(m=>(
+                  <button key={m} onClick={()=>setProfitDateMode(m)} style={{background:profitDateMode===m?"#00ff8814":"transparent",color:profitDateMode===m?"#00ff88":"#2a3040",border:profitDateMode===m?"1px solid #00ff8825":"1px solid #1c2128",borderRadius:4,padding:"2px 7px",fontSize:8,fontFamily:"monospace"}}>{m==="exec"?"Open Date":m==="close"?"Close Date":"Accounting"}</button>
                 ))}
               </div>
             </div>
@@ -5584,8 +6137,8 @@ ${JSON.stringify(summary, null, 1)}`;
               <KPI label="Open Contract Value" value={f$0(openContractValue)} sub={openC.length+" contracts at market"} color="#ffd166"/>
               <KPI label="Net Exposure" value={f$0(committedFunds)} sub={"STO puts $"+f$0(stoLiability)+" − BTO assets $"+f$0(btoAssetVal)} color="#c084fc"/>
               <KPI label="Avg Profit"    value={fSign0(avgProfit)}    sub="per close" color={avgProfit>=0?"#58a6ff":"#ff4560"}/>
-              <KPI label="Profit MTD"    value={fSign0(profitMTD)}    sub={mLabel+" · "+(profitDateMode==="exec"?"opened":"closed")} color={profitMTD>=0?"#00ff88":"#ff4560"}/>
-              <KPI label="Profit YTD"    value={fSign0(profitYTD)}    sub={thisYear+" · "+(profitDateMode==="exec"?"opened":"closed")} color={profitYTD>=0?"#00ff88":"#ff4560"}/>
+              <KPI label="Profit MTD"    value={fSign0(profitMTD)}    sub={mLabel+" · "+(profitDateMode==="accounting"?"cash basis":profitDateMode==="exec"?"opened":"closed")} color={profitMTD>=0?"#00ff88":"#ff4560"}/>
+              <KPI label="Profit YTD"    value={fSign0(profitYTD)}    sub={thisYear+" · "+(profitDateMode==="accounting"?"cash basis":profitDateMode==="exec"?"opened":"closed")} color={profitYTD>=0?"#00ff88":"#ff4560"}/>
               <KPI label="Premium MTD"   value={f$0(premMTD)}         sub={mLabel} color="#58a6ff"/>
               <KPI label="Premium YTD"   value={f$0(premYTD)}         sub={thisYear} color="#58a6ff"/>
             </div>
@@ -5725,7 +6278,7 @@ ${JSON.stringify(summary, null, 1)}`;
               const unrealPL = openC.reduce((s,c) => {
                 if (!c.premium) return s;
                 const lo   = findOptionForContract(etradeChains, c);
-                const last = lo?.mark ?? lo?.last ?? lo?.bid ?? null;
+                const last = (lo?.bid != null && lo?.ask != null) ? (lo.bid + lo.ask) / 2 : lo?.mark ?? lo?.last ?? lo?.bid ?? null;
                 if (last == null) return s;
                 const mv   = (c.qty||1) * last * 100;
                 const prem = Math.abs(c.premium);
@@ -5734,7 +6287,7 @@ ${JSON.stringify(summary, null, 1)}`;
               }, 0);
               const currVal = openC.reduce((s,c) => {
                 const lo   = findOptionForContract(etradeChains, c);
-                const last = lo?.mark ?? lo?.last ?? lo?.bid ?? null;
+                const last = (lo?.bid != null && lo?.ask != null) ? (lo.bid + lo.ask) / 2 : lo?.mark ?? lo?.last ?? lo?.bid ?? null;
                 return last != null ? s + (c.qty||1)*last*100 : s;
               }, 0);
               // Expiry buckets
@@ -6309,7 +6862,7 @@ ${JSON.stringify(summary, null, 1)}`;
                               // Mkt Value = qty * mark (mid) * 100
                               if (c.status!=="Open") return <td key="mktValue" style={{padding:"5px 8px",textAlign:"right",color:"#1c2128",fontFamily:"monospace"}}>—</td>;
                               const lo = getLiveOption(c);
-                              const price = lo?.mark ?? lo?.last ?? lo?.bid ?? null;
+                              const price = (lo?.bid != null && lo?.ask != null) ? (lo.bid + lo.ask) / 2 : lo?.mark ?? lo?.last ?? lo?.bid ?? null;
                               const mv = price != null ? (c.qty||1) * price * 100 : null;
                               return <td key="mktValue" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:mv!=null?"#c9d1d9":"#555"}}>
                                 {mv!=null ? f$(mv) : "—"}
@@ -6321,7 +6874,7 @@ ${JSON.stringify(summary, null, 1)}`;
                               // For BTO: gain = mktValue - premium (positive = good, option gained value)
                               if (c.status!=="Open") return <td key="liveGain" style={{padding:"5px 8px",textAlign:"right",color:"#1c2128",fontFamily:"monospace"}}>—</td>;
                               const lo = getLiveOption(c);
-                              const last = lo?.mark ?? lo?.last ?? lo?.bid ?? null;
+                              const last = (lo?.bid != null && lo?.ask != null) ? (lo.bid + lo.ask) / 2 : lo?.mark ?? lo?.last ?? lo?.bid ?? null;
                               if (last == null || c.premium == null) return <td key="liveGain" style={{padding:"5px 8px",textAlign:"right",color:"#555",fontFamily:"monospace"}}>—</td>;
                               const mv   = (c.qty||1) * last * 100;
                               const prem = Math.abs(c.premium);
@@ -6333,7 +6886,7 @@ ${JSON.stringify(summary, null, 1)}`;
                             case "liveGainPct": {
                               if (c.status!=="Open") return <td key="liveGainPct" style={{padding:"5px 8px",textAlign:"right",color:"#1c2128",fontFamily:"monospace"}}>—</td>;
                               const lo = getLiveOption(c);
-                              const last = lo?.mark ?? lo?.last ?? lo?.bid ?? null;
+                              const last = (lo?.bid != null && lo?.ask != null) ? (lo.bid + lo.ask) / 2 : lo?.mark ?? lo?.last ?? lo?.bid ?? null;
                               if (last == null || !c.premium) return <td key="liveGainPct" style={{padding:"5px 8px",textAlign:"right",color:"#555",fontFamily:"monospace"}}>—</td>;
                               const mv   = (c.qty||1) * last * 100;
                               const prem = Math.abs(c.premium);
@@ -6347,7 +6900,7 @@ ${JSON.stringify(summary, null, 1)}`;
                               if (c.status!=="Open") return <td key="signal" style={{padding:"5px 8px"}}></td>;
                               const bd  = getContractBand(c);
                               const lo  = getLiveOption(c);
-                              const last = lo?.mark ?? lo?.last ?? lo?.bid ?? null;
+                              const last = (lo?.bid != null && lo?.ask != null) ? (lo.bid + lo.ask) / 2 : lo?.mark ?? lo?.last ?? lo?.bid ?? null;
                               if (!bd || last == null || !c.premium) return <td key="signal" style={{padding:"5px 8px",color:"#1c2128",fontSize:10,fontFamily:"monospace"}}>—</td>;
                               const mv      = (c.qty||1) * last * 100;
                               const prem    = Math.abs(c.premium);
@@ -6513,8 +7066,8 @@ ${JSON.stringify(summary, null, 1)}`;
               <div style={{marginLeft:"auto",display:"flex",gap:5,alignItems:"center",flexWrap:"wrap"}}>
                 <div style={{display:"flex",gap:3}}>
                   <span style={{fontSize:7,color:"#3a4050",fontFamily:"monospace"}}>PROFIT BY</span>
-                  {["exec","close"].map(m=>(
-                    <button key={m} onClick={()=>setProfitDateMode(m)} style={{background:profitDateMode===m?"#00ff8814":"transparent",color:profitDateMode===m?"#00ff88":"#2a3040",border:profitDateMode===m?"1px solid #00ff8825":"1px solid #1c2128",borderRadius:4,padding:"2px 7px",fontSize:8,fontFamily:"monospace"}}>{m==="exec"?"Open Date":"Close Date"}</button>
+                  {["exec","close","accounting"].map(m=>(
+                    <button key={m} onClick={()=>setProfitDateMode(m)} style={{background:profitDateMode===m?"#00ff8814":"transparent",color:profitDateMode===m?"#00ff88":"#2a3040",border:profitDateMode===m?"1px solid #00ff8825":"1px solid #1c2128",borderRadius:4,padding:"2px 7px",fontSize:8,fontFamily:"monospace"}}>{m==="exec"?"Open Date":m==="close"?"Close Date":"Accounting"}</button>
                   ))}
                 </div>
                 <div style={{display:"flex",gap:3}}>
@@ -6528,7 +7081,7 @@ ${JSON.stringify(summary, null, 1)}`;
             {/* Period breakdown with notes */}
             <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8}} className="ms">
               <div style={{padding:"7px 11px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-                <span style={{fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em"}}>{analyticsView.toUpperCase()} BREAKDOWN — profit by {profitDateMode==="exec"?"open date":"close date"}</span>
+                <span style={{fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em"}}>{analyticsView.toUpperCase()} BREAKDOWN — {profitDateMode==="accounting"?"accounting (cash basis)":"profit by "+(profitDateMode==="exec"?"open date":"close date")}</span>
                 {analyticsView==="monthly" && (
                   <button onClick={()=>setShowBalCols(v=>!v)} style={{fontSize:8,fontFamily:"monospace",padding:"2px 8px",borderRadius:3,border:"1px solid #21262d",cursor:"pointer",background:showBalCols?"#00ff8810":"transparent",color:showBalCols?"#00ff88":"#3a4050"}}>
                     {showBalCols?"▼ Hide Balances":"▶ Show Balances"}
@@ -6967,416 +7520,369 @@ ${JSON.stringify(summary, null, 1)}`;
         )}
 
         {/* ══ PLAN ══ */}
-        {tab==="plan" && (
-          <div style={{display:"flex",flexDirection:"column",gap:9}}>
-            {/* Watchlist */}
-            <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:11}}>
-              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:9}}>
-                <span style={{fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em"}}>WATCHLIST</span>
-                <span style={{fontSize:8,color:"#3a4050",fontFamily:"monospace"}}>— click ticker to view details · click ✕ to remove</span>
-              </div>
-              {/* Watchlist tickers */}
-              <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:9}}>
-                {watchlist.map(t => {
-                  const sd  = stocksData[t] || {};
-                  const pos = schwabPositions.find(p => p.symbol === t);
-                  const chg = sd.changeClose;
-                  return (
-                    <div key={t} style={{display:"flex",alignItems:"center",gap:3,background:"#080c12",border:"1px solid #21262d",borderRadius:6,padding:"4px 8px"}}>
-                      <button onClick={()=>setSelectedWatchTicker(selectedWatchTicker===t?null:t)}
-                        style={{background:"none",border:"none",cursor:"pointer",padding:0,display:"flex",flexDirection:"column",alignItems:"flex-start",gap:1}}>
-                        <span style={{fontFamily:"monospace",fontWeight:700,color:"#e6edf3",fontSize:12}}>{t}</span>
-                        {sd.currentPrice && (
-                          <span style={{fontSize:9,fontFamily:"monospace",color:chg!=null?(chg>=0?"#00ff88":"#ff4560"):"#555"}}>
-                            {f$(sd.currentPrice)}{chg!=null?(" "+(chg>=0?"+":"")+f$(chg)):""}
-                          </span>
-                        )}
-                        {sd.earningsDate && sd.earningsDate >= TODAY && (
-                          <span style={{fontSize:8,color:"#ffd166",fontFamily:"monospace"}}>⚡ {sd.earningsDate}</span>
-                        )}
-                      </button>
-                      <button onClick={()=>removeFromWatchlist(t)}
-                        style={{background:"none",border:"none",color:"#3a4050",cursor:"pointer",fontSize:10,padding:"0 2px",lineHeight:1}}>✕</button>
-                    </div>
-                  );
-                })}
-                {watchlist.length===0 && <span style={{color:"#2a3040",fontSize:10,fontFamily:"monospace"}}>Add tickers below to watch</span>}
-              </div>
-              {/* Add to watchlist */}
-              <div style={{display:"flex",gap:6,alignItems:"center",marginBottom: selectedWatchTicker ? 11 : 0}}>
-                <input value={watchlistInput} onChange={e=>setWatchlistInput(e.target.value.toUpperCase())}
-                  onKeyDown={e=>{if(e.key==="Enter"&&watchlistInput.trim()){addToWatchlist(watchlistInput);setWatchlistInput("");}}}
-                  placeholder="Add ticker…" style={{width:110,fontSize:11,padding:"4px 7px",textTransform:"uppercase"}}/>
-                <button onClick={()=>{if(watchlistInput.trim()){addToWatchlist(watchlistInput);setWatchlistInput("");}}}
-                  style={{background:"#58a6ff14",color:"#58a6ff",border:"1px solid #58a6ff30",borderRadius:5,padding:"4px 10px",fontSize:10,fontFamily:"monospace"}}>+ Watch</button>
-                <button onClick={()=>{const t=watchlistInput.trim();if(t){openPlanForm(t);}}}
-                  style={{background:"#00ff8814",color:"#00ff88",border:"1px solid #00ff8830",borderRadius:5,padding:"4px 10px",fontSize:10,fontFamily:"monospace"}}>+ Plan</button>
-              </div>
-              {/* Watchlist detail — same as stocks detail */}
-              {selectedWatchTicker && (() => {
-                const sd  = stocksData[selectedWatchTicker] || {};
-                const pos = schwabPositions.find(p => p.symbol === selectedWatchTicker);
-                const openContracts = originals.filter(c => c.status==="Open" && c.stock?.toUpperCase()===selectedWatchTicker);
-                const chain = etradeChains[selectedWatchTicker] || null;
-                // Get all chain entries for this ticker
-                const chainKeys = Object.keys(etradeChains).filter(k => k.startsWith(selectedWatchTicker+"|"));
-                const allCalls = chainKeys.flatMap(k => etradeChains[k]?.calls || []);
-                const allPuts  = chainKeys.flatMap(k => etradeChains[k]?.puts  || []);
-                return (
-                  <div style={{background:"#080c12",border:"1px solid #21262d",borderRadius:7,padding:11,animation:"fadeIn .15s"}}>
-                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,flexWrap:"wrap"}}>
-                      <span style={{fontFamily:"monospace",fontWeight:700,color:"#e6edf3",fontSize:16}}>{selectedWatchTicker}</span>
-                      {sd.currentPrice && <span style={{fontFamily:"monospace",fontSize:14,color:"#c9d1d9",fontWeight:600}}>{f$(sd.currentPrice)}</span>}
-                      {sd.changeClose!=null && <span style={{fontSize:11,fontFamily:"monospace",fontWeight:700,color:sd.changeClose>=0?"#00ff88":"#ff4560"}}>{sd.changeClose>=0?"+":""}{f$(sd.changeClose)} ({sd.changePct!=null?(sd.changePct*100).toFixed(2)+"%":""})</span>}
+        {/* ══ STOCKS ══ */}
+        {tab==="plan" && (() => {
+          // ── helpers ────────────────────────────────────────────────────────
+          const T = (sym) => stocksData[sym] || {};
+          const hasDani = (sym) => {
+            // check if any DANI-sourced opp exists for this ticker
+            return oppItems.some(o => o.ticker === sym && o.src === "dani" && o.status === "open");
+          };
+
+          // ── watchlist row ──────────────────────────────────────────────────
+          const WatchRow = ({ sym }) => {
+            const sd   = T(sym);
+            const chg  = sd.changeClose;
+            const chgPct = sd.changePct;
+            const chgColor = chg == null ? "#3a4050" : chg >= 0 ? "#00ff88" : "#ff4560";
+            const alerts = watchlistAlerts[sym] || [];
+            const note   = watchlistNotes[sym] || "";
+            const pos    = schwabPositions.find(p => p.symbol === sym);
+            const openC2 = originals.filter(c => c.status === "Open" && c.stock?.toUpperCase() === sym);
+            const isOpen = selectedWatchTicker === sym;
+            const chainOp = watchlistChainOpen[sym];
+
+            return (
+              <div key={sym} style={{marginBottom: isOpen ? 6 : 2}}>
+                {/* Row */}
+                <div
+                  onClick={() => setSelectedWatchTicker(isOpen ? null : sym)}
+                  style={{display:"grid",gridTemplateColumns:"62px 88px 110px 1fr auto 80px",alignItems:"center",gap:8,
+                    background: isOpen ? "#58a6ff0a" : "#0a0e14",
+                    border:`1px solid ${isOpen ? "#58a6ff50" : alerts.length ? "#c084fc30" : "#1c2128"}`,
+                    borderRadius:6,padding:"5px 10px",cursor:"pointer",minHeight:34,
+                    transition:"border-color .12s,background .12s"}}
+                >
+                  <span style={{fontFamily:"monospace",fontWeight:700,fontSize:12,color:"#e6edf3"}}>{sym}</span>
+                  <span style={{fontFamily:"monospace",fontSize:11,color:"#c9d1d9",textAlign:"right"}}>
+                    {sd.currentPrice ? "$"+sd.currentPrice.toFixed(2) : "—"}
+                  </span>
+                  <span style={{fontFamily:"monospace",fontSize:10,color:chgColor,textAlign:"right"}}>
+                    {chg != null ? (chg>=0?"+":"")+chg.toFixed(2)+" ("+(chgPct!=null?(chgPct*100).toFixed(1):"")+"%)" : ""}
+                  </span>
+                  <div style={{display:"flex",gap:3,flexWrap:"wrap",alignItems:"center"}}>
+                    {pos && <span style={{fontSize:8,padding:"1px 5px",borderRadius:3,color:"#00ff88",border:"1px solid #00ff8840",background:"#00ff8810"}}>pos</span>}
+                    {sd.earningsDate && sd.earningsDate >= TODAY && <span style={{fontSize:8,padding:"1px 5px",borderRadius:3,color:"#ffd166",border:"1px solid #ffd16640",background:"#ffd16610"}}>⚡ earn</span>}
+                    {alerts.length > 0 && <span style={{fontSize:8,padding:"1px 5px",borderRadius:3,color:"#c084fc",border:"1px solid #c084fc40",background:"#c084fc10"}}>🔔 {alerts.length}</span>}
+                    {hasDani(sym) && <span style={{fontSize:8,padding:"1px 5px",borderRadius:3,color:"#ff4560",border:"1px solid #ff456040",background:"#ff456010"}}>DANI</span>}
+                    {note && <span style={{fontSize:8,padding:"1px 5px",borderRadius:3,color:"#3a4050",border:"1px solid #1c2128"}}>note</span>}
+                    {openC2.length > 0 && <span style={{fontSize:8,padding:"1px 5px",borderRadius:3,color:"#58a6ff",border:"1px solid #58a6ff40",background:"#58a6ff10"}}>{openC2.length} contract{openC2.length>1?"s":""}</span>}
+                  </div>
+                  <span/>
+                  <div style={{display:"flex",gap:4,alignItems:"center",justifyContent:"flex-end"}}>
+                    <button
+                      onClick={e=>{e.stopPropagation();setOppForm({ticker:sym,type:"WATCH",detail:"",target:"",note:""});}}
+                      style={{background:"transparent",border:"1px solid #1c2128",color:"#3a4050",fontFamily:"monospace",fontSize:9,padding:"2px 7px",borderRadius:4,cursor:"pointer"}}
+                    >+ Opp</button>
+                    <button
+                      onClick={e=>{e.stopPropagation();removeFromWatchlist(sym);}}
+                      style={{background:"none",border:"none",color:"#3a4050",cursor:"pointer",fontSize:10,padding:"0 2px",lineHeight:1}}
+                    >✕</button>
+                  </div>
+                </div>
+
+                {/* Expanded detail */}
+                {isOpen && (
+                  <div style={{background:"#080c12",border:"1px solid #21262d",borderRadius:"0 0 8px 8px",borderTop:"none",animation:"fadeIn .15s",overflow:"hidden"}}>
+                    {/* Header with price */}
+                    <div style={{display:"flex",alignItems:"center",gap:10,padding:"9px 13px",borderBottom:"1px solid #1c2128",flexWrap:"wrap"}}>
+                      <span style={{fontFamily:"monospace",fontWeight:700,fontSize:16,color:"#e6edf3"}}>{sym}</span>
+                      {sd.currentPrice && <span style={{fontFamily:"monospace",fontSize:14,color:"#c9d1d9"}}>${sd.currentPrice.toFixed(2)}</span>}
+                      {chg != null && <span style={{fontFamily:"monospace",fontSize:11,fontWeight:700,color:chgColor}}>{chg>=0?"+":""}{chg.toFixed(2)} ({chgPct!=null?(chgPct*100).toFixed(2)+"%":""})</span>}
                       {sd.earningsDate && <span style={{fontSize:9,fontFamily:"monospace",padding:"2px 7px",borderRadius:3,background:sd.earningsDate>=TODAY?"#ffd16620":"#1c2128",color:sd.earningsDate>=TODAY?"#ffd166":"#3a4050",border:`1px solid ${sd.earningsDate>=TODAY?"#ffd16640":"#21262d"}`}}>{sd.earningsDate>=TODAY?"⚡ Earnings ":""}{sd.earningsDate}</span>}
-                      {sd.bid && <span style={{fontSize:9,color:"#555",fontFamily:"monospace"}}>b:{f$(sd.bid)} a:{f$(sd.ask)}</span>}
                     </div>
-                    {/* Schwab position if owned */}
-                    {pos && (
-                      <div style={{display:"flex",gap:12,marginBottom:10,flexWrap:"wrap"}}>
-                        {[["Shares",pos.qty],["Avg Cost",f$(pos.avgPrice)],["Mkt Value",f$(pos.marketValue)],["Gain",`${pos.gainLoss>=0?"+":""}${f$(pos.gainLoss)} (${pos.gainLossPct.toFixed(1)}%)`],["Day",`${pos.currentDayGL>=0?"+":""}${f$(pos.currentDayGL)}`]].map(([lbl,val])=>(
-                          <div key={lbl} style={{display:"flex",flexDirection:"column",gap:2}}>
-                            <span style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.06em"}}>{lbl.toUpperCase()}</span>
-                            <span style={{fontSize:11,fontFamily:"monospace",color:"#c9d1d9"}}>{val}</span>
+
+                    {/* Two-col body */}
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr"}}>
+                      {/* Left: notes + alerts */}
+                      <div style={{padding:"11px 13px",borderRight:"1px solid #1c2128"}}>
+                        <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:5}}>NOTES / THESIS</div>
+                        <textarea
+                          defaultValue={note}
+                          id={`wl-note-${sym}`}
+                          placeholder="Entry thesis, levels to watch, catalyst…"
+                          style={{width:"100%",background:"#0d1117",border:"1px solid #1c2128",color:"#8b949e",fontFamily:"monospace",fontSize:11,padding:"6px 8px",borderRadius:5,resize:"none",outline:"none",height:52}}
+                          onFocus={e=>{e.target.style.borderColor="#58a6ff40";e.target.style.color="#c9d1d9";}}
+                          onBlur={e=>{e.target.style.borderColor="#1c2128";e.target.style.color="#8b949e";}}
+                        />
+                        <div style={{display:"flex",justifyContent:"flex-end",marginTop:4}}>
+                          <button onClick={()=>saveWatchlistNote(sym, document.getElementById(`wl-note-${sym}`)?.value||"")}
+                            style={{background:"transparent",border:"1px solid #1c2128",color:"#3a4050",fontFamily:"monospace",fontSize:9,padding:"2px 8px",borderRadius:4,cursor:"pointer"}}>Save</button>
+                        </div>
+
+                        <div style={{marginTop:9}}>
+                          <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:5}}>PRICE ALERTS</div>
+                          <div style={{display:"flex",gap:5,alignItems:"center",flexWrap:"wrap"}}>
+                            {alerts.map(a => (
+                              <div key={a} style={{display:"flex",alignItems:"center",gap:3,background:"#c084fc12",border:"1px solid #c084fc30",borderRadius:20,padding:"2px 8px",fontSize:10,color:"#c084fc"}}>
+                                ${a.toFixed(2)}
+                                <button onClick={()=>removeWatchlistAlert(sym,a)} style={{background:"none",border:"none",color:"#c084fc60",cursor:"pointer",fontSize:9,padding:0,lineHeight:1}}>✕</button>
+                              </div>
+                            ))}
+                            <input id={`wl-alrt-${sym}`} type="number" placeholder="$0.00"
+                              onKeyDown={e=>{if(e.key==="Enter"){const v=parseFloat(e.target.value);if(v){addWatchlistAlert(sym,v);e.target.value="";}}}}
+                              style={{background:"#0d1117",border:"1px solid #1c2128",color:"#c9d1d9",fontFamily:"monospace",fontSize:11,padding:"3px 7px",borderRadius:5,width:75,outline:"none"}}/>
+                            <button onClick={()=>{const v=parseFloat(document.getElementById(`wl-alrt-${sym}`)?.value);if(v){addWatchlistAlert(sym,v);document.getElementById(`wl-alrt-${sym}`).value="";}}}
+                              style={{background:"transparent",border:"1px solid #1c2128",color:"#3a4050",fontFamily:"monospace",fontSize:9,padding:"2px 8px",borderRadius:4,cursor:"pointer"}}>+ Alert</button>
                           </div>
-                        ))}
+                        </div>
+
+                        {/* Open contracts for this ticker */}
+                        {openC2.length > 0 && (
+                          <div style={{marginTop:9}}>
+                            <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:5}}>OPEN CONTRACTS</div>
+                            {openC2.map(c => {
+                              const lo = getLiveOption(c);
+                              return (
+                                <div key={c.id} onClick={()=>setViewC(c)} style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",fontSize:10,fontFamily:"monospace",color:"#555",padding:"3px 0",borderTop:"1px solid #1c2128",cursor:"pointer"}}>
+                                  <span style={{color:"#e6edf3",fontWeight:700}}>{fTitle(c)}</span>
+                                  <span>×{c.qty}</span>
+                                  {lo && <><span style={{color:"#00ff88"}}>b:{f$(lo.bid)}</span><span style={{color:"#58a6ff"}}>a:{f$(lo.ask)}</span></>}
+                                  {lo?.delta && <span style={{color:"#58a6ff"}}>Δ{lo.delta.toFixed(2)}</span>}
+                                  {lo?.iv && <span style={{color:"#c084fc"}}>IV{lo.iv.toFixed(1)}%</span>}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
-                    )}
-                    {/* Open contracts */}
-                    {openContracts.length > 0 && (
-                      <div style={{marginBottom:10}}>
-                        <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.06em",marginBottom:5}}>OPEN CONTRACTS</div>
-                        {openContracts.map(c => {
-                          const lo = getLiveOption(c);
-                          return (
-                            <div key={c.id} style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",fontSize:10,fontFamily:"monospace",color:"#888",padding:"3px 0",borderTop:"1px solid #1c2128"}}>
-                              <span style={{color:"#e6edf3",fontWeight:700}}>{fTitle(c)}</span>
-                              <span>qty:{c.qty}</span>
-                              {lo && <><span style={{color:"#00ff88"}}>b:{f$(lo.bid)}</span><span style={{color:"#58a6ff"}}>a:{f$(lo.ask)}</span><span>last:{f$(lo.last)}</span></>}
-                              {lo?.delta && <span style={{color:"#58a6ff"}}>Δ{lo.delta.toFixed(3)}</span>}
-                              {lo?.iv && <span style={{color:"#c084fc"}}>IV{lo.iv.toFixed(1)}%</span>}
+
+                      {/* Right: DANI signal + quick actions */}
+                      <div style={{padding:"11px 13px"}}>
+                        {(() => {
+                          const sig = oppItems.find(o => o.ticker === sym && o.src === "dani" && o.status === "open");
+                          if (!sig) return (
+                            <div style={{marginBottom:10}}>
+                              <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:5}}>DANI SIGNAL</div>
+                              <div style={{fontSize:10,color:"#3a4050",fontFamily:"monospace"}}>No signal this week</div>
                             </div>
                           );
-                        })}
-                      </div>
-                    )}
-                    {/* Option chain — inline component */}
-                    {(() => {
-                      return (
-                        <div>
-                          <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
-                            <span style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.06em"}}>OPTION CHAIN</span>
-                            <a href={`https://options-chain.vercel.app/?ticker=${selectedWatchTicker}`} target="_blank" rel="noreferrer"
-                              style={{fontSize:8,fontFamily:"monospace",color:"#58a6ff",textDecoration:"none",padding:"2px 7px",border:"1px solid #58a6ff30",borderRadius:3,background:"#58a6ff10"}}>
-                              ↗ Open Full
-                            </a>
+                          return (
+                            <div style={{marginBottom:10}}>
+                              <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:5}}>DANI SIGNAL</div>
+                              <div style={{display:"flex",alignItems:"center",gap:8,background:"#ff456008",border:"1px solid #ff456025",borderRadius:6,padding:"7px 10px"}}>
+                                <span style={{fontSize:8,padding:"2px 5px",borderRadius:3,background:"#ff456020",color:"#ff4560",border:"1px solid #ff456040",fontWeight:700,flexShrink:0}}>DANI</span>
+                                <div style={{flex:1}}>
+                                  <div style={{fontFamily:"monospace",fontWeight:700,fontSize:11,color:"#e6edf3",marginBottom:2}}>{sig.detail}</div>
+                                  <div style={{fontFamily:"monospace",fontSize:10,color:"#8b949e"}}>{sig.note}</div>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })()}
+
+                        <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:5}}>QUICK ADD</div>
+                        <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:10}}>
+                          {["STO","BTO","WATCH"].map(t => (
+                            <button key={t} onClick={()=>setOppForm({ticker:sym,type:t,detail:"",target:"",note:""})}
+                              style={{background:"transparent",border:"1px solid #1c2128",color:"#3a4050",fontFamily:"monospace",fontSize:9,padding:"3px 9px",borderRadius:4,cursor:"pointer"}}>+ {t}</button>
+                          ))}
+                        </div>
+
+                        {pos && (
+                          <div>
+                            <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:5}}>STOCK POSITION</div>
+                            <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                              {[["Shares",pos.qty],["Avg Cost",f$(pos.avgPrice)],["Gain",`${pos.gainLoss>=0?"+":""}${f$(pos.gainLoss)}`]].map(([l,v])=>(
+                                <div key={l}><div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace"}}>{l}</div><div style={{fontSize:11,fontFamily:"monospace",color:"#c9d1d9"}}>{v}</div></div>
+                              ))}
+                            </div>
                           </div>
-                          {/* Order panel — above the chain so it's immediately visible */}
-                          {chainTradeOrder && chainTradeOrder.ticker === selectedWatchTicker && (
-                            <ChainOrderPanel
-                              trade={chainTradeOrder}
-                              onClose={() => setChainTradeOrder(null)}
-                              onOrderPlaced={() => { setChainTradeOrder(null); loadTradeOrders(); }}
-                            />
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Option chain toggle */}
+                    <div style={{borderTop:"1px solid #1c2128"}}>
+                      <div onClick={()=>setWatchlistChainOpen(p=>({...p,[sym]:!p[sym]}))}
+                        style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"7px 13px",cursor:"pointer",background:"#080c12"}}>
+                        <span style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em"}}>OPTION CHAIN — {sym}</span>
+                        <span style={{fontSize:9,color:"#3a4050"}}>{chainOp ? "▲ collapse" : "▼ expand"}</span>
+                      </div>
+                      {chainOp && (
+                        <div style={{padding:"0 0 11px"}}>
+                          {chainTradeOrder && chainTradeOrder.ticker === sym && (
+                            <div style={{padding:"0 13px 8px"}}>
+                              <ChainOrderPanel
+                                trade={chainTradeOrder}
+                                onClose={() => setChainTradeOrder(null)}
+                                onOrderPlaced={() => { setChainTradeOrder(null); loadTradeOrders(); }}
+                              />
+                            </div>
                           )}
-                          {/* Option chain — inline component */}
-                          <div style={{borderRadius:6,overflow:"hidden",border:"1px solid #21262d"}}>
+                          <div style={{borderTop:"1px solid #1c2128"}}>
                             <OptionsChainComponent
-                              initialTicker={selectedWatchTicker}
+                              initialTicker={sym}
                               onTrade={trade => setChainTradeOrder(trade)}
                               embedded={true}
                             />
                           </div>
                         </div>
-                      );
-                    })()}
-                  </div>
-                );
-              })()}
-            </div>
-
-            {/* Expiring today */}
-            {expToday.length>0 && (
-              <div style={{background:"#ff456008",border:"1px solid #ff456030",borderRadius:8,padding:"7px 11px"}}>
-                <div style={{fontFamily:"monospace",fontSize:7,color:"#ff4560",letterSpacing:"0.08em",marginBottom:7}}>⚡ EXPIRING TODAY</div>
-                <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
-                  {expToday.map(c=><div key={c.id} style={{background:"#ff456010",border:"1px solid #ff456025",borderRadius:5,padding:"4px 9px",fontFamily:"monospace",fontSize:10}}><span style={{color:"#e6edf3",fontWeight:700}}>{fTitle(c)}</span></div>)}
-                </div>
-              </div>
-            )}
-
-            {/* Open contracts */}
-            <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8}}>
-              <div style={{padding:"7px 11px",fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em"}}>OPEN CONTRACTS</div>
-              <div className="ms">
-                <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
-                  <thead><tr>
-                    <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Contract</th>
-                    <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Qty</th>
-                    <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Expires</th>
-                    <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Premium</th>
-                    <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>OTM %</th>
-                    <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Band</th>
-                    <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Tgt %</th>
-                    <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>$/share</th>
-                    <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Tgt Close</th>
-                    <th style={{padding:"5px 8px",textAlign:"center",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>ITM/OTM</th>
-                    <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Signal</th>
-                    <th style={{padding:"5px 8px",borderBottom:"1px solid #1c2128",width:60}}></th>
-                  </tr></thead>
-                  <tbody>
-                    {planOpen.map(c=>{
-                      const itmStatus=getITMStatus(c);
-                      const bd=getContractBand(c);
-                      return(
-                      <tr key={c.id} className="rh" style={{borderTop:"1px solid #0d1117",background:c.expires===planToday?"#ff456005":itmStatus==="ITM"?"#ff456003":itmStatus==="OTM"?"#00ff8803":"transparent"}}>
-                        <td style={{padding:"5px 8px",fontFamily:"monospace",fontWeight:700,color:"#e6edf3",fontSize:11}}>{fTitle(c)}</td>
-                        <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#2a3040"}}>{c.qty}</td>
-                        <td style={{padding:"5px 8px",fontFamily:"monospace",fontSize:10,color:c.expires===planToday?"#ff4560":"#2a3040"}}>{c.expires||"—"}</td>
-                        <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#58a6ff"}}>{f$(c.premium)}</td>
-                        <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:10,color:bd?bd.bandColor:"#555"}}>{bd?bd.otmPct.toFixed(2)+"%":"—"}</td>
-                        <td style={{padding:"5px 8px"}}>{bd?<span style={{fontSize:9,fontFamily:"monospace",background:bd.bandColor+"22",color:bd.bandColor,border:`1px solid ${bd.bandColor}40`,borderRadius:3,padding:"1px 5px"}}>{bd.bandLabel}</span>:<span style={{color:"#2a3040",fontSize:10}}>—</span>}</td>
-                        <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:10,color:bd?bd.bandColor:"#555"}}>{bd?bd.tgtPct+"%":"—"}</td>
-                        <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:"#00ff88",fontWeight:700}}>{bd?"$"+bd.targetPerShare.toFixed(2):"—"}</td>
-                        <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:"#00ff88"}}>{bd?f$(bd.targetClose):"—"}</td>
-                        <td style={{padding:"5px 8px",textAlign:"center"}}>{itmStatus?<Tag color={itmStatus==="ITM"?"red":"green"}>{itmStatus==="ITM"?"🔴":"🟢"}</Tag>:<span style={{color:"#2a3040",fontSize:10}}>—</span>}</td>
-                        <td style={{padding:"5px 8px"}}>
-                          {(() => {
-                            const lo   = getLiveOption(c);
-                            const last = lo?.mark ?? lo?.last ?? lo?.bid ?? null;
-                            if (!bd||last==null||!c.premium) return <span style={{color:"#1c2128",fontSize:9,fontFamily:"monospace"}}>—</span>;
-                            const mv      = (c.qty||1)*last*100;
-                            const prem    = Math.abs(c.premium);
-                            const gain    = c.optType==="BTO" ? mv-prem : prem-mv;
-                            const gainPct = prem>0 ? (gain/prem)*100 : 0;
-                            const tgtPct  = bd.tgtPct;
-                            let label, color, bg;
-                            const isBTO3 = c.optType==="BTO";
-                            const expToday3 = c.expires===TODAY;
-                            if (gainPct>=tgtPct&&c.qty>1&&isBTO3&&!expToday3) { const pq=Math.ceil((prem/(c.qty||1))/((gain/(c.qty||1))||1)); label=pq&&pq<c.qty?"Sell "+pq+" of "+c.qty:"Close Now"; color="#ffd166"; bg="#ffd16620"; }
-                            else if (gainPct>=tgtPct) { label="Close Now"; color="#00ff88"; bg="#00ff8820"; }
-                            else if (gainPct>=tgtPct*0.75) { label="Approaching"; color="#58a6ff"; bg="#58a6ff20"; }
-                            else return <span style={{color:"#2a3040",fontSize:9,fontFamily:"monospace"}}>hold</span>;
-                            return <span style={{fontSize:9,fontFamily:"monospace",background:bg,color,border:`1px solid ${color}40`,borderRadius:4,padding:"2px 7px",whiteSpace:"nowrap"}}>{label}</span>;
-                          })()}
-                        </td>
-                        <td style={{padding:"5px 8px"}}>
-                          <button onClick={()=>openPlanForm(c.stock||"",{action:"BTC",qty:c.qty,strike:c.strike,expiration:c.expires,account:c.account})} style={{background:"#58a6ff18",color:"#58a6ff",border:"1px solid #58a6ff30",borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"monospace"}}>+ Add</button>
-                        </td>
-                      </tr>
-                    );})}
-                    {planOpen.length===0 && <tr><td colSpan={11} style={{padding:18,textAlign:"center",color:"#3a4050",fontSize:10,fontFamily:"monospace"}}>No open contracts</td></tr>}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Plan form */}
-            {planForm && (
-              <div style={{background:"#0a0e14",border:"1px solid #00ff8825",borderRadius:8,padding:13,animation:"fadeIn .2s"}}>
-                <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:10}}>
-                  <div style={{width:5,height:5,borderRadius:"50%",background:"#00ff88"}}/>
-                  <span style={{fontFamily:"monospace",fontSize:10,color:"#00ff88",letterSpacing:"0.07em"}}>PLAN — {planForm.ticker}</span>
-                </div>
-
-                {/* ── Signal decision banner (shown when opened via Pushover deep-link) ── */}
-                {pendingSignalId && !signalDecision && (
-                  <div style={{background:"#0d1a0d",border:"1px solid #00ff8840",borderRadius:6,padding:"10px 12px",marginBottom:12}}>
-                    <div style={{fontFamily:"monospace",fontSize:9,color:"#3a4050",letterSpacing:"0.07em",marginBottom:8}}>📡 signal · trade will auto-log if committed · or log a pass below</div>
-                    <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                      <input id="signal-dec-notes" type="text" placeholder="reason for passing (optional)..." style={{flex:1,background:"#0a0e14",border:"1px solid #1c2128",borderRadius:4,padding:"5px 8px",fontSize:9,fontFamily:"monospace",color:"#c9d1d9"}} />
-                      <button onClick={async () => {
-                        const notes = document.getElementById("signal-dec-notes")?.value || "";
-                        await supabase.from("decision_log").insert({ signal_id: pendingSignalId, decision: "passed", notes, created_at: new Date().toISOString() });
-                        setSignalDecision({ decision: "passed", notes });
-                        setPendingSignalId(null);
-                      }} style={{background:"transparent",border:"1px solid #ff456040",borderRadius:4,padding:"4px 12px",fontSize:9,fontFamily:"monospace",color:"#ff4560",cursor:"pointer",whiteSpace:"nowrap"}}>
-                        PASSED
-                      </button>
-                      <button onClick={() => { setPendingSignalId(null); setSignalDecision(null); }} style={{background:"transparent",border:"none",color:"#3a4050",fontSize:12,cursor:"pointer",lineHeight:1}}>×</button>
+                      )}
                     </div>
                   </div>
                 )}
-                {signalDecision && (
-                  <div style={{background:"#0d1a0d",border:"1px solid #00ff8825",borderRadius:6,padding:"7px 12px",marginBottom:12,display:"flex",alignItems:"center",gap:8}}>
-                    <span style={{fontFamily:"monospace",fontSize:9,color:"#555"}}>✓ logged as <span style={{color:"#ff4560"}}>passed</span>{signalDecision.notes ? ` — ${signalDecision.notes}` : ""}</span>
-                    <button onClick={()=>setSignalDecision(null)} style={{background:"transparent",border:"none",color:"#3a4050",fontSize:11,cursor:"pointer",marginLeft:"auto"}}>×</button>
+              </div>
+            );
+          };
+
+          // ── opp row ────────────────────────────────────────────────────────
+          const OppRow = ({ o }) => {
+            const typeColors = {STO:"#00ff88",BTO:"#c084fc",WATCH:"#58a6ff",BTC:"#ffd166"};
+            const typeBg = {STO:"#00ff8818",BTO:"#c084fc18",WATCH:"#58a6ff18",BTC:"#ffd16618"};
+            const typeBorder = {STO:"#00ff8830",BTO:"#c084fc30",WATCH:"#58a6ff30",BTC:"#ffd16630"};
+            const srcColor = {dani:"#ff4560",sage:"#c084fc",manual:"#3a4050"};
+            const srcBg = {dani:"#ff456010",sage:"#c084fc10",manual:"transparent"};
+            const srcBorder = {dani:"#ff456030",sage:"#c084fc30",manual:"#1c2128"};
+            const isDone = o.status !== "open";
+            return (
+              <div onClick={()=>setSelectedWatchTicker(o.ticker)}
+                style={{display:"grid",gridTemplateColumns:"56px 68px 1fr auto auto 72px",alignItems:"center",gap:8,
+                  background:"#0a0e14",border:`1px solid ${isDone?"#1c2128":"#21262d"}`,
+                  borderLeft:`2px solid ${o.src==="dani"?"#ff456040":o.src==="sage"?"#c084fc40":"#58a6ff30"}`,
+                  borderRadius:6,padding:"6px 10px",cursor:"pointer",opacity:isDone?0.4:1,
+                  transition:"border-color .12s"}}>
+                <span style={{fontFamily:"monospace",fontWeight:700,fontSize:11,color:"#e6edf3"}}>{o.ticker}</span>
+                <span style={{fontSize:9,padding:"2px 6px",borderRadius:3,fontWeight:700,textAlign:"center",
+                  color:typeColors[o.type]||"#555",background:typeBg[o.type]||"transparent",border:`1px solid ${typeBorder[o.type]||"#1c2128"}`}}>{o.type}</span>
+                <span style={{fontFamily:"monospace",fontSize:10,color:"#8b949e"}}>
+                  {o.detail && <span style={{color:"#c9d1d9",marginRight:6}}>{o.detail}</span>}
+                  {o.note}
+                </span>
+                {o.target ? <span style={{fontFamily:"monospace",fontSize:10,color:"#ffd166",whiteSpace:"nowrap"}}>${(+o.target).toFixed(2)}</span> : <span/>}
+                <span style={{fontSize:8,padding:"1px 5px",borderRadius:3,color:srcColor[o.src],background:srcBg[o.src],border:`1px solid ${srcBorder[o.src]}`}}>{o.src}</span>
+                <div style={{display:"flex",gap:3}} onClick={e=>e.stopPropagation()}>
+                  {o.status==="open" && <>
+                    <button onClick={()=>markOppDone(o.id)} style={{background:"none",border:"1px solid #1c2128",color:"#3a4050",fontFamily:"monospace",fontSize:9,padding:"2px 6px",borderRadius:3,cursor:"pointer"}}>✓</button>
+                    <button onClick={()=>skipOppItem(o.id)} style={{background:"none",border:"1px solid #1c2128",color:"#3a4050",fontFamily:"monospace",fontSize:9,padding:"2px 6px",borderRadius:3,cursor:"pointer"}}>skip</button>
+                  </>}
+                  <button onClick={()=>deleteOppItem(o.id)} style={{background:"none",border:"1px solid #1c2128",color:"#3a4050",fontFamily:"monospace",fontSize:9,padding:"2px 6px",borderRadius:3,cursor:"pointer"}}>✕</button>
+                </div>
+              </div>
+            );
+          };
+
+          const openOpps   = oppItems.filter(o => o.status === "open");
+          const doneOpps   = oppItems.filter(o => o.status !== "open");
+          const daniOpps   = openOpps.filter(o => o.src === "dani");
+          const sageOpps   = openOpps.filter(o => o.src === "sage");
+          const manualOpps = openOpps.filter(o => o.src === "manual");
+
+          return (
+            <div style={{display:"flex",flexDirection:"column",gap:9}}>
+
+              {/* ── WATCHLIST ── */}
+              <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:11}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+                  <span style={{fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em"}}>WATCHLIST</span>
+                  <span style={{fontSize:8,color:"#3a4050",fontFamily:"monospace"}}>click row to expand · alerts · chain · notes</span>
+                </div>
+
+                {/* Add bar */}
+                <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:8}}>
+                  <input value={watchlistInput} onChange={e=>setWatchlistInput(e.target.value.toUpperCase())}
+                    onKeyDown={e=>{if(e.key==="Enter"&&watchlistInput.trim()){addToWatchlist(watchlistInput);setWatchlistInput("");}}}
+                    placeholder="Add ticker…" style={{width:110,fontSize:11,padding:"4px 7px",textTransform:"uppercase"}}/>
+                  <button onClick={()=>{if(watchlistInput.trim()){addToWatchlist(watchlistInput);setWatchlistInput("");}}}
+                    style={{background:"#00ff8814",color:"#00ff88",border:"1px solid #00ff8830",borderRadius:5,padding:"4px 10px",fontSize:10,fontFamily:"monospace"}}>+ Watch</button>
+                </div>
+
+                {/* Column headers */}
+                <div style={{display:"grid",gridTemplateColumns:"62px 88px 110px 1fr auto 80px",gap:8,padding:"2px 10px",marginBottom:3}}>
+                  {["TICKER","PRICE","CHG","","",""].map((h,i) => (
+                    <span key={i} style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",textAlign:i===1||i===2?"right":"left"}}>{h}</span>
+                  ))}
+                </div>
+
+                {/* Rows */}
+                {watchlist.length === 0
+                  ? <div style={{color:"#2a3040",fontSize:10,fontFamily:"monospace",padding:"8px 10px"}}>Add tickers above to start watching</div>
+                  : watchlist.map(sym => <WatchRow key={sym} sym={sym} />)
+                }
+              </div>
+
+              {/* ── OPPORTUNITIES ── */}
+              <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:11}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+                  <span style={{fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em"}}>OPPORTUNITIES</span>
+                  <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                    <span style={{fontSize:8,color:"#3a4050",fontFamily:"monospace"}}>DANI · SAGE · manual flags</span>
+                    <button onClick={()=>setOppForm({ticker:"",type:"WATCH",detail:"",target:"",note:""})}
+                      style={{background:"transparent",border:"1px solid #1c2128",color:"#3a4050",fontFamily:"monospace",fontSize:9,padding:"2px 8px",borderRadius:4,cursor:"pointer"}}>+ Add</button>
+                  </div>
+                </div>
+
+                {/* Add opp form */}
+                {oppForm && (
+                  <div style={{background:"#080c12",border:"1px solid #00ff8820",borderRadius:7,padding:"11px 13px",marginBottom:10,animation:"fadeIn .15s"}}>
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:7,marginBottom:7}}>
+                      <div>
+                        <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",marginBottom:3}}>TICKER</div>
+                        <input value={oppForm.ticker} onChange={e=>setOppForm(p=>({...p,ticker:e.target.value.toUpperCase()}))}
+                          placeholder="NVDA" style={{width:"100%",fontSize:11,padding:"4px 7px",textTransform:"uppercase"}}/>
+                      </div>
+                      <div>
+                        <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",marginBottom:3}}>TYPE</div>
+                        <select value={oppForm.type} onChange={e=>setOppForm(p=>({...p,type:e.target.value}))} style={{width:"100%",fontSize:11,padding:"4px 7px"}}>
+                          <option>WATCH</option><option>STO</option><option>BTO</option><option>BTC</option>
+                        </select>
+                      </div>
+                      <div>
+                        <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",marginBottom:3}}>DETAIL</div>
+                        <input value={oppForm.detail} onChange={e=>setOppForm(p=>({...p,detail:e.target.value}))}
+                          placeholder="$310 Call Jun 5" style={{width:"100%",fontSize:11,padding:"4px 7px"}}/>
+                      </div>
+                      <div>
+                        <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",marginBottom:3}}>TARGET $</div>
+                        <input type="number" value={oppForm.target} onChange={e=>setOppForm(p=>({...p,target:e.target.value}))}
+                          placeholder="—" style={{width:"100%",fontSize:11,padding:"4px 7px"}}/>
+                      </div>
+                    </div>
+                    <div style={{marginBottom:7}}>
+                      <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",marginBottom:3}}>NOTE / THESIS</div>
+                      <input value={oppForm.note} onChange={e=>setOppForm(p=>({...p,note:e.target.value}))}
+                        placeholder="Why is this interesting?" style={{width:"100%",fontSize:11,padding:"4px 7px"}}/>
+                    </div>
+                    <div style={{display:"flex",gap:6}}>
+                      <button onClick={()=>{
+                        if (!oppForm.ticker.trim()) return;
+                        saveOppItem({id:Date.now(),ticker:oppForm.ticker.trim().toUpperCase(),type:oppForm.type,
+                          detail:oppForm.detail,target:oppForm.target?+oppForm.target:null,note:oppForm.note,src:"manual",status:"open",createdAt:new Date().toISOString()});
+                        setOppForm(null);
+                      }} style={{background:"#00ff88",color:"#010409",border:"none",borderRadius:5,padding:"5px 14px",fontSize:10,fontWeight:700,fontFamily:"monospace",cursor:"pointer"}}>Save</button>
+                      <button onClick={()=>setOppForm(null)}
+                        style={{background:"transparent",color:"#555",border:"1px solid #21262d",borderRadius:5,padding:"5px 10px",fontSize:10,fontFamily:"monospace",cursor:"pointer"}}>Cancel</button>
+                    </div>
                   </div>
                 )}
-                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(115px,1fr))",gap:7,marginBottom:7}}>
-                  <div><FL>Action</FL><select value={planForm.action} onChange={e=>pf("action",e.target.value)}><option>STO</option><option>BTO</option><option>BTC</option><option>STC</option></select></div>
-                  <div><FL>Type</FL><select value={planForm.type||"Call"} onChange={e=>pf("type",e.target.value)}><option>Call</option><option>Put</option></select></div>
-                  <div><FL>Account</FL><select value={planForm.account||""} onChange={e=>pf("account",e.target.value)}><option value="">—</option><option>Schwab</option><option>Etrade</option></select></div>
-                  <div><FL>Qty</FL><input type="number" value={planForm.qty} onChange={e=>pf("qty",e.target.value)}/></div>
-                  <div><FL>Strike</FL><input type="number" value={planForm.strike} onChange={e=>pf("strike",e.target.value)}/></div>
-                  <div><FL>Expiration</FL><input type="date" value={planForm.expiration} onChange={e=>pf("expiration",e.target.value)}/></div>
-                  <div><FL>Target Premium $</FL><input type="number" value={planForm.targetPremium} onChange={e=>pf("targetPremium",e.target.value)}/></div>
-                  <div><FL>Stock Price $</FL><input type="number" value={planForm.stockPrice} onChange={e=>pf("stockPrice",e.target.value)}/></div>
-                  <div><FL>Bid</FL><input type="number" value={planForm.bid} onChange={e=>pf("bid",e.target.value)}/></div>
-                  <div><FL>Ask</FL><input type="number" value={planForm.ask} onChange={e=>pf("ask",e.target.value)}/></div>
-                </div>
-                <div style={{marginBottom:9}}><FL>Notes</FL><input type="text" value={planForm.notes} onChange={e=>pf("notes",e.target.value)}/></div>
-                {/* Estimated premium + cash required */}
-                {!!(planForm.bid||planForm.ask) && !!planForm.qty && (() => {
-                  try {
-                    const mid = ((+planForm.bid||0)+(+planForm.ask||0))/2;
-                    const estPrem = mid*(+planForm.qty)*100;
-                    const isPut   = planForm.type==="Put" && (planForm.action==="STO"||planForm.action==="BTO");
-                    const cashReq = isPut ? (+planForm.strike||0)*(+planForm.qty)*100 : 0;
-                    const cd = cashData || {};
-                    const schwabSTO = openC.filter(c=>c.optType==="STO"&&c.type==="Put"&&c.account==="Schwab").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
-                    const schwabBTO = openC.filter(c=>c.optType==="BTO"&&c.account==="Schwab").reduce((s,c)=>{const lo=findOptionForContract(etradeChains,c);return s+(lo?.mark!=null?lo.mark*(c.qty||1)*100:Math.abs(c.premium||0));},0);
-                    const schwabAvailForPuts = (+cd.schwab||0) - schwabSTO + schwabBTO;
-                    const etradeSTO = openC.filter(c=>c.optType==="STO"&&c.type==="Put"&&c.account==="Etrade").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
-                    const etradeBTO = openC.filter(c=>c.optType==="BTO"&&c.account==="Etrade").reduce((s,c)=>{const lo=findOptionForContract(etradeChains,c);return s+(lo?.mark!=null?lo.mark*(c.qty||1)*100:Math.abs(c.premium||0));},0);
-                    const etradeAvailForPuts = (+cd.etrade||0) - etradeSTO + etradeBTO;
-                    const acctAvail = planForm.account==="Schwab"?schwabAvailForPuts:planForm.account==="Etrade"?etradeAvailForPuts:null;
-                    const afterTrade = acctAvail!=null ? acctAvail - cashReq : null;
-                    return (
-                      <div style={{background:"#0a0e14",border:"1px solid #c084fc30",borderRadius:6,padding:"8px 10px",marginBottom:9,fontSize:9,fontFamily:"monospace"}}>
-                        <div style={{color:"#c084fc",letterSpacing:"0.07em",marginBottom:5}}>ESTIMATES</div>
-                        <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
-                          <div><span style={{color:"#3a4050"}}>Est Premium: </span><span style={{color:"#58a6ff",fontWeight:700}}>{f$(estPrem)}</span><span style={{color:"#3a4050"}}> (mid {f$(mid)} × {planForm.qty} × 100)</span></div>
-                          {isPut && cashReq>0 && <div><span style={{color:"#3a4050"}}>Cash Required: </span><span style={{color:"#ffd166",fontWeight:700}}>{f$(cashReq)}</span></div>}
-                          {afterTrade!=null && <div><span style={{color:"#3a4050"}}>Avail After: </span><span style={{color:afterTrade>=0?"#00ff88":"#ff4560",fontWeight:700}}>{f$(afterTrade)}</span></div>}
-                        </div>
-                      </div>
-                    );
-                  } catch(e) { return null; }
-                })()}
-                {/* Earnings warning */}
-                {(() => {
-                  const sd = stocksData[planForm.ticker] || {};
-                  const earn = sd.earningsDate;
-                  const exp  = planForm.expiration;
-                  if (!earn || !exp) return null;
-                  const earnDate = new Date(earn + "T12:00:00");
-                  const expDate  = new Date(exp  + "T12:00:00");
-                  if (expDate >= earnDate && earnDate >= new Date()) {
-                    return (
-                      <div style={{background:"#ffd16615",border:"1px solid #ffd16640",borderRadius:6,padding:"7px 11px",marginBottom:9,display:"flex",alignItems:"center",gap:7}}>
-                        <span style={{fontSize:14}}>⚠️</span>
-                        <span style={{fontSize:10,color:"#ffd166",fontFamily:"monospace"}}>
-                          <strong>Earnings Warning:</strong> {planForm.ticker} reports on {earn} — this contract expires after earnings. IV crush may affect option value.
-                        </span>
-                      </div>
-                    );
-                  }
-                  return null;
-                })()}
-                <div style={{display:"flex",gap:7}}>
-                  <button onClick={savePlan} style={{background:"#00ff88",color:"#010409",border:"none",borderRadius:6,padding:"7px 16px",fontSize:11,fontWeight:700,fontFamily:"monospace"}}>ADD TO PLAN</button>
-                  <button onClick={()=>setPlanForm(null)} style={{background:"transparent",color:"#555",border:"1px solid #21262d",borderRadius:6,padding:"7px 12px",fontSize:11}}>Cancel</button>
-                </div>
-              </div>
-            )}
 
-            {/* Today's Plan */}
-            <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8}}>
-              <div style={{padding:"7px 11px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:6}}>
-                <span style={{fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em"}}>TODAY'S PLAN</span>
-                <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
-                  <input type="date" value={planDateFilter} onChange={e=>setPlanDateFilter(e.target.value)} style={{width:120,fontSize:10,padding:"2px 5px"}}/>
-                  {planDateFilter!==TODAY && <button onClick={()=>setPlanDateFilter(TODAY)} style={{background:"transparent",color:"#3a4050",border:"1px solid #21262d",borderRadius:3,padding:"2px 6px",fontSize:8,fontFamily:"monospace"}}>Today</button>}
-                  {activePlan.length>0 && <Tag color="green">{activePlan.length} pending</Tag>}
-                  {donePlan.length>0 && <button onClick={()=>persistPlan(planItems.filter(p=>p.status!=="done"||!filteredPlan.find(x=>x.id===p.id)))} style={{background:"transparent",color:"#3a4050",border:"1px solid #21262d",borderRadius:3,padding:"2px 7px",fontSize:8,fontFamily:"monospace"}}>Clear done</button>}
+                {/* Grouped opp rows */}
+                {openOpps.length === 0 && doneOpps.length === 0 && (
+                  <div style={{color:"#2a3040",fontSize:10,fontFamily:"monospace",padding:"8px 10px"}}>No opportunities yet — DANI signals and manual flags appear here</div>
+                )}
+                <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                  {daniOpps.length > 0 && <>
+                    <div style={{fontSize:8,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",padding:"4px 10px 2px"}}>DANI SIGNALS</div>
+                    {daniOpps.map(o => <OppRow key={o.id} o={o}/>)}
+                  </>}
+                  {sageOpps.length > 0 && <>
+                    <div style={{fontSize:8,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",padding:"8px 10px 2px"}}>SAGE / SYSTEM</div>
+                    {sageOpps.map(o => <OppRow key={o.id} o={o}/>)}
+                  </>}
+                  {manualOpps.length > 0 && <>
+                    <div style={{fontSize:8,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",padding:"8px 10px 2px"}}>MANUAL FLAGS</div>
+                    {manualOpps.map(o => <OppRow key={o.id} o={o}/>)}
+                  </>}
+                  {doneOpps.length > 0 && <>
+                    <div style={{fontSize:8,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",padding:"8px 10px 2px"}}>DONE / SKIPPED</div>
+                    {doneOpps.map(o => <OppRow key={o.id} o={o}/>)}
+                  </>}
                 </div>
               </div>
-              {filteredPlan.length===0 ? (
-                <div style={{padding:20,textAlign:"center",color:"#2a3040",fontSize:10,fontFamily:"monospace"}}>No plan items for this date</div>
-              ) : (
-                <div className="ms">
-                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
-                    <thead><tr>
-                      <th style={{padding:"5px 8px",width:30,borderBottom:"1px solid #1c2128"}}>✓</th>
-                      <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Ticker</th>
-                      <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Contract</th>
-                      <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Action</th>
-                      <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Strike</th>
-                      <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Qty</th>
-                      <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Target $</th>
-                      <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>OTM %</th>
-                      <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Band</th>
-                      <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>$/share</th>
-                      <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Tgt Close</th>
-                      <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Acct</th>
-                      <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Signal</th>
-                      <th style={{padding:"5px 8px",width:36,borderBottom:"1px solid #1c2128"}}></th>
-                    </tr></thead>
-                    <tbody>
-                      {[...activePlan,...donePlan].map(p=>{
-                        // Build contract name from plan fields
-                        const planContractName = (() => {
-                          if (!p.ticker||!p.expiration||!p.strike) return "—";
-                          const d = new Date(p.expiration+"T12:00:00");
-                          const exp = (d.getMonth()+1).toString().padStart(2,"0")+"/"+d.getDate().toString().padStart(2,"0")+"/"+d.getFullYear();
-                          return `${p.ticker} ${exp} ${(+p.strike).toFixed(2)} C`;
-                        })();
-                        // Look up the matching open contract to get band data
-                        const matchedContract = originals.find(c=>
-                          c.status==="Open" &&
-                          c.stock?.toUpperCase()===p.ticker?.toUpperCase() &&
-                          String(c.strike)===String(p.strike) &&
-                          c.expires===p.expiration
-                        );
-                        const bd = matchedContract ? getContractBand(matchedContract) : null;
-                        return (
-                        <tr key={p.id} className="rh" style={{borderTop:"1px solid #0d1117",opacity:p.status==="done"?0.4:1}}>
-                          <td style={{padding:"5px 8px",textAlign:"center"}}>
-                            <input type="checkbox" checked={p.status==="done"} onChange={()=>p.status==="done"?(()=>{persistPlan(planItems.map(x=>x.id===p.id?{...x,status:"open"}:x));})():closePlan(p.id)} style={{width:14,height:14,cursor:"pointer",accentColor:"#00ff88"}}/>
-                          </td>
-                          <td style={{padding:"5px 8px",fontFamily:"monospace",fontWeight:700,color:"#e6edf3",fontSize:12,textDecoration:p.status==="done"?"line-through":"none"}}>{p.ticker}</td>
-                          <td style={{padding:"5px 8px",fontFamily:"monospace",color:"#555",fontSize:10,whiteSpace:"nowrap"}}>{planContractName}</td>
-                          <td style={{padding:"5px 8px"}}><Tag color={p.action==="STO"||p.action==="STC"?"green":p.action==="BTC"?"amber":p.action==="BTO"?"purple":"blue"}>{p.action}</Tag></td>
-                          <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#b0bac6"}}>${p.strike||"—"}</td>
-                          <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#555"}}>{p.qty}</td>
-                          <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#00ff88"}}>{p.targetPremium?f$(+p.targetPremium):"—"}</td>
-                          <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:10,color:bd?bd.bandColor:"#555"}}>{bd?bd.otmPct.toFixed(2)+"%":"—"}</td>
-                          <td style={{padding:"5px 8px"}}>{bd?<span style={{fontSize:9,fontFamily:"monospace",background:bd.bandColor+"22",color:bd.bandColor,border:`1px solid ${bd.bandColor}40`,borderRadius:3,padding:"1px 5px"}}>{bd.bandLabel}</span>:<span style={{color:"#2a3040",fontSize:10}}>—</span>}</td>
-                          <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:"#00ff88",fontWeight:700}}>{bd?"$"+bd.targetPerShare.toFixed(2):"—"}</td>
-                          <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:"#00ff88"}}>{bd?f$(bd.targetClose):"—"}</td>
-                          <td style={{padding:"5px 8px"}}>{p.account?<Tag color={p.account==="Schwab"?"blue":"amber"}>{p.account}</Tag>:<span style={{color:"#2a3040",fontSize:10}}>—</span>}</td>
-                          <td style={{padding:"5px 8px"}}>
-                            {matchedContract && (() => {
-                              if (!bd) return <span style={{color:"#2a3040",fontSize:9,fontFamily:"monospace"}}>—</span>;
-                              const opt = findOptionForContract(etradeChains, matchedContract);
-                              const last = opt?.mark ?? opt?.last ?? null;
-                              if (last==null||!matchedContract.premium) return <span style={{color:"#2a3040",fontSize:9,fontFamily:"monospace"}}>—</span>;
-                              const gainPct = (Math.abs(matchedContract.premium)-last*matchedContract.qty*100)/Math.abs(matchedContract.premium)*100;
-                              const target  = bd.targetClose;
-                              const gainDollar = Math.abs(matchedContract.premium) - last*matchedContract.qty*100;
-                              if (gainDollar >= target)
-                                return <span style={{fontSize:9,fontFamily:"monospace",background:"#00ff8820",color:"#00ff88",border:"1px solid #00ff8840",borderRadius:3,padding:"1px 5px"}}>CLOSE NOW</span>;
-                              if (gainPct >= 50 && matchedContract.qty > 1)
-                                return <span style={{fontSize:9,fontFamily:"monospace",background:"#ffd16620",color:"#ffd166",border:"1px solid #ffd16640",borderRadius:3,padding:"1px 5px"}}>PARTIAL</span>;
-                              if (gainDollar >= target*0.8)
-                                return <span style={{fontSize:9,fontFamily:"monospace",background:"#ff9f1c20",color:"#ff9f1c",border:"1px solid #ff9f1c40",borderRadius:3,padding:"1px 5px"}}>APPROACHING</span>;
-                              return <span style={{color:"#2a3040",fontSize:9,fontFamily:"monospace"}}>hold</span>;
-                            })()}
-                          </td>
-                          <td style={{padding:"4px 4px"}}><button onClick={()=>delPlan(p.id)} style={{background:"transparent",color:"#ff456030",border:"none",fontSize:11,cursor:"pointer",padding:"1px 4px"}}>✕</button></td>
-                        </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+
             </div>
-
-            {/* AI Assistant button */}
-            <div style={{background:"#0a0e14",border:"1px solid #c084fc25",borderRadius:8,padding:14,display:"flex",alignItems:"center",gap:12,cursor:"pointer"}} onClick={()=>setTab("analytics")}>
-              <div style={{width:32,height:32,borderRadius:8,background:"linear-gradient(135deg,#1a0a1f,#0d1f12)",border:"1px solid #c084fc30",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>🤖</div>
-              <div style={{flex:1}}>
-                <div style={{fontFamily:"monospace",fontSize:10,color:"#c084fc",letterSpacing:"0.07em",marginBottom:2}}>AI ASSISTANT</div>
-                <div style={{fontSize:11,color:"#555"}}>Ask questions about your trading data — available in the Analytics tab</div>
-              </div>
-              <div style={{color:"#c084fc",fontSize:16}}>→</div>
-            </div>
-          </div>
-        )}
-
-        {/* ══ STOCKS ══ */}
+          );
+        })()}
         {tab==="stocks" && (() => {
           // Build per-ticker summary from originals only (no double-counting)
           const tickerMap = {};
@@ -7763,9 +8269,9 @@ ${JSON.stringify(summary, null, 1)}`;
                 {/* Committed funds + available to write puts */}
                 {(() => {
                   const schwabCommitted = openC.filter(c=>c.optType==="STO"&&c.type==="Put"&&c.account==="Schwab").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
-                  const schwabBTOAssets = openC.filter(c=>c.optType==="BTO"&&c.account==="Schwab").reduce((s,c)=>{const lo=findOptionForContract(etradeChains,c);return s+(lo?.mark!=null?lo.mark*(c.qty||1)*100:Math.abs(c.premium||0));},0);
+                  const schwabBTOAssets = openC.filter(c=>c.optType==="BTO"&&c.account==="Schwab").reduce((s,c)=>{const lo=findOptionForContract(etradeChains,c);return s+((lo?.bid!=null&&lo?.ask!=null)?(lo.bid+lo.ask)/2*(c.qty||1)*100:lo?.mark!=null?lo.mark*(c.qty||1)*100:Math.abs(c.premium||0));},0);
                   const etradeCommitted = openC.filter(c=>c.optType==="STO"&&c.type==="Put"&&c.account==="Etrade").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
-                  const etradeBTOAssets = openC.filter(c=>c.optType==="BTO"&&c.account==="Etrade").reduce((s,c)=>{const lo=findOptionForContract(etradeChains,c);return s+(lo?.mark!=null?lo.mark*(c.qty||1)*100:Math.abs(c.premium||0));},0);
+                  const etradeBTOAssets = openC.filter(c=>c.optType==="BTO"&&c.account==="Etrade").reduce((s,c)=>{const lo=findOptionForContract(etradeChains,c);return s+((lo?.bid!=null&&lo?.ask!=null)?(lo.bid+lo.ask)/2*(c.qty||1)*100:lo?.mark!=null?lo.mark*(c.qty||1)*100:Math.abs(c.premium||0));},0);
                   const schwabAvail = (+cashData.schwab||0) - schwabCommitted + schwabBTOAssets;
                   const etradeAvail = (+cashData.etrade||0) - etradeCommitted + etradeBTOAssets;
                   return (<>

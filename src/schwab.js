@@ -63,7 +63,7 @@ export async function fetchOptionChain(ticker, expiryDate) {
   const data = await schwabGet("/marketdata/v1/chains", {
     symbol:       ticker.toUpperCase(),
     contractType: "ALL",
-    strikeCount:  30,
+    strikeCount:  80,
     fromDate:     expiryDate,
     toDate:       expiryDate,
   });
@@ -182,6 +182,42 @@ export async function fetchPositions() {
   }
 
   return { stocks, cash: totalCash, accountValue: totalValue };
+}
+
+
+// ── Build OCC option symbol from contract fields ──────────────────────────
+// e.g. GEV 260626C01160000  (ticker padded to 6, YYMMDD, C/P, strike*1000 padded to 8)
+export function buildOCCSymbol(contract) {
+  if (!contract.stock || !contract.expires || !contract.strike || !contract.type) return null;
+  const ticker  = contract.stock.toUpperCase().padEnd(6, " ");
+  const [yyyy, mm, dd] = contract.expires.split("-");
+  const date    = `${yyyy.slice(2)}${mm}${dd}`;
+  const cp      = contract.type === "Put" ? "P" : "C";
+  const strike  = Math.round(Number(contract.strike) * 1000).toString().padStart(8, "0");
+  return `${ticker}${date}${cp}${strike}`;
+}
+
+// ── Fetch live option quotes by OCC symbol ────────────────────────────────
+// Returns { [occSymbol]: { bid, ask, last, mark } }
+export async function fetchOptionQuotes(occSymbols) {
+  if (!occSymbols.length) return {};
+  const data = await schwabGet("/marketdata/v1/quotes", {
+    symbols: occSymbols.join(","),
+    fields:  "quote",
+    indicative: false,
+  });
+  const results = {};
+  for (const [sym, entry] of Object.entries(data || {})) {
+    const q = entry?.quote ?? entry;
+    if (!q) continue;
+    results[sym] = {
+      bid:  q.bid  ?? q.bidPrice  ?? null,
+      ask:  q.ask  ?? q.askPrice  ?? null,
+      last: q.last ?? q.lastPrice ?? null,
+      mark: q.mark ?? null,
+    };
+  }
+  return results;
 }
 
 export function findOptionForContract(chainData, contract) {

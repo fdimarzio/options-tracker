@@ -26,13 +26,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run unit tests
-        run: npx vitest run tests/utils.test.js
+      - name: Run all unit tests
+        run: npx vitest run
 
   smoke-tests:
     name: Smoke Tests (Playwright)
     runs-on: ubuntu-latest
-    # Only run smoke tests on pushes to main (not every PR)
     if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
@@ -53,8 +52,6 @@ jobs:
         run: |
           if [ -z "$PLAYWRIGHT_PIN" ]; then
             echo "ERROR: PLAYWRIGHT_PIN secret is not set in GitHub repository secrets"
-            echo "Go to: Settings → Secrets → Actions → New repository secret"
-            echo "Name: PLAYWRIGHT_PIN, Value: your 4-digit PIN"
             exit 1
           fi
           echo "PIN secret is set (${#PLAYWRIGHT_PIN} digits)"
