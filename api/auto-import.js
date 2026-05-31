@@ -180,6 +180,21 @@ function fmtDate(d) {
   return `${String(dt.getMonth()+1).padStart(2,"0")}${String(dt.getFullYear())}${String(dt.getDate()).padStart(2,"0")}`;
 }
 
+// ── Live quote fetch for tickers missing from stocksData ─────────────────────
+async function fetchLivePrice(symbol, token) {
+  try {
+    const url = `${SCHWAB_BASE}/marketdata/v1/quotes?symbols=${encodeURIComponent(symbol)}&fields=quote&indicative=false`;
+    const res  = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const q    = data?.[symbol]?.quote;
+    return q?.lastPrice || q?.mark || q?.bidPrice || null;
+  } catch(e) {
+    console.warn(`[auto-import] fetchLivePrice failed for ${symbol}:`, e.message);
+    return null;
+  }
+}
+
 // ── Parsers ───────────────────────────────────────────────────────────────────
 function parseSchwabTx(tx, stocksData, accountNumber) {
   const items   = tx.transferItems || [];
@@ -795,6 +810,31 @@ export default async function handler(req, res) {
         } catch(e) { if (!e.message?.includes("204")) console.warn(`[auto-import] ETrade ${acct.accountIdKey}:`, e.message); }
       }
     } catch(e) { console.warn("[auto-import] ETrade fetch failed:", e.message); }
+
+    // ── Backfill price_at_execution for new tickers not yet in stocksData ────
+    // Collect all distinct symbols missing a price, fetch live quotes in one batch
+    const missingPriceSymbols = [...new Set(
+      [...schwabTxs, ...etradeTxs]
+        .filter(t => t.price_at_execution == null && t.stock && ["STO","BTO"].includes(t.opt_type))
+        .map(t => t.stock)
+    )];
+    if (missingPriceSymbols.length) {
+      try {
+        const batchToken = await getValidToken();
+        const qUrl  = `${SCHWAB_BASE}/marketdata/v1/quotes?symbols=${missingPriceSymbols.join(",")}&fields=quote&indicative=false`;
+        const qRes  = await fetch(qUrl, { headers: { Authorization: `Bearer ${batchToken}`, Accept: "application/json" } });
+        const qData = qRes.ok ? await qRes.json() : {};
+        missingPriceSymbols.forEach(sym => {
+          const q     = qData?.[sym]?.quote;
+          const price = q?.lastPrice || q?.mark || q?.bidPrice || null;
+          if (!price) return;
+          console.log(`[auto-import] live price fallback: ${sym} = $${price}`);
+          [...schwabTxs, ...etradeTxs].forEach(t => {
+            if (t.stock === sym && t.price_at_execution == null) t.price_at_execution = price;
+          });
+        });
+      } catch(e) { console.warn("[auto-import] live price backfill failed:", e.message); }
+    }
 
     // ── Process all transactions ──────────────────────────────────────────────
     console.log(`[auto-import] schwabTxs: ${schwabTxs.length}, etradeTxs: ${etradeTxs.length}, existingIds: ${existingIds.size}`);

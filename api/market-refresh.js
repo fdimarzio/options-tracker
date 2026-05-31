@@ -1095,7 +1095,7 @@ export default async function handler(req, res) {
     const token = await getValidToken();
 
     // ── Load everything in parallel ─────────────────────────────────────────
-    const [contractsRes, chainRes, notifRes, matrixRes, allPositions, signalRulesRes, momentumConfigRes, priceHistoryRes] = await Promise.all([
+    const [contractsRes, chainRes, notifRes, matrixRes, allPositions, signalRulesRes, momentumConfigRes, priceHistoryRes, watchlistRes] = await Promise.all([
       fetch(`${SUPABASE_URL}/rest/v1/contracts?select=id,stock,type,opt_type,strike,expires,premium,qty,account&status=eq.Open`, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }),
       fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.last_chain_refresh`,   { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }),
       fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.notifications_sent`,   { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }),
@@ -1105,6 +1105,8 @@ export default async function handler(req, res) {
       fetch(`${SUPABASE_URL}/rest/v1/sto_momentum_config?enabled=eq.true&limit=1`,      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }),
       // Load last 35 mins of price snapshots for momentum calculation
       fetch(`${SUPABASE_URL}/rest/v1/price_snapshots?captured_at=gte.${new Date(Date.now()-35*60000).toISOString()}&order=captured_at.desc`, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }),
+      // Load watchlist tickers so they get snapshots + DANI history
+      fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.watchlist`,            { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }),
     ]);
 
     const contracts      = await contractsRes.json();
@@ -1113,12 +1115,13 @@ export default async function handler(req, res) {
     const signalRules    = await signalRulesRes.json();
     const momentumConfig = (await momentumConfigRes.json())?.[0] || null;
     const priceHistory   = await priceHistoryRes.json();
+    const watchlistTickers = ((await watchlistRes.json())?.[0]?.cols?.tickers || []).map(t => t.toUpperCase());
 
-    if (!contracts.length && !allPositions.length) return res.status(200).json({ ok: true, tickers: 0 });
+    if (!contracts.length && !allPositions.length && !watchlistTickers.length) return res.status(200).json({ ok: true, tickers: 0 });
 
     const contractTickers = [...new Set(contracts.map(c => c.stock?.toUpperCase()).filter(Boolean))];
     const positionTickers = [...new Set(allPositions.map(p => p.symbol).filter(Boolean))];
-    const tickers = [...new Set([...contractTickers, ...positionTickers])];
+    const tickers = [...new Set([...contractTickers, ...positionTickers, ...watchlistTickers])];
 
     // ── Fetch stock quotes ──────────────────────────────────────────────────
     const qRes = await fetch(`${SCHWAB_BASE}/marketdata/v1/quotes?symbols=${tickers.join(",")}&fields=quote&indicative=false`, {
