@@ -1,0 +1,23 @@
+name: PAM Sync
+
+on:
+  schedule:
+    - cron: '0 */4 * * *'  # every 4 hours
+  workflow_dispatch:         # manual trigger anytime
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+      - name: Run PAM sync
+        env:
+          PAM_SUPABASE_URL: ${{ secrets.PAM_SUPABASE_URL }}
+          PAM_SUPABASE_KEY: ${{ secrets.PAM_SUPABASE_KEY }}
+          PRI_SUPABASE_URL: https://ufagnokxmetushstgrip.supabase.co
+          PRI_SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: node scripts/pam-sync.js
+
