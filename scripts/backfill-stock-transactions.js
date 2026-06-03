@@ -252,6 +252,31 @@ async function etradeGet(path, queryParams, consumerKey, consumerSecret, accessT
   return data;
 }
 
+async function fetchEtradeTransactionsPaginated(accountIdKey, startFmt, endFmt, consumerKey, usedSecret, tokens) {
+  const allTxs = [];
+  let marker   = null;
+  let page     = 1;
+
+  do {
+    const params = { startDate: startFmt, endDate: endFmt, count: 50 };
+    if (marker) params.marker = marker;
+
+    const data   = await etradeGet(
+      `/v1/accounts/${accountIdKey}/transactions`,
+      params, consumerKey, usedSecret, tokens.accessToken, tokens.accessTokenSecret
+    );
+    const resp   = data?.TransactionListResponse ?? {};
+    const txList = resp.Transaction ?? [];
+    allTxs.push(...(Array.isArray(txList) ? txList : [txList]));
+
+    marker = resp.marker ?? null;
+    if (marker) console.log(`  page ${page} → ${txList.length} tx, fetching next page...`);
+    page++;
+  } while (marker);
+
+  return allTxs;
+}
+
 function fmtEtradeDate(d) {
   const et = new Date(d.toLocaleString("en-US", { timeZone: "America/New_York" }));
   return `${String(et.getMonth() + 1).padStart(2, "0")}${String(et.getDate()).padStart(2, "0")}${et.getFullYear()}`;
@@ -315,7 +340,8 @@ function parseEtradeTx(tx, accountName) {
   }
 
   // ── Interest ───────────────────────────────────────────────────────────────
-  if (txType === "Interest" || txType === "INTEREST" || txType === "Money Market Interest"
+  if (txType === "Interest" || txType === "Interest Income" || txType === "INTEREST"
+      || txType === "Money Market Interest" || txType === "Money Market"
       || descU.includes("INTEREST") || descU.includes("MONEY MARKET")) {
     return {
       ...base,
@@ -439,12 +465,7 @@ async function main() {
     for (const acct of accounts) {
       const accountName = ETRADE_ACCOUNT_NAMES[String(acct.accountId)] ?? `ETrade ${String(acct.accountId).slice(-4)}`;
       try {
-        const data   = await etradeGet(
-          `/v1/accounts/${acct.accountIdKey}/transactions`,
-          { startDate: startFmt, endDate: endFmt },
-          consumerKey, usedSecret, tokens.accessToken, tokens.accessTokenSecret
-        );
-        const txList = data?.TransactionListResponse?.Transaction ?? [];
+        const txList = await fetchEtradeTransactionsPaginated(acct.accountIdKey, startFmt, endFmt, consumerKey, usedSecret, tokens);
         const parsed = txList.map(tx => parseEtradeTx(tx, accountName)).filter(Boolean);
         console.log(`[ ETrade ] ${accountName}: ${txList.length} raw → ${parsed.length} parsed  |  ${tally(parsed)}`);
         allRows.push(...parsed);
