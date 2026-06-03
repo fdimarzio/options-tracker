@@ -3958,6 +3958,14 @@ function AllTransactionsTab({ supabase }) {
           <option value="All">All Types</option>
           <option value="BUY">BUY</option>
           <option value="SELL">SELL</option>
+          <option value="DIVIDEND">DIVIDEND</option>
+          <option value="INTEREST">INTEREST</option>
+          <option value="TAX_WITHHOLDING">TAX_WITHHOLDING</option>
+          <option value="JOURNAL">JOURNAL</option>
+          <option value="TRANSFER_IN">TRANSFER_IN</option>
+          <option value="TRANSFER_OUT">TRANSFER_OUT</option>
+          <option value="DEPOSIT">DEPOSIT</option>
+          <option value="WITHDRAWAL">WITHDRAWAL</option>
         </select>
         <select value={fAcct} onChange={e => setFAcct(e.target.value)} style={inp}>
           <option value="All">All Accounts</option>
