@@ -3959,6 +3959,7 @@ function AllTransactionsTab({ supabase }) {
           <option value="BUY">BUY</option>
           <option value="SELL">SELL</option>
           <option value="DIVIDEND">DIVIDEND</option>
+          <option value="REINVEST">REINVEST</option>
           <option value="INTEREST">INTEREST</option>
           <option value="TAX_WITHHOLDING">TAX_WITHHOLDING</option>
           <option value="JOURNAL">JOURNAL</option>

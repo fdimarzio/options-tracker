@@ -319,12 +319,16 @@ function parseEtradeTx(tx, accountName) {
   }
 
   // ── Dividend ───────────────────────────────────────────────────────────────
-  if (txType === "Dividend" || txType === "Dividends" || txType === "DIVIDEND") {
-    const isTax = net < 0 || descU.includes("TAX") || descU.includes("WITHHOLD");
+  if (txType === "Dividend" || txType === "Dividends" || txType === "DIVIDEND"
+      || txType === "Qualified Dividend" || txType === "Ordinary Dividend"
+      || txType === "Non-Qualified Dividend" || txType === "Special Dividend"
+      || txType === "Reinvested Dividend" || txType.endsWith("Dividend")) {
+    const isTax  = net < 0 || descU.includes("TAX") || descU.includes("WITHHOLD");
+    const isReinv = txType === "Reinvested Dividend" || descU.includes("REINVEST");
     return {
       ...base,
       symbol:           prod.symbol?.toUpperCase() ?? "CASH",
-      transaction_type: isTax ? "TAX_WITHHOLDING" : "DIVIDEND",
+      transaction_type: isTax ? "TAX_WITHHOLDING" : isReinv ? "REINVEST" : "DIVIDEND",
       asset_type:       "CASH", quantity: null, price: null,
     };
   }
