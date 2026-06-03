@@ -3933,7 +3933,7 @@ function AllTransactionsTab({ supabase }) {
   useEffect(() => {
     if (!supabase) return;
     let q = supabase.from("stock_transactions").select("*").order("trade_date", { ascending: false }).limit(500);
-    if (fType !== "All") q = q.eq("tx_type", fType);
+    if (fType !== "All") q = q.eq("transaction_type", fType);
     if (fAcct !== "All") q = q.eq("account", fAcct);
     if (fSym.trim())     q = q.ilike("symbol", `%${fSym.trim().toUpperCase()}%`);
     if (fFrom)           q = q.gte("trade_date", fFrom);
@@ -3990,17 +3990,18 @@ function AllTransactionsTab({ supabase }) {
             </thead>
             <tbody>
               {rows.map((r, i) => {
-                const isBuy = r.tx_type === "BUY";
+                const isBuy = r.transaction_type === "BUY";
+                const dateStr = r.trade_date ? r.trade_date.slice(0, 10) : "—";
                 return (
                   <tr key={r.id ?? i} style={{ borderBottom: "1px solid #161b22" }}>
-                    <td style={{ padding: "5px 8px", color: "#8b949e" }}>{r.trade_date}</td>
+                    <td style={{ padding: "5px 8px", color: "#8b949e" }}>{dateStr}</td>
                     <td style={{ padding: "5px 8px", color: "#c9d1d9", fontWeight: 600 }}>{r.symbol}</td>
                     <td style={{ padding: "5px 8px" }}>
-                      <span style={{ color: isBuy ? "#00ff88" : "#ff4560", background: isBuy ? "#00ff8818" : "#ff456018", border: `1px solid ${isBuy ? "#00ff8830" : "#ff456030"}`, borderRadius: 3, padding: "1px 5px", fontSize: 9 }}>{r.tx_type}</span>
+                      <span style={{ color: isBuy ? "#00ff88" : "#ff4560", background: isBuy ? "#00ff8818" : "#ff456018", border: `1px solid ${isBuy ? "#00ff8830" : "#ff456030"}`, borderRadius: 3, padding: "1px 5px", fontSize: 9 }}>{r.transaction_type}</span>
                     </td>
-                    <td style={{ padding: "5px 8px", textAlign: "right", color: "#c9d1d9" }}>{r.quantity != null ? r.quantity.toLocaleString() : "—"}</td>
+                    <td style={{ padding: "5px 8px", textAlign: "right", color: "#c9d1d9" }}>{r.quantity != null ? (+r.quantity).toLocaleString() : "—"}</td>
                     <td style={{ padding: "5px 8px", textAlign: "right", color: "#c9d1d9" }}>{r.price != null ? `$${(+r.price).toFixed(2)}` : "—"}</td>
-                    <td style={{ padding: "5px 8px", textAlign: "right", color: r.amount >= 0 ? "#00ff88" : "#ff4560" }}>{r.amount != null ? `${r.amount >= 0 ? "+" : ""}$${Math.abs(+r.amount).toFixed(2)}` : "—"}</td>
+                    <td style={{ padding: "5px 8px", textAlign: "right", color: r.net_amount >= 0 ? "#00ff88" : "#ff4560" }}>{r.net_amount != null ? `${r.net_amount >= 0 ? "+" : ""}$${Math.abs(+r.net_amount).toFixed(2)}` : "—"}</td>
                     <td style={{ padding: "5px 8px", color: "#8b949e" }}>{r.account}</td>
                   </tr>
                 );

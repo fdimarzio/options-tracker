@@ -1276,13 +1276,14 @@ async function handleTransactions(req, res, token) {
       const tradeDate = tx.tradeDate ? tx.tradeDate.slice(0, 10) : tx.time?.slice(0, 10);
       return {
         schwab_transaction_id: String(tx.activityId ?? tx.transactionId ?? ""),
-        symbol:    eqItem.instrument?.symbol?.toUpperCase() ?? null,
-        tx_type:   qty > 0 ? "BUY" : "SELL",
-        quantity:  Math.abs(qty),
-        price:     eqItem.price ?? null,
-        amount:    tx.netAmount ?? 0,
-        trade_date: tradeDate,
-        account:   "Schwab",
+        symbol:           eqItem.instrument?.symbol?.toUpperCase() ?? null,
+        transaction_type: qty > 0 ? "BUY" : "SELL",
+        asset_type:       "EQUITY",
+        quantity:         Math.abs(qty),
+        price:            eqItem.price ?? null,
+        net_amount:       tx.netAmount ?? 0,
+        trade_date:       tradeDate ? new Date(tradeDate + "T16:00:00Z").toISOString() : null,
+        account:          "Schwab",
       };
     }).filter(Boolean);
 
