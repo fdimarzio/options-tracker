@@ -224,25 +224,13 @@ async function main() {
   try {
     console.log("\n[ ETrade ] Fetching tokens from Supabase...");
     const tokens     = await getEtradeTokens();
-    const consumerKey = process.env.ETRADE_CONSUMER_KEY ?? process.env.VITE_ETRADE_CONSUMER_KEY;
-    // Production app may have been authorized with the VITE_ secret (different value in .env.local)
-    const consumerSecret = process.env.ETRADE_CONSUMER_SECRET ?? process.env.VITE_ETRADE_CONSUMER_SECRET;
-    if (!consumerKey || !consumerSecret) throw new Error("ETRADE_CONSUMER_KEY / ETRADE_CONSUMER_SECRET not in .env.local");
+    const consumerKey    = process.env.ETRADE_CONSUMER_KEY ?? process.env.VITE_ETRADE_CONSUMER_KEY;
+    // Use VITE_ secret — confirmed to match what the production app used to authorize
+    const usedSecret     = process.env.VITE_ETRADE_CONSUMER_SECRET ?? process.env.ETRADE_CONSUMER_SECRET;
+    if (!consumerKey || !usedSecret) throw new Error("ETRADE_CONSUMER_KEY / VITE_ETRADE_CONSUMER_SECRET not in .env.local");
 
-    // Try both consumer secrets — the one that matches what was used to authorize wins
-    const altSecret = process.env.VITE_ETRADE_CONSUMER_SECRET ?? process.env.ETRADE_CONSUMER_SECRET;
-    let acctData, usedSecret = consumerSecret;
     console.log("[ ETrade ] Fetching account list...");
-    try {
-      acctData = await etradeGet("/v1/accounts/list", {}, consumerKey, consumerSecret, tokens.accessToken, tokens.accessTokenSecret);
-    } catch (e) {
-      if (e.message.includes("signature_invalid") && altSecret && altSecret !== consumerSecret) {
-        console.log("[ ETrade ] Primary secret failed — retrying with VITE_ secret...");
-        acctData   = await etradeGet("/v1/accounts/list", {}, consumerKey, altSecret, tokens.accessToken, tokens.accessTokenSecret);
-        usedSecret = altSecret;
-        console.log("[ ETrade ] VITE_ secret worked");
-      } else { throw e; }
-    }
+    const acctData = await etradeGet("/v1/accounts/list", {}, consumerKey, usedSecret, tokens.accessToken, tokens.accessTokenSecret);
     const accounts = acctData?.AccountListResponse?.Accounts?.Account ?? [];
     if (!accounts.length) throw new Error("No ETrade accounts found");
     console.log(`[ ETrade ] ${accounts.length} account(s): ${accounts.map(a => ETRADE_ACCOUNT_NAMES[String(a.accountId)] ?? a.accountId).join(", ")}`);
