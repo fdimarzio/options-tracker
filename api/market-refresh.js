@@ -40,6 +40,24 @@ async function getValidToken() {
   return n.access_token;
 }
 
+// ── Get Schwab account hash by account name (in-memory cache) ─────────────────
+let _acctHashCache = null;
+async function getAccountHash(token, accountName) {
+  if (_acctHashCache) return _acctHashCache;
+  const r = await fetch(`${SCHWAB_BASE}/trader/v1/accounts/accountNumbers`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+  });
+  const accounts = await r.json();
+  if (!Array.isArray(accounts) || !accounts.length) throw new Error("No Schwab accounts");
+  const suffix = accountName?.replace(/\D/g, "").slice(-4);
+  if (suffix) {
+    const match = accounts.find(a => a.accountNumber?.slice(-4) === suffix);
+    if (match) { _acctHashCache = match.hashValue; return match.hashValue; }
+  }
+  _acctHashCache = accounts[0].hashValue;
+  return _acctHashCache;
+}
+
 // ── Fetch equity positions from Schwab + ETrade ───────────────────────────────
 // Returns array of { symbol, qty, account, accountIdKey? }
 async function fetchAllPositions(token) {
@@ -1059,6 +1077,124 @@ async function handleSimulate(req, res) {
   return res.status(400).json({ error: `Unknown action: ${action}` });
 }
 
+// ── Chase loop — step down limit price on active chase orders ─────────────────
+async function runChaseLoop(token, sbHeaders) {
+  try {
+    // Load all active chase orders that are submitted (not yet filled/cancelled)
+    const chaseRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/trade_orders?chase_active=eq.true&status=in.(submitted,pending_approval,dry_run_approved)&order=created_at.desc`,
+      { headers: sbHeaders }
+    );
+    const chaseOrders = await chaseRes.json();
+    if (!chaseOrders?.length) return;
+
+    console.log(`[market-refresh] chase loop: ${chaseOrders.length} active chase order(s)`);
+
+    for (const order of chaseOrders) {
+      try {
+        // Fetch live bid/ask for this option
+        const osi = `${order.ticker?.toUpperCase().padEnd(6)}${order.expires?.replace(/-/g,"").slice(2)}${order.type === "Call" ? "C" : "P"}${String(Math.round((+order.strike) * 1000)).padStart(8,"0")}`;
+        const qRes  = await fetch(
+          `${SCHWAB_BASE}/marketdata/v1/quotes?symbols=${encodeURIComponent(osi)}&fields=quote&indicative=false`,
+          { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } }
+        );
+        const qData = qRes.ok ? await qRes.json() : {};
+        const q     = qData?.[osi]?.quote;
+        if (!q) { console.warn(`[chase] no quote for ${osi}`); continue; }
+
+        const bid = q.bidPrice ?? 0;
+        const ask = q.askPrice ?? 0;
+
+        // For STO (selling): target just below ask so we're most competitive
+        // For BTC/BTO (buying): target just above bid
+        const isSell    = ["STO","STC"].includes(order.opt_type);
+        const rawTarget = isSell ? ask - 0.01 : bid + 0.01;
+
+        // Round to nearest step
+        const step      = +(order.chase_step || 0.05);
+        const newPrice  = Math.round(rawTarget / step) * step;
+        const floor     = +(order.chase_floor || 0);
+
+        // Floor hit — stop chasing
+        if ((isSell && newPrice <= floor) || (!isSell && newPrice >= floor)) {
+          await fetch(`${SUPABASE_URL}/rest/v1/trade_orders?id=eq.${order.id}`, {
+            method: "PATCH",
+            headers: { ...sbHeaders, Prefer: "return=minimal" },
+            body: JSON.stringify({ chase_active: false }),
+          });
+          await sendPushover(
+            `🛑 Chase Floor Hit: ${order.ticker}`,
+            `${order.opt_type} ${order.ticker} $${order.strike} ${order.type} ${order.expires} · Floor $${floor.toFixed(2)} reached · Chase stopped`,
+            `${APP_URL}/?tab=contracts`, "View Orders", 1
+          );
+          console.log(`[chase] floor hit for order ${order.id} — chase stopped`);
+          continue;
+        }
+
+        // No change needed — already at or better than target
+        const currentPrice = +(order.limit_price || 0);
+        if (Math.abs(newPrice - currentPrice) < 0.005) {
+          console.log(`[chase] order ${order.id} already at target $${newPrice.toFixed(2)}`);
+          continue;
+        }
+
+        console.log(`[chase] order ${order.id} ${order.ticker}: ${currentPrice.toFixed(2)} → ${newPrice.toFixed(2)} (bid=${bid} ask=${ask})`);
+
+        // Cancel existing Schwab order if submitted
+        if (order.schwab_order_id && order.status === "submitted") {
+          const hash = order.account?.includes("ETrade") ? null : "757F62A9417DA1B75005EAC7370D033ABF819061E60384AA3B0F68A0AAE94961";
+          if (hash) {
+            const cancelRes = await fetch(
+              `${SCHWAB_BASE}/trader/v1/accounts/${hash}/orders/${order.schwab_order_id}`,
+              { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }
+            );
+            if (cancelRes.status !== 200 && cancelRes.status !== 204) {
+              console.warn(`[chase] cancel failed for order ${order.id}: HTTP ${cancelRes.status}`);
+              continue;
+            }
+          }
+        }
+
+        // Resubmit at new price
+        const instruction = { STO:"SELL_TO_OPEN", BTO:"BUY_TO_OPEN", STC:"SELL_TO_CLOSE", BTC:"BUY_TO_CLOSE" }[order.opt_type];
+        const payload = {
+          orderType: "LIMIT", session: "NORMAL", duration: "DAY",
+          price: newPrice.toFixed(2),
+          orderLegCollection: [{
+            instruction,
+            quantity: order.qty,
+            instrument: { symbol: osi, assetType: "OPTION" },
+          }],
+        };
+        const hash = "757F62A9417DA1B75005EAC7370D033ABF819061E60384AA3B0F68A0AAE94961";
+        const submitRes = await fetch(
+          `${SCHWAB_BASE}/trader/v1/accounts/${hash}/orders`,
+          { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(payload) }
+        );
+        const newSchwabOrderId = submitRes.headers.get("Location")?.split("/").pop() ?? null;
+        if (submitRes.status !== 201) {
+          const body = await submitRes.text().catch(()=>"");
+          console.warn(`[chase] resubmit failed for order ${order.id}: ${body}`);
+          continue;
+        }
+
+        // Update DB with new price + new Schwab order ID
+        await fetch(`${SUPABASE_URL}/rest/v1/trade_orders?id=eq.${order.id}`, {
+          method: "PATCH",
+          headers: { ...sbHeaders, Prefer: "return=minimal" },
+          body: JSON.stringify({
+            limit_price:     newPrice,
+            schwab_order_id: newSchwabOrderId,
+            submitted_at:    new Date().toISOString(),
+          }),
+        });
+        console.log(`[chase] order ${order.id} resubmitted at $${newPrice.toFixed(2)}, new Schwab ID: ${newSchwabOrderId}`);
+
+      } catch(e) { console.warn(`[chase] error on order ${order.id}:`, e.message); }
+    }
+  } catch(e) { console.warn("[chase] runChaseLoop failed:", e.message); }
+}
+
 // ── Main handler ──────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -1482,10 +1618,12 @@ export default async function handler(req, res) {
       console.log(`[signal] ${contract.stock} $${contract.strike} ${contract.type} — ask:${chainEntry?.ask} bid:${chainEntry?.bid} mid:${signal.mid?.toFixed(3)} costToClose:$${signal.costToClose} profit:${signal.profitPct?.toFixed(1)}% premium:$${contract.premium} level:${signal.level}`);
 
       const lastNotif = sentData.contracts[String(contract.id)];
-      // If auto_execute is on for any btc_auto rule, don't let dedup block CLOSE_NOW
-      const hasLiveAutoRule = (Array.isArray(signalRules) ? signalRules : [])
-        .some(r => r.rule_type === "btc_auto" && r.enabled && r.auto_execute && !r.dry_run);
-      if (!shouldNotify(signal, lastNotif) && !(signal.level === "CLOSE_NOW" && hasLiveAutoRule)) continue;
+      // CLOSE_NOW: notify at most once per 15 minutes regardless of auto rules
+      // (auto-execute handles the trade — Pushover is just FYI)
+      if (signal.level === "CLOSE_NOW" && lastNotif?.level === "CLOSE_NOW" && lastNotif?.sentAt) {
+        const minsSince = (Date.now() - new Date(lastNotif.sentAt).getTime()) / 60000;
+        if (minsSince < 15) continue;
+      } else if (!shouldNotify(signal, lastNotif)) continue;
 
       const notif = buildNotification(contract, signal, quotes);
       notifications.push({ contract, signal, notif });
@@ -1853,7 +1991,7 @@ export default async function handler(req, res) {
                 }
 
                 // Momentum check
-                const autoMomCfg = rule?.momentum_filters || momentumConfig;
+                const autoMomCfg = stoRuleAuto?.momentum_filters || momentumConfig;
                 if (autoMomCfg && !autoMomCfg.momentum_enabled && autoMomCfg.require_decelerating) autoMomCfg.momentum_enabled = true;
                 const momentum = evaluateMomentum(symbol, stockQ, priceHistory, autoMomCfg);
                 if (!momentum.pass) {
@@ -1919,11 +2057,6 @@ export default async function handler(req, res) {
                 //   3. Min OTM scales with DTE: short DTE allows closer strikes,
                 //      longer DTE requires more cushion
                 const today2 = new Date().toISOString().slice(0,10);
-                let bestStrike = null;
-                let bestExpiry = null;
-                let bestPremium = 0;
-                let bestDTE = null;
-                let bestScore = 0;
 
                 // Group valid candidates by expiry, pick nearest expiry first
                 const candidatesByExpiry = {};
@@ -1955,27 +2088,18 @@ export default async function handler(req, res) {
                     // Score = premium yield / OTM risk (higher = better risk-adjusted premium)
                     const score = (mid / stockPrice * 100) / otmPct;
                     if (!candidatesByExpiry[chainExpiry]) candidatesByExpiry[chainExpiry] = [];
-                    candidatesByExpiry[chainExpiry].push({ strike: strike.strikePrice, mid, dte, otmPct, score, expiry: chainExpiry });
+                    candidatesByExpiry[chainExpiry].push({ strike: strike.strikePrice, mid, ask: strike.ask, dte, otmPct, score, expiry: chainExpiry });
                   }
                 }
 
-                // Pick nearest expiry that has at least one valid candidate
-                const sortedExpiries = Object.keys(candidatesByExpiry).sort();
-                for (const expiry of sortedExpiries) {
-                  const candidates = candidatesByExpiry[expiry];
-                  if (!candidates.length) continue;
-                  // Best score within this expiry
-                  const best = candidates.reduce((a, b) => b.score > a.score ? b : a);
-                  bestStrike  = best.strike;
-                  bestExpiry  = best.expiry;
-                  bestPremium = best.mid;
-                  bestDTE     = best.dte;
-                  bestScore   = best.score;
-                  console.log(`[auto-sto] ${symbol} best strike: $${bestStrike} ${bestExpiry} (${bestDTE}d, ${best.otmPct.toFixed(1)}% OTM, mid $${bestPremium.toFixed(2)}, score ${bestScore.toFixed(3)})`);
-                  break; // nearest expiry wins
-                }
+                // Build sorted per-expiry best candidates — enables cascade when min_premium gate fails
+                const sortedExpiryCandidates = Object.keys(candidatesByExpiry).sort()
+                  .map(expiry => {
+                    const cands = candidatesByExpiry[expiry];
+                    return cands.length ? cands.reduce((a, b) => b.score > a.score ? b : a) : null;
+                  }).filter(Boolean);
 
-                if (!bestStrike) {
+                if (!sortedExpiryCandidates.length) {
                   console.log(`[auto-sto] ${symbol} — no suitable strike found in chain`);
                   continue;
                 }
@@ -1987,11 +2111,24 @@ export default async function handler(req, res) {
                   const uncovered = Math.floor((totalShares - covered) / 100);
                   if (uncovered < 1) continue;
 
-                  const estPremium = Math.round(bestPremium * uncovered * 100 * 100) / 100;
-                  if (estPremium < minPrem) {
-                    console.log(`[auto-sto] ${symbol} ${account} — est premium $${estPremium} < min $${minPrem}`);
+                  // Cascade through expiries until min_premium gate passes
+                  let _sel = null;
+                  for (const cand of sortedExpiryCandidates) {
+                    const est = Math.round(cand.mid * uncovered * 100 * 100) / 100;
+                    if (est >= minPrem) { _sel = cand; break; }
+                    console.log(`[auto-sto] ${symbol} ${account} ${cand.expiry} — est $${est} < min $${minPrem}, trying next expiry`);
+                  }
+                  if (!_sel) {
+                    console.log(`[auto-sto] ${symbol} ${account} — no expiry meets min premium $${minPrem}`);
                     continue;
                   }
+                  const bestStrike  = _sel.strike;
+                  const bestExpiry  = _sel.expiry;
+                  const bestPremium = _sel.mid;
+                  const bestAsk     = _sel.ask;
+                  const bestDTE     = _sel.dte;
+                  const estPremium  = Math.round(bestPremium * uncovered * 100 * 100) / 100;
+                  console.log(`[auto-sto] ${symbol} best strike: $${bestStrike} ${bestExpiry} (${bestDTE}d, ${_sel.otmPct.toFixed(1)}% OTM, mid $${bestPremium.toFixed(2)}, score ${_sel.score.toFixed(3)})`);
 
                   // Check for existing pending STO order for this ticker+account today
                   const alreadyPending = [...pendingContractIds].some(id => {
@@ -2006,7 +2143,11 @@ export default async function handler(req, res) {
                     continue;
                   }
 
-                  const limitPrice = Math.round(bestPremium * 100) / 100;
+                  if (!bestAsk || bestAsk <= 0) {
+                    console.log(`[auto-sto] ${symbol} — no valid ask price, skipping`);
+                    continue;
+                  }
+                  const limitPrice = Math.round(bestAsk * 100) / 100;
                   const isSchwab   = account?.startsWith("Schwab");
 
                   console.log(`[auto-sto] ${isDryRun?"DRY RUN":"PLACING"} STO ${symbol} $${bestStrike} Call ${bestExpiry} × ${uncovered} @ $${limitPrice} — ${account}`);
@@ -2014,7 +2155,7 @@ export default async function handler(req, res) {
                   // Log signal
                   const sigId = await logSignal({
                     signal_type:  "sto_auto",
-                    stock:        symbol,
+                    symbol,
                     account,
                     stock_price:  stockPrice,
                     change_pct:   changePct,
@@ -2142,6 +2283,17 @@ export default async function handler(req, res) {
                       }
 
                       if (orderResult?.ok) {
+                        // Auto-start chase: placed at ask, chase down to mid
+                        const tradeOrderId = orderResult?.order?.id;
+                        if (tradeOrderId) {
+                          const chaseFloor = Math.round(bestPremium * 100) / 100; // mid = floor
+                          await fetch(`${SUPABASE_URL}/rest/v1/trade_orders?id=eq.${tradeOrderId}`, {
+                            method: "PATCH",
+                            headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+                            body: JSON.stringify({ chase_active: true, chase_floor: chaseFloor, chase_step: 0.05 }),
+                          });
+                          console.log(`[auto-sto] chase started on order ${tradeOrderId} — ask $${limitPrice} → floor (mid) $${chaseFloor}`);
+                        }
                         // Tag newly created contract with open_method=auto
                         // The contract was just created by schwab-orders — find it by matching
                         // stock + strike + expires + account + status=Open, created in last 60s
@@ -2609,6 +2761,9 @@ export default async function handler(req, res) {
         body: JSON.stringify({ agent_name: "market-refresh", last_run_at: lastRefresh, status: "ok", notes: `${tickers.length} tickers, ${notifications.length} signals`, updated_at: lastRefresh }),
       });
     } catch(e) { console.warn("[heartbeat] write failed:", e.message); }
+
+    // ── Run chase loop on every market refresh ──────────────────────────────
+    await runChaseLoop(token, { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" });
 
     res.status(200).json({
       ok: true, time: lastRefresh,

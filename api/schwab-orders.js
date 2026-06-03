@@ -1001,6 +1001,89 @@ export default async function handler(req, res) {
       return await handleTransactions(req, res, txToken);
     }
 
+    // ── POST: reprice — change limit price on a submitted order ─────────────────
+    if (req.method === "POST" && action === "reprice") {
+      const { orderId, newPrice, reason = "manual" } = req.body;
+      if (!orderId || newPrice == null) return res.status(400).json({ error: "Missing orderId or newPrice" });
+      const rows  = await dbGet(`trade_orders?id=eq.${parseInt(orderId,10)}`);
+      const order = rows?.[0];
+      if (!order) return res.status(404).json({ error: "Order not found" });
+      if (!["submitted","pending_approval","dry_run_approved"].includes(order.status)) {
+        return res.status(400).json({ error: `Cannot reprice order with status: ${order.status}` });
+      }
+
+      // Track price history
+      const history = Array.isArray(order.price_history) ? order.price_history : [];
+      history.push({ price: +(order.limit_price||0), at: new Date().toISOString(), reason: "before_reprice" });
+
+      let newSchwabOrderId = order.schwab_order_id;
+
+      // If submitted to Schwab, cancel + resubmit
+      if (order.status === "submitted" && order.schwab_order_id && !order.account?.includes("ETrade")) {
+        const hash = "757F62A9417DA1B75005EAC7370D033ABF819061E60384AA3B0F68A0AAE94961";
+        const cancelRes = await fetch(
+          `${SCHWAB_BASE}/trader/v1/accounts/${hash}/orders/${order.schwab_order_id}`,
+          { method: "DELETE", headers: { Authorization: `Bearer ${await getValidToken()}` } }
+        );
+        if (cancelRes.status !== 200 && cancelRes.status !== 204) {
+          return res.status(500).json({ error: `Cancel failed: HTTP ${cancelRes.status}` });
+        }
+        const token = await getValidToken();
+        const osi = order.raw_request?.orderLegCollection?.[0]?.instrument?.symbol;
+        const instruction = { STO:"SELL_TO_OPEN", BTO:"BUY_TO_OPEN", STC:"SELL_TO_CLOSE", BTC:"BUY_TO_CLOSE" }[order.opt_type];
+        const payload = {
+          orderType:"LIMIT", session:"NORMAL", duration:"DAY",
+          price: (+newPrice).toFixed(2),
+          orderLegCollection: [{ instruction, quantity: order.qty, instrument: { symbol: osi, assetType:"OPTION" } }],
+        };
+        const submitRes = await fetch(`${SCHWAB_BASE}/trader/v1/accounts/${hash}/orders`, {
+          method:"POST", headers:{ Authorization:`Bearer ${token}`, "Content-Type":"application/json" }, body:JSON.stringify(payload)
+        });
+        if (submitRes.status !== 201) {
+          const body = await submitRes.text().catch(()=>"");
+          return res.status(500).json({ error: `Resubmit failed: ${body}` });
+        }
+        newSchwabOrderId = submitRes.headers.get("Location")?.split("/").pop() ?? order.schwab_order_id;
+      }
+
+      history.push({ price: +newPrice, at: new Date().toISOString(), reason });
+      const updated = await dbUpdate("trade_orders", parseInt(orderId,10), {
+        limit_price:     +newPrice,
+        schwab_order_id: newSchwabOrderId,
+        submitted_at:    new Date().toISOString(),
+        price_history:   history,
+      });
+      return res.status(200).json({ ok: true, order: updated });
+    }
+
+    // ── POST: chase-start — activate price chasing on a submitted order ────────
+    if (req.method === "POST" && action === "chase-start") {
+      const { orderId, chaseFloor, chaseStep = 0.05 } = req.body;
+      if (!orderId) return res.status(400).json({ error: "Missing orderId" });
+      if (chaseFloor == null) return res.status(400).json({ error: "Missing chaseFloor" });
+      const rows  = await dbGet(`trade_orders?id=eq.${parseInt(orderId, 10)}`);
+      const order = rows?.[0];
+      if (!order) return res.status(404).json({ error: "Order not found" });
+      if (!["submitted","pending_approval","dry_run_approved"].includes(order.status)) {
+        return res.status(400).json({ error: `Cannot chase order with status: ${order.status}` });
+      }
+      const updated = await dbUpdate("trade_orders", parseInt(orderId, 10), {
+        chase_active: true,
+        chase_floor:  +chaseFloor,
+        chase_step:   +chaseStep,
+      });
+      sendPushover(`🎯 Chase Started: ${order.ticker}`, `${orderSummary(order)} · Floor $${(+chaseFloor).toFixed(2)} · Step $${(+chaseStep).toFixed(2)}`, `${APP_URL}/?tab=contracts`, 0).catch(()=>{});
+      return res.status(200).json({ ok: true, order: updated });
+    }
+
+    // ── POST: chase-stop — deactivate price chasing ──────────────────────────
+    if (req.method === "POST" && action === "chase-stop") {
+      const { orderId } = req.body;
+      if (!orderId) return res.status(400).json({ error: "Missing orderId" });
+      const updated = await dbUpdate("trade_orders", parseInt(orderId, 10), { chase_active: false });
+      return res.status(200).json({ ok: true, order: updated });
+    }
+
     return res.status(400).json({ error: `Unknown action: ${action}` });
 
   } catch (err) {
@@ -1182,6 +1265,35 @@ async function handleTransactions(req, res, token) {
     }
 
     const parsed = allRaw.map(parseSchwabTransaction).filter(Boolean);
+
+    // ── Parse + store EQUITY transactions ──────────────────────────────────
+    const equityTxs = allRaw.map(tx => {
+      const items  = tx.transferItems ?? [];
+      const eqItem = items.find(i => i.instrument?.assetType === "EQUITY");
+      if (!eqItem) return null;
+      const qty = eqItem.amount ?? 0;
+      if (qty === 0) return null;
+      const tradeDate = tx.tradeDate ? tx.tradeDate.slice(0, 10) : tx.time?.slice(0, 10);
+      return {
+        schwab_transaction_id: String(tx.activityId ?? tx.transactionId ?? ""),
+        symbol:    eqItem.instrument?.symbol?.toUpperCase() ?? null,
+        tx_type:   qty > 0 ? "BUY" : "SELL",
+        quantity:  Math.abs(qty),
+        price:     eqItem.price ?? null,
+        amount:    tx.netAmount ?? 0,
+        trade_date: tradeDate,
+        account:   "Schwab",
+      };
+    }).filter(Boolean);
+
+    if (equityTxs.length) {
+      await fetch(`${SUPABASE_URL}/rest/v1/stock_transactions`, {
+        method:  "POST",
+        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" },
+        body:    JSON.stringify(equityTxs),
+      }).catch(e => console.warn("[transactions] equity upsert failed:", e.message));
+      console.log(`[transactions] stored ${equityTxs.length} equity transactions`);
+    }
 
     // Fetch stock prices
     const priceMap    = {};

@@ -2892,6 +2892,148 @@ function ChainOrderPanel({ trade, onClose, onOrderPlaced }) {
   );
 }
 
+// ── CatalystPanel — upcoming catalysts & research docs for a ticker ──────────
+const CATALYST_IMPACT_STYLE = {
+  HIGH:   { background: "#ff4d4d22", color: "#ff4d4d", border: "1px solid #ff4d4d55" },
+  MEDIUM: { background: "#ffd16622", color: "#ffd166", border: "1px solid #ffd16655" },
+  LOW:    { background: "#00ff8822", color: "#00ff88", border: "1px solid #00ff8855" },
+};
+const CATALYST_TYPE_ICON = { earnings:"📊", product:"🚀", regulatory:"⚖️", macro:"🏦", conference:"🎤" };
+
+function useCatalysts(ticker) {
+  const [catalysts, setCatalysts] = useState([]);
+  const [research,  setResearch]  = useState([]);
+  const [loading,   setLoading]   = useState(false);
+
+  const refresh = async () => {
+    if (!ticker) return;
+    const today = new Date().toISOString().split("T")[0];
+    const [catRes, resRes] = await Promise.all([
+      supabase.from("ticker_catalysts").select("*").eq("ticker", ticker.toUpperCase()).gte("event_date", today).order("event_date", { ascending: true }).limit(15),
+      supabase.from("ticker_research").select("id,ticker,report_type,report_date,title").eq("ticker", ticker.toUpperCase()).order("report_date", { ascending: false }).limit(8),
+    ]);
+    setCatalysts(catRes.data ?? []);
+    setResearch(resRes.data ?? []);
+  };
+
+  useEffect(() => {
+    if (!ticker) return;
+    setLoading(true);
+    refresh().finally(() => setLoading(false));
+  }, [ticker]);
+
+  return { catalysts, research, loading, refresh };
+}
+
+function CatalystPanel({ ticker }) {
+  const { catalysts, research, loading, refresh } = useCatalysts(ticker);
+  const [expanded,     setExpanded]     = useState(null);
+  const [showResearch, setShowResearch] = useState(false);
+  const [fetching,     setFetching]     = useState(false);
+  const [fetchError,   setFetchError]   = useState(null);
+  const [fetchMsg,     setFetchMsg]     = useState(null);
+
+  if (!ticker) return null;
+
+  const hasCatalysts = catalysts.length > 0;
+  const hasResearch  = research.length > 0;
+
+  const handleFetch = async () => {
+    setFetching(true);
+    setFetchError(null);
+    setFetchMsg(null);
+    try {
+      const res  = await fetch("/api/claude", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ mode: "catalyst_fetch", ticker }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || "Fetch failed");
+
+      // Delete existing future catalysts for this ticker, then insert fresh batch
+      const today = new Date().toISOString().split("T")[0];
+      await supabase.from("ticker_catalysts").delete()
+        .eq("ticker", ticker.toUpperCase()).gte("event_date", today);
+
+      if (data.catalysts?.length) {
+        const { error } = await supabase.from("ticker_catalysts").insert(data.catalysts);
+        if (error) throw new Error(error.message);
+      }
+
+      setFetchMsg(`${data.catalysts?.length ?? 0} catalysts loaded`);
+      await refresh();
+    } catch(e) {
+      setFetchError(e.message);
+    } finally {
+      setFetching(false);
+    }
+  };
+
+  return (
+    <div style={{ background:"#0a0e14", border:"1px solid #1c2128", borderRadius:8, padding:13 }}>
+      {/* Header row */}
+      <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom: hasCatalysts ? 10 : 4 }}>
+        <span style={{ fontFamily:"monospace", fontSize:7, color:"#2a3040", letterSpacing:"0.08em" }}>CATALYSTS</span>
+        {loading && <span style={{ fontSize:7, color:"#3a4050", fontFamily:"monospace" }}>loading…</span>}
+        {fetchMsg && <span style={{ fontSize:8, color:"#00ff88", fontFamily:"monospace" }}>{fetchMsg}</span>}
+        {fetchError && <span style={{ fontSize:8, color:"#ff4560", fontFamily:"monospace" }}>{fetchError}</span>}
+        <div style={{ marginLeft:"auto", display:"flex", gap:6, alignItems:"center" }}>
+          {hasResearch && (
+            <button onClick={() => setShowResearch(s => !s)}
+              style={{ fontSize:8, fontFamily:"monospace", padding:"2px 8px", borderRadius:3, border:"none", cursor:"pointer", background: showResearch ? "#58a6ff20":"#0d1117", color: showResearch ? "#58a6ff":"#3a4050" }}>
+              {showResearch ? "Hide Research" : `Research (${research.length})`}
+            </button>
+          )}
+          <button onClick={handleFetch} disabled={fetching}
+            style={{ fontSize:8, fontFamily:"monospace", padding:"2px 8px", borderRadius:3, border:"1px solid #58a6ff40", cursor:"pointer", background:"#58a6ff15", color: fetching ? "#3a4050":"#58a6ff" }}>
+            {fetching ? "fetching…" : hasCatalysts ? "↻ Refresh" : `+ Fetch Catalysts`}
+          </button>
+        </div>
+      </div>
+
+      {/* Catalyst rows */}
+      {catalysts.map(c => (
+        <div key={c.id} onClick={() => setExpanded(expanded === c.id ? null : c.id)}
+          style={{ marginBottom:6, padding:"8px 10px", background:"#0d1117", border:"1px solid #21262d", borderRadius:6, cursor:"pointer" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:7 }}>
+            <span style={{ fontSize:13 }}>{CATALYST_TYPE_ICON[c.event_type] ?? "📌"}</span>
+            <span style={{ flex:1, fontFamily:"monospace", fontSize:10, color:"#c9d1d9", fontWeight:500 }}>{c.event_name}</span>
+            <span style={{ fontSize:8, padding:"2px 6px", borderRadius:4, fontFamily:"monospace", ...CATALYST_IMPACT_STYLE[c.impact] }}>{c.impact}</span>
+            <span style={{ color:"#3a4050", fontSize:9, fontFamily:"monospace", minWidth:75, textAlign:"right" }}>{c.event_date}</span>
+          </div>
+          {expanded === c.id && c.description && (
+            <div style={{ marginTop:7, paddingTop:7, borderTop:"1px solid #21262d", color:"#8b949e", lineHeight:1.55, fontSize:11 }}>
+              {c.description}
+              {c.source && <div style={{ marginTop:4, color:"#388bfd", fontSize:10 }}>Source: {c.source}</div>}
+            </div>
+          )}
+        </div>
+      ))}
+
+      {/* Empty state */}
+      {!hasCatalysts && !loading && (
+        <div style={{ fontSize:9, color:"#3a4050", fontFamily:"monospace" }}>
+          No catalysts yet — click "+ Fetch Catalysts" to generate them with AI.
+        </div>
+      )}
+
+      {/* Research docs */}
+      {showResearch && hasResearch && (
+        <div style={{ marginTop:8, paddingTop:8, borderTop:"1px solid #1c2128" }}>
+          <div style={{ fontFamily:"monospace", fontSize:7, color:"#2a3040", letterSpacing:"0.08em", marginBottom:6 }}>RESEARCH DOCS</div>
+          {research.map(r => (
+            <div key={r.id} style={{ display:"flex", justifyContent:"space-between", padding:"6px 10px", background:"#0d1117", border:"1px solid #21262d", borderRadius:6, marginBottom:5, fontSize:10 }}>
+              <span style={{ color:"#c9d1d9", fontFamily:"monospace" }}>{r.title}</span>
+              <span style={{ color:"#3a4050", fontFamily:"monospace", whiteSpace:"nowrap", marginLeft:10 }}>{r.report_date}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── StocksChainSection — wrapper for OptionsChainComponent in Stocks tab ─────
 function StocksChainSection({ selectedTicker, loadTradeOrders, pendingOrder, onPendingOrderConsumed }) {
   const [stocksChainTrade, setStocksChainTrade] = useState(null);
@@ -3647,6 +3789,230 @@ function OpportunityScannerTab() {
 }
 
 
+// ─── Monthly Report Component ─────────────────────────────────────────────────
+function MonthlyReport({ originals }) {
+  const allMonths = [...new Set(originals.map(c => c.closeDate?.slice(0,7) || c.dateExec?.slice(0,7)).filter(Boolean))].sort().reverse();
+  const [reportMonth, setReportMonth] = useState(() => allMonths[0] || new Date().toISOString().slice(0,7));
+  const monthContracts = originals.filter(c => {
+    const d = c.closeDate?.slice(0,7) || c.dateExec?.slice(0,7);
+    return d === reportMonth && c.status === "Closed";
+  });
+  const openInMonth  = originals.filter(c => c.dateExec?.slice(0,7) === reportMonth && c.status === "Open");
+  const totalProfit  = monthContracts.reduce((s,c) => s+(c.profit||0), 0);
+  const totalPremium = monthContracts.reduce((s,c) => s+(c.premium||0), 0);
+  const wins    = monthContracts.filter(c => (c.profit||0) > 0);
+  const losses  = monthContracts.filter(c => (c.profit||0) < 0);
+  const winRate = monthContracts.length ? Math.round(wins.length/monthContracts.length*100) : null;
+  const avgProfit = monthContracts.length ? totalProfit/monthContracts.length : 0;
+  const byTicker = {};
+  monthContracts.forEach(c => {
+    if (!byTicker[c.stock]) byTicker[c.stock] = {profit:0, count:0, wins:0};
+    byTicker[c.stock].profit += (c.profit||0);
+    byTicker[c.stock].count  += 1;
+    if ((c.profit||0) > 0) byTicker[c.stock].wins += 1;
+  });
+  const sorted = Object.entries(byTicker).sort((a,b) => b[1].profit - a[1].profit);
+  const best  = wins.reduce((a,c)  => (c.profit||0) > (a?.profit||0) ? c : a, wins[0]  || null);
+  const worst = losses.reduce((a,c) => (c.profit||0) < (a?.profit||0) ? c : a, losses[0] || null);
+  return (
+    <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:"12px 14px"}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,flexWrap:"wrap"}}>
+        <span style={{fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em",fontWeight:700}}>MONTHLY REPORT</span>
+        <select value={reportMonth} onChange={e=>setReportMonth(e.target.value)}
+          style={{fontSize:11,padding:"3px 6px",background:"#080c12",border:"1px solid #21262d",borderRadius:4,color:"#e6edf3",fontFamily:"monospace"}}>
+          {allMonths.map(m => <option key={m} value={m}>{m}</option>)}
+        </select>
+        <button onClick={()=>{
+          const rows = [["Stock","OptType","Type","Strike","Expires","Premium","Cost","Profit","Profit%","OpenDate","CloseDate","Strategy","Account"],...monthContracts.map(c=>[c.stock,c.optType,c.type,c.strike,c.expires,c.premium,c.costToClose,c.profit,c.profitPct!=null?(+c.profitPct*100).toFixed(1):"",c.dateExec,c.closeDate,c.strategy||"",c.account])];
+          const csv = rows.map(r=>r.join(",")).join("\n");
+          const a=document.createElement("a"); a.href="data:text/csv;charset=utf-8,"+encodeURIComponent(csv); a.download=`options-report-${reportMonth}.csv`; a.click();
+        }} style={{background:"transparent",border:"1px solid #21262d",color:"#3a4050",borderRadius:4,padding:"2px 8px",fontSize:9,fontFamily:"monospace",cursor:"pointer",marginLeft:"auto"}}>↓ CSV</button>
+      </div>
+      {monthContracts.length === 0 && openInMonth.length === 0 ? (
+        <div style={{fontSize:10,color:"#3a4050",fontFamily:"monospace",textAlign:"center",padding:"16px 0"}}>No contracts for {reportMonth}</div>
+      ) : (<>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(90px,1fr))",gap:8,marginBottom:12}}>
+          {[
+            {label:"Net P&L",   val:"$"+totalProfit.toFixed(2),  color:totalProfit>=0?"#00ff88":"#ff4560"},
+            {label:"Premiums",  val:"$"+totalPremium.toFixed(2), color:"#c9d1d9"},
+            {label:"Contracts", val:monthContracts.length,        color:"#c9d1d9"},
+            {label:"Win Rate",  val:winRate!=null?winRate+"%":"—",color:winRate>=70?"#00ff88":winRate>=50?"#ffd166":"#ff4560"},
+            {label:"Avg P&L",   val:"$"+avgProfit.toFixed(2),     color:avgProfit>=0?"#00ff88":"#ff4560"},
+            {label:"Open Now",  val:openInMonth.length,            color:"#58a6ff"},
+          ].map(({label,val,color})=>(
+            <div key={label} style={{background:"#080c12",border:"1px solid #1c2128",borderRadius:6,padding:"8px 10px",textAlign:"center"}}>
+              <div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",letterSpacing:"0.07em",marginBottom:3}}>{label}</div>
+              <div style={{fontSize:14,fontFamily:"monospace",fontWeight:700,color}}>{val}</div>
+            </div>
+          ))}
+        </div>
+        {(best||worst) && (
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+            {best && <div style={{background:"#00ff8808",border:"1px solid #00ff8820",borderRadius:6,padding:"8px 10px"}}>
+              <div style={{fontSize:7,color:"#00ff8880",fontFamily:"monospace",letterSpacing:"0.07em",marginBottom:3}}>🏆 BEST TRADE</div>
+              <div style={{fontFamily:"monospace",fontSize:11,color:"#e6edf3",fontWeight:600}}>{best.stock} ${best.strike} {best.type}</div>
+              <div style={{fontFamily:"monospace",fontSize:10,color:"#00ff88"}}>+${(best.profit||0).toFixed(2)}{best.profitPct!=null?" ("+((+best.profitPct)*100).toFixed(0)+"%)":""}</div>
+            </div>}
+            {worst && <div style={{background:"#ff456008",border:"1px solid #ff456020",borderRadius:6,padding:"8px 10px"}}>
+              <div style={{fontSize:7,color:"#ff456080",fontFamily:"monospace",letterSpacing:"0.07em",marginBottom:3}}>📉 WORST TRADE</div>
+              <div style={{fontFamily:"monospace",fontSize:11,color:"#e6edf3",fontWeight:600}}>{worst.stock} ${worst.strike} {worst.type}</div>
+              <div style={{fontFamily:"monospace",fontSize:10,color:"#ff4560"}}>${(worst.profit||0).toFixed(2)}{worst.profitPct!=null?" ("+((+worst.profitPct)*100).toFixed(0)+"%)":""}</div>
+            </div>}
+          </div>
+        )}
+        {sorted.length > 0 && (
+          <div style={{marginBottom:12}}>
+            <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:6}}>BY TICKER</div>
+            <div style={{display:"flex",flexDirection:"column",gap:4}}>
+              {sorted.map(([sym,d])=>{
+                const maxAbs = Math.max(...sorted.map(([,x])=>Math.abs(x.profit)),1);
+                const barPct = Math.min(Math.abs(d.profit)/maxAbs*100,100);
+                return (
+                  <div key={sym} style={{display:"grid",gridTemplateColumns:"50px 1fr 70px 45px 45px",alignItems:"center",gap:8,fontSize:10,fontFamily:"monospace"}}>
+                    <span style={{color:"#e6edf3",fontWeight:600}}>{sym}</span>
+                    <div style={{height:6,background:"#1c2128",borderRadius:3,overflow:"hidden"}}>
+                      <div style={{height:"100%",width:barPct+"%",background:d.profit>=0?"#00ff88":"#ff4560",borderRadius:3}}/>
+                    </div>
+                    <span style={{color:d.profit>=0?"#00ff88":"#ff4560",textAlign:"right",fontWeight:700}}>{d.profit>=0?"+":""}{d.profit.toFixed(2)}</span>
+                    <span style={{color:"#3a4050",textAlign:"right"}}>{d.count} ct</span>
+                    <span style={{color:"#555",textAlign:"right"}}>{Math.round(d.wins/d.count*100)}% W</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:5}}>CLOSED CONTRACTS</div>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:9,fontFamily:"monospace"}}>
+            <thead>
+              <tr style={{borderBottom:"1px solid #1c2128"}}>
+                {["Stock","Strike","Type","OT","Expires","Premium","Cost","Profit","P%","Days","Strategy"].map(h=>(
+                  <th key={h} style={{padding:"3px 7px",textAlign:["Profit","P%","Premium","Cost"].includes(h)?"right":"left",color:"#3a4050",fontWeight:400,fontSize:7,letterSpacing:"0.06em"}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {monthContracts.sort((a,b)=>(b.profit||0)-(a.profit||0)).map(c=>{
+                const pp = c.profitPct!=null?(+c.profitPct*100).toFixed(0)+"%":"—";
+                const pc = c.profit!=null?(c.profit>=0?"#00ff88":"#ff4560"):"#3a4050";
+                return (
+                  <tr key={c.id} style={{borderBottom:"1px solid #0d1117"}}>
+                    <td style={{padding:"4px 7px",color:"#e6edf3",fontWeight:600}}>{c.stock}</td>
+                    <td style={{padding:"4px 7px",color:"#c9d1d9"}}>${c.strike}</td>
+                    <td style={{padding:"4px 7px",color:c.type==="Call"?"#58a6ff":"#c084fc"}}>{c.type}</td>
+                    <td style={{padding:"4px 7px",color:c.optType==="STO"?"#00ff88":"#ffd166"}}>{c.optType}</td>
+                    <td style={{padding:"4px 7px",color:"#555"}}>{c.expires}</td>
+                    <td style={{padding:"4px 7px",color:"#c9d1d9",textAlign:"right"}}>${(c.premium||0).toFixed(2)}</td>
+                    <td style={{padding:"4px 7px",color:"#8b949e",textAlign:"right"}}>{c.costToClose!=null?"$"+c.costToClose.toFixed(2):"—"}</td>
+                    <td style={{padding:"4px 7px",color:pc,fontWeight:700,textAlign:"right"}}>{c.profit!=null?(c.profit>=0?"+":"")+c.profit.toFixed(2):"—"}</td>
+                    <td style={{padding:"4px 7px",color:pc,textAlign:"right"}}>{pp}</td>
+                    <td style={{padding:"4px 7px",color:"#3a4050",textAlign:"right"}}>{c.daysHeld||"—"}</td>
+                    <td style={{padding:"4px 7px",color:"#555",fontSize:8}}>{c.strategy||"—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </>)}
+    </div>
+  );
+}
+
+// ─── All Transactions Tab ─────────────────────────────────────────────────────
+function AllTransactionsTab({ supabase }) {
+  const [rows,    setRows]    = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [fType,   setFType]   = useState("All");
+  const [fAcct,   setFAcct]   = useState("All");
+  const [fSym,    setFSym]    = useState("");
+  const [fFrom,   setFFrom]   = useState("");
+  const [fTo,     setFTo]     = useState("");
+
+  useEffect(() => {
+    if (!supabase) return;
+    let q = supabase.from("stock_transactions").select("*").order("trade_date", { ascending: false }).limit(500);
+    if (fType !== "All") q = q.eq("tx_type", fType);
+    if (fAcct !== "All") q = q.eq("account", fAcct);
+    if (fSym.trim())     q = q.ilike("symbol", `%${fSym.trim().toUpperCase()}%`);
+    if (fFrom)           q = q.gte("trade_date", fFrom);
+    if (fTo)             q = q.lte("trade_date", fTo);
+    setLoading(true);
+    q.then(({ data, error }) => {
+      if (!error && data) setRows(data);
+      setLoading(false);
+    });
+  }, [supabase, fType, fAcct, fSym, fFrom, fTo]);
+
+  const accounts = [...new Set(rows.map(r => r.account).filter(Boolean))].sort();
+  const inp = { fontSize: 11, padding: "3px 6px", background: "#0a0e14", border: "1px solid #21262d", borderRadius: 4, color: "#c9d1d9" };
+
+  return (
+    <div style={{ padding: "12px 12px 0", maxWidth: 1000 }}>
+      <div style={{ fontFamily: "monospace", fontSize: 10, color: "#00ff88", letterSpacing: "0.12em", marginBottom: 12 }}>◈ ALL TRANSACTIONS</div>
+
+      {/* Filters */}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
+        <select value={fType} onChange={e => setFType(e.target.value)} style={inp}>
+          <option value="All">All Types</option>
+          <option value="BUY">BUY</option>
+          <option value="SELL">SELL</option>
+        </select>
+        <select value={fAcct} onChange={e => setFAcct(e.target.value)} style={inp}>
+          <option value="All">All Accounts</option>
+          {accounts.map(a => <option key={a}>{a}</option>)}
+        </select>
+        <input placeholder="Symbol" value={fSym} onChange={e => setFSym(e.target.value)} style={{ ...inp, width: 80 }} />
+        <input type="date" value={fFrom} onChange={e => setFFrom(e.target.value)} style={{ ...inp, width: 120 }} />
+        <span style={{ color: "#555", fontSize: 10 }}>–</span>
+        <input type="date" value={fTo} onChange={e => setFTo(e.target.value)} style={{ ...inp, width: 120 }} />
+        {(fType !== "All" || fAcct !== "All" || fSym || fFrom || fTo) && (
+          <button onClick={() => { setFType("All"); setFAcct("All"); setFSym(""); setFFrom(""); setFTo(""); }}
+            style={{ background: "#ff456018", color: "#ff4560", border: "1px solid #ff456030", borderRadius: 4, padding: "3px 7px", fontSize: 9 }}>✕ Clear</button>
+        )}
+        <span style={{ marginLeft: "auto", fontSize: 9, color: "#555", fontFamily: "monospace" }}>{rows.length} rows</span>
+      </div>
+
+      {loading ? (
+        <div style={{ color: "#555", fontSize: 11, fontFamily: "monospace", padding: 20 }}>Loading…</div>
+      ) : !rows.length ? (
+        <div style={{ color: "#555", fontSize: 11, fontFamily: "monospace", padding: 20 }}>No transactions found</div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, fontFamily: "monospace" }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid #21262d" }}>
+                {["Date","Symbol","Type","Qty","Price","Amount","Account"].map(h => (
+                  <th key={h} style={{ padding: "6px 8px", textAlign: h === "Qty" || h === "Price" || h === "Amount" ? "right" : "left", color: "#555", fontWeight: 600, fontSize: 9, letterSpacing: "0.06em", whiteSpace: "nowrap" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => {
+                const isBuy = r.tx_type === "BUY";
+                return (
+                  <tr key={r.id ?? i} style={{ borderBottom: "1px solid #161b22" }}>
+                    <td style={{ padding: "5px 8px", color: "#8b949e" }}>{r.trade_date}</td>
+                    <td style={{ padding: "5px 8px", color: "#c9d1d9", fontWeight: 600 }}>{r.symbol}</td>
+                    <td style={{ padding: "5px 8px" }}>
+                      <span style={{ color: isBuy ? "#00ff88" : "#ff4560", background: isBuy ? "#00ff8818" : "#ff456018", border: `1px solid ${isBuy ? "#00ff8830" : "#ff456030"}`, borderRadius: 3, padding: "1px 5px", fontSize: 9 }}>{r.tx_type}</span>
+                    </td>
+                    <td style={{ padding: "5px 8px", textAlign: "right", color: "#c9d1d9" }}>{r.quantity != null ? r.quantity.toLocaleString() : "—"}</td>
+                    <td style={{ padding: "5px 8px", textAlign: "right", color: "#c9d1d9" }}>{r.price != null ? `$${(+r.price).toFixed(2)}` : "—"}</td>
+                    <td style={{ padding: "5px 8px", textAlign: "right", color: r.amount >= 0 ? "#00ff88" : "#ff4560" }}>{r.amount != null ? `${r.amount >= 0 ? "+" : ""}$${Math.abs(+r.amount).toFixed(2)}` : "—"}</td>
+                    <td style={{ padding: "5px 8px", color: "#8b949e" }}>{r.account}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Import Daily Tab ──────────────────────────────────────────────────────────
 function ImportDailyTab({ contracts, supabase }) {
   const [anomalies, setAnomalies] = useState([]);
@@ -3671,10 +4037,53 @@ function ImportDailyTab({ contracts, supabase }) {
   const rowStyle = {display:"grid", gridTemplateColumns:"60px 40px 55px 65px 40px 55px 80px 90px 70px", gap:4, padding:"6px 12px", borderBottom:"1px solid #1c2128", alignItems:"center", fontSize:11, fontFamily:"monospace"};
   const hdrStyle = {...rowStyle, fontSize:9, color:"#3a4050", fontWeight:700, letterSpacing:"0.06em", borderBottom:"1px solid #30363d", paddingTop:4, paddingBottom:4};
 
+  // Gamify: compute today's P&L on closes committed today
+  const todayCloses  = todayContracts.filter(c => ["BTC","STC"].includes(c.optType) && c.profit != null);
+  const todayProfit  = todayCloses.reduce((s,c) => s + (+c.profit||0), 0);
+  const todayWins    = todayCloses.filter(c => (+c.profit||0) > 0).length;
+  const todayLosses  = todayCloses.filter(c => (+c.profit||0) < 0).length;
+
   return (
     <div style={{padding:"16px 20px", fontFamily:"monospace", background:"#0d1117", minHeight:"100vh"}}>
       <div style={{fontSize:13, fontWeight:700, color:"#58a6ff", letterSpacing:"0.08em", marginBottom:4}}>⬇ IMPORT</div>
-      <div style={{fontSize:10, color:"#3a4050", marginBottom:20}}>{TODAY} · auto-committed via Schwab/ETrade import</div>
+      <div style={{fontSize:10, color:"#3a4050", marginBottom:12}}>{TODAY} · auto-committed via Schwab/ETrade import</div>
+
+      {/* ── Gamified P&L Banner ── */}
+      {todayCloses.length > 0 && (
+        <div style={{
+          background: todayProfit > 0 ? "linear-gradient(135deg,#00ff8812,#00ff8805)" : todayProfit < 0 ? "linear-gradient(135deg,#ff456012,#ff456005)" : "#1c2128",
+          border: `1px solid ${todayProfit > 0 ? "#00ff8830" : todayProfit < 0 ? "#ff456030" : "#21262d"}`,
+          borderRadius:10, padding:"14px 16px", marginBottom:16,
+          display:"flex", alignItems:"center", gap:16, flexWrap:"wrap",
+          animation:"fadeIn .3s",
+        }}>
+          <div style={{fontSize:28}}>{todayProfit > 0 ? "🎰" : todayProfit < 0 ? "📉" : "➖"}</div>
+          <div>
+            <div style={{fontSize:9,color:"#3a4050",letterSpacing:"0.08em",marginBottom:2}}>TODAY&apos;S CLOSED P&amp;L</div>
+            <div style={{fontSize:22,fontWeight:700,color:todayProfit>0?"#00ff88":todayProfit<0?"#ff4560":"#c9d1d9",lineHeight:1}}>
+              {todayProfit>=0?"+":""}{todayProfit.toFixed(2)}
+            </div>
+          </div>
+          <div style={{display:"flex",gap:12,marginLeft:"auto",flexWrap:"wrap"}}>
+            <div style={{textAlign:"center"}}>
+              <div style={{fontSize:9,color:"#3a4050",letterSpacing:"0.06em"}}>CLOSES</div>
+              <div style={{fontSize:16,fontWeight:700,color:"#e6edf3"}}>{todayCloses.length}</div>
+            </div>
+            {todayWins > 0 && <div style={{textAlign:"center"}}>
+              <div style={{fontSize:9,color:"#3a4050",letterSpacing:"0.06em"}}>WINS</div>
+              <div style={{fontSize:16,fontWeight:700,color:"#00ff88"}}>{todayWins}</div>
+            </div>}
+            {todayLosses > 0 && <div style={{textAlign:"center"}}>
+              <div style={{fontSize:9,color:"#3a4050",letterSpacing:"0.06em"}}>LOSSES</div>
+              <div style={{fontSize:16,fontWeight:700,color:"#ff4560"}}>{todayLosses}</div>
+            </div>}
+            <div style={{textAlign:"center"}}>
+              <div style={{fontSize:9,color:"#3a4050",letterSpacing:"0.06em"}}>WIN RATE</div>
+              <div style={{fontSize:16,fontWeight:700,color:todayWins/todayCloses.length>=0.7?"#00ff88":"#ffd166"}}>{Math.round(todayWins/todayCloses.length*100)}%</div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Auto-committed today */}
       <div style={{background:"#161b22", border:"1px solid #30363d", borderRadius:8, marginBottom:16, overflow:"hidden"}}>
@@ -4398,6 +4807,39 @@ export default function App() {
     const updated = [...watchlist, t];
     setWatchlist(updated);
     try { await supabase.from("col_prefs").upsert({id:"watchlist", cols:{tickers:updated}, updated_at:new Date().toISOString()}); } catch {}
+
+    // Pull stock info immediately if not already in stocksData
+    if (!stocksData[t]?.currentPrice) {
+      try {
+        const qRes = await fetch(`/api/schwab-proxy?path=/marketdata/v1/quotes&symbols=${encodeURIComponent(t)}&fields=quote,fundamental&indicative=false`);
+        if (qRes.ok) {
+          const qData = await qRes.json();
+          const q = qData?.[t]?.quote;
+          const fund = qData?.[t]?.fundamental;
+          if (q) {
+            const info = {
+              currentPrice: q.lastPrice ?? q.mark ?? null,
+              bid:          q.bidPrice  ?? null,
+              ask:          q.askPrice  ?? null,
+              changePct:    q.netPercentChangeInDouble != null ? q.netPercentChangeInDouble / 100 : null,
+              changeClose:  q.netChange ?? null,
+              lastQuoteAt:  new Date().toISOString(),
+              // Fundamental data
+              week52High:   fund?.["52WeekHigh"]  ?? null,
+              week52Low:    fund?.["52WeekLow"]   ?? null,
+              peRatio:      fund?.peRatio         ?? null,
+              divYield:     fund?.divYield        ?? null,
+              marketCap:    fund?.marketCap       ?? null,
+              sharesUpdatedAt: new Date().toISOString(),
+            };
+            const updatedSD = { ...stocksData, [t]: { ...(stocksData[t] || {}), ...info } };
+            setStocksData(updatedSD);
+            await supabase.from("col_prefs").upsert({ id:"stocks_data", cols:updatedSD, updated_at:new Date().toISOString() });
+            console.log(`[watchlist] pulled info for ${t}: $${info.currentPrice}`);
+          }
+        }
+      } catch(e) { console.warn(`[watchlist] failed to pull info for ${t}:`, e.message); }
+    }
   };
   const removeFromWatchlist = async (ticker) => {
     const updated = watchlist.filter(t => t !== ticker);
@@ -4883,6 +5325,7 @@ export default function App() {
   const [orderStatuses,  setOrderStatuses]  = useState({});
   const [tradeOrders,    setTradeOrders]    = useState([]);
   const [ordersLoading,  setOrdersLoading]  = useState(false);
+  const [chaseModal,     setChaseModal]     = useState(null); // { order, floor, step, saving }
 
   const loadTradeOrders = async () => {
     setOrdersLoading(true);
@@ -5852,6 +6295,78 @@ ${JSON.stringify(summary, null, 1)}`;
         </div>
       )}
 
+      {/* ── CHASE MODAL ── */}
+      {chaseModal && (
+        <div style={{position:"fixed",inset:0,background:"#000c",zIndex:1100,display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={()=>setChaseModal(null)}>
+          <div style={{background:"#0d1117",border:"1px solid #ffd16640",borderRadius:12,padding:20,width:"100%",maxWidth:400,animation:"fadeIn .15s"}} onClick={e=>e.stopPropagation()}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+              <div style={{fontFamily:"monospace",fontWeight:700,color:"#ffd166",fontSize:13}}>🎯 Chase Order</div>
+              <button onClick={()=>setChaseModal(null)} style={{background:"transparent",color:"#555",border:"none",fontSize:16,cursor:"pointer"}}>✕</button>
+            </div>
+            <div style={{fontFamily:"monospace",fontSize:11,color:"#8b949e",marginBottom:12}}>
+              {chaseModal.order.opt_type} {chaseModal.order.ticker} ${chaseModal.order.strike} {chaseModal.order.type} {chaseModal.order.expires}
+              <span style={{marginLeft:8,color:"#ffd166"}}>Current limit: ${Number(chaseModal.order.limit_price||0).toFixed(2)}</span>
+            </div>
+            <div style={{fontSize:10,color:"#8b949e",fontFamily:"monospace",marginBottom:12,padding:"8px 10px",background:"#080c12",borderRadius:6,border:"1px solid #21262d"}}>
+              {["STO","STC"].includes(chaseModal.order.opt_type)
+                ? "Will step limit price down just below the ask each refresh cycle until floor is hit or order fills."
+                : "Will step limit price up just above the bid each refresh cycle until floor is hit or order fills."}
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+              <div>
+                <div style={{fontSize:9,color:"#3a4050",fontFamily:"monospace",marginBottom:4,letterSpacing:"0.06em"}}>FLOOR PRICE $</div>
+                <input type="number" step="0.01" min="0.01"
+                  value={chaseModal.floor}
+                  onChange={e=>setChaseModal(p=>({...p,floor:e.target.value}))}
+                  style={{width:"100%",background:"#080c12",border:"1px solid #21262d",borderRadius:4,padding:"6px 8px",fontSize:12,fontFamily:"monospace",color:"#e6edf3",boxSizing:"border-box"}}
+                  placeholder="e.g. 0.10" />
+              </div>
+              <div>
+                <div style={{fontSize:9,color:"#3a4050",fontFamily:"monospace",marginBottom:4,letterSpacing:"0.06em"}}>STEP SIZE $</div>
+                <input type="number" step="0.01" min="0.01"
+                  value={chaseModal.step}
+                  onChange={e=>setChaseModal(p=>({...p,step:e.target.value}))}
+                  style={{width:"100%",background:"#080c12",border:"1px solid #21262d",borderRadius:4,padding:"6px 8px",fontSize:12,fontFamily:"monospace",color:"#e6edf3",boxSizing:"border-box"}} />
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              {chaseModal.order.chase_active ? (
+                <button onClick={async()=>{
+                  setChaseModal(p=>({...p,saving:true}));
+                  try {
+                    const r = await fetch(`/api/schwab-orders?action=chase-stop&secret=${encodeURIComponent("CronSecret2026!")}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({orderId:String(chaseModal.order.id)})});
+                    if(r.ok){loadTradeOrders();setChaseModal(null);}
+                    else{const d=await r.json();alert(d.error||"Failed");}
+                  }catch(e){alert(e.message);}
+                  setChaseModal(p=>p?({...p,saving:false}):p);
+                }} disabled={chaseModal.saving}
+                  style={{flex:1,padding:"8px 0",borderRadius:6,border:"1px solid #ff456040",background:"#ff456014",color:"#ff4560",fontSize:11,fontFamily:"monospace",fontWeight:600,cursor:"pointer"}}>
+                  {chaseModal.saving?"Saving…":"⏹ Stop Chase"}
+                </button>
+              ) : (
+                <button onClick={async()=>{
+                  if(!chaseModal.floor||+chaseModal.floor<=0){alert("Set a floor price > 0");return;}
+                  setChaseModal(p=>({...p,saving:true}));
+                  try {
+                    const r = await fetch(`/api/schwab-orders?action=chase-start&secret=${encodeURIComponent("CronSecret2026!")}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({orderId:String(chaseModal.order.id),chaseFloor:+chaseModal.floor,chaseStep:+chaseModal.step})});
+                    if(r.ok){loadTradeOrders();setChaseModal(null);}
+                    else{const d=await r.json();alert(d.error||"Failed");}
+                  }catch(e){alert(e.message);}
+                  setChaseModal(p=>p?({...p,saving:false}):p);
+                }} disabled={chaseModal.saving}
+                  style={{flex:1,padding:"8px 0",borderRadius:6,border:"1px solid #ffd16640",background:"#ffd16614",color:"#ffd166",fontSize:11,fontFamily:"monospace",fontWeight:600,cursor:"pointer"}}>
+                  {chaseModal.saving?"Saving…":"🎯 Start Chase"}
+                </button>
+              )}
+              <button onClick={()=>setChaseModal(null)}
+                style={{padding:"8px 16px",borderRadius:6,border:"1px solid #21262d",background:"transparent",color:"#555",fontSize:11,cursor:"pointer"}}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── PROFIT BANDS MODAL ── */}
       {showBands && (
         <div style={{position:"fixed",inset:0,background:"#000c",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={()=>setShowBands(false)}>
@@ -6092,6 +6607,7 @@ ${JSON.stringify(summary, null, 1)}`;
                   {label:"Opportunity Scanner", icon:"⟳", fn:()=>{setTab("scanner");setShowMenu(false);}},
                   {label:"SAGE Explorer", icon:"◈",  fn:()=>{setTab("sage");setShowMenu(false);}},
                   {label:"Signal Log",    icon:"📡", fn:()=>{setTab("signallog");setShowMenu(false);}},
+                  {label:"All Transactions", icon:"💰", fn:()=>{setTab("all_transactions");setShowMenu(false);}},
                   {label:"Skynet",        icon:"🤖", fn:()=>{setTab("signalrules");setShowMenu(false);}},
                   {label:"Strategies",   icon:"♟",  fn:()=>{setTab("strategies");setShowMenu(false);}},
 
@@ -7007,6 +7523,12 @@ ${JSON.stringify(summary, null, 1)}`;
                                         {sc?.loading?"…":"⟳"}
                                       </button>
                                     )}
+                                    {["submitted","pending_approval","dry_run_approved"].includes(o.status) && (
+                                      <button onClick={e=>{e.stopPropagation();setChaseModal({order:o,floor:o.chase_floor??"",step:o.chase_step??0.05,saving:false});}}
+                                        style={{background:o.chase_active?"#ffd16620":"#ffd16610",color:o.chase_active?"#ffd166":"#ffd16688",border:`1px solid ${o.chase_active?"#ffd16650":"#ffd16620"}`,borderRadius:3,padding:"2px 7px",fontSize:9,cursor:"pointer"}}>
+                                        {o.chase_active?"🎯 Chasing":"🎯 Chase"}
+                                      </button>
+                                    )}
                                     <button onClick={()=>cancelTradeOrder(o.id)}
                                       style={{background:orderStatuses[o.id]?.confirmCancel?"#ff4560":"#ff456014",color:orderStatuses[o.id]?.confirmCancel?"#fff":"#ff4560",border:"1px solid #ff456030",borderRadius:3,padding:"2px 7px",fontSize:9,cursor:"pointer",transition:"all 0.2s"}}
                                       onClickCapture={e=>{
@@ -7021,26 +7543,85 @@ ${JSON.stringify(summary, null, 1)}`;
                                   </div>
                                 </td>
                               </tr>,
-                              isExpanded && (
-                                <tr key={`detail-${o.id}`} style={{borderBottom:"1px solid #0d1117"}}>
-                                  <td colSpan={11} style={{padding:"4px 8px 8px"}}>
-                                    <pre style={{background:"#080c12",border:"1px solid #21262d",borderRadius:4,padding:"7px",fontFamily:"monospace",fontSize:9,color:"#8b949e",overflowX:"auto",whiteSpace:"pre-wrap",margin:0}}>
-                                      {JSON.stringify(o.raw_request||{},null,2)}
-                                    </pre>
-                                    {o.schwab_order_id && <div style={{fontSize:9,color:"#3a4050",fontFamily:"monospace",marginTop:4}}>Order ID: {o.schwab_order_id}</div>}
-                                    {sc?.result && (
-                                      <div style={{marginTop:6,padding:"5px 8px",background:"#080c12",border:`1px solid ${sc.result.error?"#ff456030":sc.result.schwabStatus==="FILLED"?"#00ff8830":"#58a6ff30"}`,borderRadius:4,fontFamily:"monospace",fontSize:10}}>
-                                        {sc.result.error ? <span style={{color:"#ff4560"}}>⚠ {sc.result.error}</span> : (
-                                          <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
-                                            <div><span style={{color:"#3a4050"}}>Status: </span><span style={{color:sc.result.schwabStatus==="FILLED"?"#00ff88":sc.result.schwabStatus==="CANCELED"?"#ff4560":"#ffd166",fontWeight:700}}>{sc.result.schwabStatus||"—"}</span></div>
-                                            {o.schwab_order_id && <div><span style={{color:"#3a4050"}}>ID: </span><span style={{color:"#555"}}>{o.schwab_order_id}</span></div>}
+                              isExpanded && (() => {
+                                const history = Array.isArray(o.price_history) ? o.price_history : [];
+                                return (
+                                  <tr key={`detail-${o.id}`} style={{borderBottom:"1px solid #0d1117"}}>
+                                    <td colSpan={14} style={{padding:"6px 10px 10px",background:"#080c12"}}>
+                                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+
+                                        {/* Left: reprice */}
+                                        <div>
+                                          <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:6}}>CHANGE LIMIT PRICE</div>
+                                          <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:8}}>
+                                            <input type="number" step="0.01" min="0.01"
+                                              defaultValue={o.limit_price != null ? Number(o.limit_price).toFixed(2) : ""}
+                                              id={`reprice-${o.id}`}
+                                              style={{width:80,background:"#0d1117",border:"1px solid #21262d",borderRadius:4,padding:"5px 7px",fontSize:11,fontFamily:"monospace",color:"#e6edf3"}}
+                                              placeholder="0.00"
+                                            />
+                                            <button onClick={async e=>{
+                                              e.stopPropagation();
+                                              const inp = document.getElementById(`reprice-${o.id}`);
+                                              const val = parseFloat(inp?.value);
+                                              if (!val || val <= 0) { alert("Enter a valid price"); return; }
+                                              setOrderStatuses(p=>({...p,[o.id]:{...p[o.id],repricing:true}}));
+                                              try {
+                                                const r = await fetch(`/api/schwab-orders?action=reprice&secret=${encodeURIComponent("CronSecret2026!")}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({orderId:String(o.id),newPrice:val,reason:"manual"})});
+                                                const d = await r.json();
+                                                if(r.ok){loadTradeOrders();setOrderStatuses(p=>({...p,[o.id]:{...p[o.id],repricing:false,repriceResult:"✓ Repriced to $"+val.toFixed(2)}}));}
+                                                else{setOrderStatuses(p=>({...p,[o.id]:{...p[o.id],repricing:false,repriceResult:"⚠ "+d.error}}));}
+                                              } catch(e){setOrderStatuses(p=>({...p,[o.id]:{...p[o.id],repricing:false,repriceResult:"⚠ "+e.message}}));}
+                                            }} disabled={sc?.repricing}
+                                              style={{background:"#58a6ff14",color:"#58a6ff",border:"1px solid #58a6ff30",borderRadius:4,padding:"5px 10px",fontSize:9,fontFamily:"monospace",cursor:"pointer"}}>
+                                              {sc?.repricing?"…":"Update Price"}
+                                            </button>
                                           </div>
-                                        )}
+                                          {sc?.repriceResult && <div style={{fontSize:9,fontFamily:"monospace",color:sc.repriceResult.startsWith("✓")?"#00ff88":"#ff4560",marginBottom:6}}>{sc.repriceResult}</div>}
+
+                                          {/* Live quote status */}
+                                          {sc?.result && (
+                                            <div style={{padding:"5px 8px",background:"#0d1117",border:`1px solid ${sc.result.error?"#ff456030":sc.result.schwabStatus==="FILLED"?"#00ff8830":"#58a6ff30"}`,borderRadius:4,fontFamily:"monospace",fontSize:10}}>
+                                              {sc.result.error ? <span style={{color:"#ff4560"}}>⚠ {sc.result.error}</span> : (
+                                                <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+                                                  <div><span style={{color:"#3a4050"}}>Schwab: </span><span style={{color:sc.result.schwabStatus==="FILLED"?"#00ff88":sc.result.schwabStatus==="CANCELED"?"#ff4560":"#ffd166",fontWeight:700}}>{sc.result.schwabStatus||"—"}</span></div>
+                                                  {o.schwab_order_id && <div><span style={{color:"#3a4050"}}>ID: </span><span style={{color:"#555"}}>{o.schwab_order_id}</span></div>}
+                                                </div>
+                                              )}
+                                            </div>
+                                          )}
+                                          {o.schwab_order_id && !sc?.result && <div style={{fontSize:9,color:"#3a4050",fontFamily:"monospace",marginTop:4}}>Schwab ID: {o.schwab_order_id}</div>}
+                                          {o.notes && <div style={{fontSize:9,color:"#555",fontFamily:"monospace",marginTop:6,fontStyle:"italic"}}>{o.notes}</div>}
+                                        </div>
+
+                                        {/* Right: price history */}
+                                        <div>
+                                          <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:6}}>PRICE HISTORY</div>
+                                          {history.length === 0 ? (
+                                            <div style={{fontSize:9,color:"#3a4050",fontFamily:"monospace"}}>No changes yet</div>
+                                          ) : (
+                                            <div style={{display:"flex",flexDirection:"column",gap:3,maxHeight:100,overflowY:"auto"}}>
+                                              {[...history].reverse().map((h,i) => (
+                                                <div key={i} style={{display:"flex",gap:8,alignItems:"center",fontSize:9,fontFamily:"monospace"}}>
+                                                  <span style={{color:"#ffd166",fontWeight:600}}>${Number(h.price).toFixed(2)}</span>
+                                                  <span style={{color:"#3a4050"}}>{h.at?.slice(0,16).replace("T"," ")}</span>
+                                                  <span style={{color:"#555",fontSize:8}}>{h.reason||""}</span>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          )}
+                                          {/* Timeline summary */}
+                                          <div style={{marginTop:8,fontSize:9,color:"#3a4050",fontFamily:"monospace",display:"flex",gap:10,flexWrap:"wrap"}}>
+                                            <span>Created: {o.created_at?.slice(0,16).replace("T"," ")}</span>
+                                            {o.submitted_at && <span>Submitted: {o.submitted_at.slice(0,16).replace("T"," ")}</span>}
+                                          </div>
+                                        </div>
+
                                       </div>
-                                    )}
-                                  </td>
-                                </tr>
-                              )
+                                    </td>
+                                  </tr>
+                                );
+                              })()
                             ];
                           })}
                         </tbody>
@@ -7424,6 +8005,10 @@ ${JSON.stringify(summary, null, 1)}`;
                 <button onClick={sendAI} disabled={aiLoading||!aiInput.trim()} style={{background:"#c084fc",color:"#010409",border:"none",borderRadius:6,padding:"8px 14px",fontSize:11,fontWeight:700,fontFamily:"monospace",opacity:aiLoading||!aiInput.trim()?0.5:1,cursor:aiLoading||!aiInput.trim()?"default":"pointer"}}>Ask</button>
               </div>
             </div>
+
+            {/* ── Monthly Report ── */}
+            <MonthlyReport originals={originals} />
+
           </div>
         )}
 
@@ -7575,9 +8160,18 @@ ${JSON.stringify(summary, null, 1)}`;
                       style={{background:"transparent",border:"1px solid #1c2128",color:"#3a4050",fontFamily:"monospace",fontSize:9,padding:"2px 7px",borderRadius:4,cursor:"pointer"}}
                     >+ Opp</button>
                     <button
-                      onClick={e=>{e.stopPropagation();removeFromWatchlist(sym);}}
-                      style={{background:"none",border:"none",color:"#3a4050",cursor:"pointer",fontSize:10,padding:"0 2px",lineHeight:1}}
-                    >✕</button>
+                      onClick={e=>{e.stopPropagation();
+                        setOrderStatuses(p=>({...p,[`wl_del_${sym}`]:{confirm:true}}));
+                        setTimeout(()=>setOrderStatuses(p=>({...p,[`wl_del_${sym}`]:{confirm:false}})),3000);
+                      }}
+                      onClickCapture={e=>{
+                        if(orderStatuses[`wl_del_${sym}`]?.confirm){
+                          e.stopPropagation();
+                          removeFromWatchlist(sym);
+                        }
+                      }}
+                      style={{background:orderStatuses[`wl_del_${sym}`]?.confirm?"#ff456020":"transparent",border:`1px solid ${orderStatuses[`wl_del_${sym}`]?.confirm?"#ff456050":"#1c2128"}`,color:orderStatuses[`wl_del_${sym}`]?.confirm?"#ff4560":"#555",cursor:"pointer",fontSize:9,padding:"2px 7px",borderRadius:4,fontFamily:"monospace",transition:"all 0.2s"}}
+                    >{orderStatuses[`wl_del_${sym}`]?.confirm?"Remove?":"🗑"}</button>
                   </div>
                 </div>
 
@@ -7779,12 +8373,44 @@ ${JSON.stringify(summary, null, 1)}`;
                 </div>
 
                 {/* Add bar */}
-                <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:8}}>
+                <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:8,flexWrap:"wrap"}}>
                   <input value={watchlistInput} onChange={e=>setWatchlistInput(e.target.value.toUpperCase())}
                     onKeyDown={e=>{if(e.key==="Enter"&&watchlistInput.trim()){addToWatchlist(watchlistInput);setWatchlistInput("");}}}
                     placeholder="Add ticker…" style={{width:110,fontSize:11,padding:"4px 7px",textTransform:"uppercase"}}/>
                   <button onClick={()=>{if(watchlistInput.trim()){addToWatchlist(watchlistInput);setWatchlistInput("");}}}
                     style={{background:"#00ff8814",color:"#00ff88",border:"1px solid #00ff8830",borderRadius:5,padding:"4px 10px",fontSize:10,fontFamily:"monospace"}}>+ Watch</button>
+                  <button onClick={async()=>{
+                    // Refresh quotes for all watchlist tickers missing price data
+                    const missing = watchlist.filter(t => !stocksData[t]?.currentPrice);
+                    const toRefresh = missing.length > 0 ? missing : watchlist;
+                    if (!toRefresh.length) return;
+                    try {
+                      const qRes = await fetch(`/api/schwab-proxy?path=/marketdata/v1/quotes&symbols=${encodeURIComponent(toRefresh.join(","))}&fields=quote,fundamental&indicative=false`);
+                      if (!qRes.ok) return;
+                      const qData = await qRes.json();
+                      const updatedSD = { ...stocksData };
+                      toRefresh.forEach(t => {
+                        const q = qData?.[t]?.quote;
+                        const fund = qData?.[t]?.fundamental;
+                        if (q) updatedSD[t] = {
+                          ...(updatedSD[t]||{}),
+                          currentPrice: q.lastPrice ?? q.mark ?? null,
+                          bid:          q.bidPrice  ?? null,
+                          ask:          q.askPrice  ?? null,
+                          changePct:    q.netPercentChangeInDouble != null ? q.netPercentChangeInDouble/100 : null,
+                          changeClose:  q.netChange ?? null,
+                          lastQuoteAt:  new Date().toISOString(),
+                          week52High:   fund?.["52WeekHigh"]  ?? updatedSD[t]?.week52High  ?? null,
+                          week52Low:    fund?.["52WeekLow"]   ?? updatedSD[t]?.week52Low   ?? null,
+                          peRatio:      fund?.peRatio         ?? updatedSD[t]?.peRatio     ?? null,
+                          divYield:     fund?.divYield        ?? updatedSD[t]?.divYield    ?? null,
+                          marketCap:    fund?.marketCap       ?? updatedSD[t]?.marketCap   ?? null,
+                        };
+                      });
+                      setStocksData(updatedSD);
+                      await supabase.from("col_prefs").upsert({id:"stocks_data",cols:updatedSD,updated_at:new Date().toISOString()});
+                    } catch(e) { console.warn("[watchlist refresh]",e.message); }
+                  }} style={{background:"#58a6ff14",color:"#58a6ff",border:"1px solid #58a6ff30",borderRadius:5,padding:"4px 10px",fontSize:10,fontFamily:"monospace",cursor:"pointer",marginLeft:"auto"}}>⟳ Refresh</button>
                 </div>
 
                 {/* Column headers */}
@@ -8044,6 +8670,8 @@ ${JSON.stringify(summary, null, 1)}`;
                     </tbody>
                   </table>
                 </div>
+                {/* Catalyst calendar & research docs */}
+                <CatalystPanel ticker={selectedTicker} />
               </div>
               {/* Option Chain — Schwab live chain (same as Plan tab) */}
               <StocksChainSection
@@ -8452,6 +9080,9 @@ ${JSON.stringify(summary, null, 1)}`;
         {/* ══ SIGNAL LOG ══ */}
         {tab==="signallog" && <SignalLogTab supabase={supabase} />}
         {tab==="signalrules" && <SignalRulesTab supabase={supabase} />}
+
+        {/* ══ ALL TRANSACTIONS ══ */}
+        {tab==="all_transactions" && <AllTransactionsTab supabase={supabase} />}
 
         {/* ══ IMPORT ══ */}
         {tab==="import" && <ImportDailyTab contracts={contracts} supabase={supabase} />}
