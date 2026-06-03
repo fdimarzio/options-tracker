@@ -16,7 +16,7 @@ const ETRADE_ACCOUNT_NAMES = {
   "227418222": "ETrade 8222",
 };
 
-const START_DATE = "2026-01-01";
+const START_DATE = "2025-01-01";
 
 // Schwab types to fetch — excludes TRADE (options) which live in contracts table;
 // TRADE is included here only for EQUITY buy/sell parsing (options are skipped by the parser).
@@ -81,17 +81,30 @@ async function fetchSchwabAccounts(token) {
 }
 
 async function fetchSchwabTransactionsForAccount(token, hash) {
-  const today    = new Date();
-  const startUTC = START_DATE + "T05:00:00.000Z";
-  const endUTC   = today.toISOString();
+  // Schwab enforces a max 1-year window — chunk into annual ranges
+  const allTxs  = [];
+  const start   = new Date(START_DATE + "T05:00:00.000Z");
+  const end     = new Date();
 
-  const url = `${SCHWAB_BASE}/trader/v1/accounts/${hash}/transactions?` +
-    new URLSearchParams({ types: SCHWAB_TX_TYPES, startDate: startUTC, endDate: endUTC });
+  let chunkStart = new Date(start);
+  while (chunkStart < end) {
+    const chunkEnd = new Date(chunkStart);
+    chunkEnd.setFullYear(chunkEnd.getFullYear() + 1);
+    if (chunkEnd > end) chunkEnd.setTime(end.getTime());
 
-  const r = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } });
-  if (!r.ok) throw new Error(`Schwab transactions (${hash.slice(0,8)}...): ${r.status} ${await r.text()}`);
-  const data = await r.json();
-  return Array.isArray(data) ? data : (data?.transactions ?? []);
+    const url = `${SCHWAB_BASE}/trader/v1/accounts/${hash}/transactions?` +
+      new URLSearchParams({ types: SCHWAB_TX_TYPES, startDate: chunkStart.toISOString(), endDate: chunkEnd.toISOString() });
+
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } });
+    if (!r.ok) throw new Error(`Schwab transactions (${hash.slice(0,8)}...): ${r.status} ${await r.text()}`);
+    const data = await r.json();
+    const txs  = Array.isArray(data) ? data : (data?.transactions ?? []);
+    allTxs.push(...txs);
+
+    chunkStart = new Date(chunkEnd);
+    chunkStart.setMilliseconds(chunkStart.getMilliseconds() + 1);
+  }
+  return allTxs;
 }
 
 function schwabIsoDate(tx) {
@@ -485,9 +498,16 @@ async function main() {
       }
     }
 
-    if (allRows.length) {
-      await sbUpsert("stock_transactions", allRows, "schwab_transaction_id");
-      schwabCount = allRows.length;
+    const seenS = new Set();
+    const dedupedS = allRows.filter(r => {
+      if (seenS.has(r.schwab_transaction_id)) return false;
+      seenS.add(r.schwab_transaction_id); return true;
+    });
+    if (dedupedS.length < allRows.length) console.log(`[ Schwab ] Deduped ${allRows.length - dedupedS.length} duplicate tx IDs`);
+
+    if (dedupedS.length) {
+      await sbUpsert("stock_transactions", dedupedS, "schwab_transaction_id");
+      schwabCount = dedupedS.length;
       console.log(`[ Schwab ] ✓ Upserted ${schwabCount} rows`);
     } else {
       console.log("[ Schwab ] No transactions to import");
@@ -534,9 +554,17 @@ async function main() {
       }
     }
 
-    if (allRows.length) {
-      await sbUpsert("stock_transactions", allRows, "etrade_transaction_id");
-      etradeCount = allRows.length;
+    // Deduplicate within batch — pagination can return the same tx on adjacent pages
+    const seen = new Set();
+    const deduped = allRows.filter(r => {
+      if (seen.has(r.etrade_transaction_id)) return false;
+      seen.add(r.etrade_transaction_id); return true;
+    });
+    if (deduped.length < allRows.length) console.log(`[ ETrade ] Deduped ${allRows.length - deduped.length} duplicate tx IDs`);
+
+    if (deduped.length) {
+      await sbUpsert("stock_transactions", deduped, "etrade_transaction_id");
+      etradeCount = deduped.length;
       console.log(`[ ETrade ] ✓ Upserted ${etradeCount} rows`);
     } else {
       console.log("[ ETrade ] No transactions to import");
