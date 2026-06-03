@@ -28,9 +28,10 @@ async function sbGet(path) {
   return r.json();
 }
 
-async function sbUpsert(table, rows) {
+async function sbUpsert(table, rows, conflictCol) {
   if (!rows.length) return;
-  const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+  const url = `${SUPABASE_URL}/rest/v1/${table}${conflictCol ? `?on_conflict=${conflictCol}` : ""}`;
+  const r = await fetch(url, {
     method: "POST",
     headers: {
       apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`,
@@ -120,12 +121,25 @@ function buildEtradeAuthHeader(method, url, consumerKey, consumerSecret, accessT
 }
 
 async function getEtradeTokens() {
-  const rows = await sbGet("col_prefs?select=cols&id=eq.etrade_tokens");
-  const t    = rows?.[0]?.cols;
-  if (!t?.accessToken || !t?.accessTokenSecret) {
-    throw new Error("No ETrade tokens in col_prefs — visit /api/etrade?action=auth to authorize");
+  // Try Supabase first, fall back to env vars
+  try {
+    const rows = await sbGet("col_prefs?select=cols&id=eq.etrade_tokens");
+    const t    = rows?.[0]?.cols;
+    if (t?.accessToken && t?.accessTokenSecret) {
+      console.log("[ ETrade ] Using tokens from Supabase col_prefs");
+      return t;
+    }
+  } catch (e) {
+    console.warn("[ ETrade ] Supabase token read failed:", e.message);
   }
-  return t;
+  // Fall back to env vars
+  const accessToken       = process.env.ETRADE_ACCESS_TOKEN;
+  const accessTokenSecret = process.env.ETRADE_ACCESS_TOKEN_SECRET;
+  if (accessToken && accessTokenSecret) {
+    console.log("[ ETrade ] Using tokens from .env.local");
+    return { accessToken, accessTokenSecret };
+  }
+  throw new Error("No ETrade tokens found in Supabase or .env.local");
 }
 
 async function etradeGet(path, queryParams, consumerKey, consumerSecret, accessToken, accessTokenSecret) {
@@ -135,7 +149,7 @@ async function etradeGet(path, queryParams, consumerKey, consumerSecret, accessT
   const r          = await fetch(urlBase + qs, { headers: { Authorization: authHeader, Accept: "application/json" } });
   const text       = await r.text();
   if (!text.trim()) return {};
-  if (text.trim().startsWith("<")) throw new Error(`ETrade returned XML (${r.status}) — token may be expired`);
+  if (text.trim().startsWith("<")) throw new Error(`ETrade returned XML (${r.status}): ${text.slice(0, 300)}`);
   const data = JSON.parse(text);
   if (!r.ok) throw new Error(`ETrade ${r.status}: ${data?.Error?.message ?? text.slice(0, 200)}`);
   return data;
@@ -195,7 +209,7 @@ async function main() {
     console.log(`[ Schwab ] ${rows.length} equity transactions parsed`);
 
     if (rows.length) {
-      await sbUpsert("stock_transactions", rows);
+      await sbUpsert("stock_transactions", rows, "schwab_transaction_id");
       schwabCount = rows.length;
       console.log(`[ Schwab ] ✓ Upserted ${schwabCount} rows into stock_transactions`);
     } else {
@@ -210,12 +224,25 @@ async function main() {
   try {
     console.log("\n[ ETrade ] Fetching tokens from Supabase...");
     const tokens     = await getEtradeTokens();
-    const consumerKey    = process.env.ETRADE_CONSUMER_KEY;
-    const consumerSecret = process.env.ETRADE_CONSUMER_SECRET;
+    const consumerKey = process.env.ETRADE_CONSUMER_KEY ?? process.env.VITE_ETRADE_CONSUMER_KEY;
+    // Production app may have been authorized with the VITE_ secret (different value in .env.local)
+    const consumerSecret = process.env.ETRADE_CONSUMER_SECRET ?? process.env.VITE_ETRADE_CONSUMER_SECRET;
     if (!consumerKey || !consumerSecret) throw new Error("ETRADE_CONSUMER_KEY / ETRADE_CONSUMER_SECRET not in .env.local");
 
+    // Try both consumer secrets — the one that matches what was used to authorize wins
+    const altSecret = process.env.VITE_ETRADE_CONSUMER_SECRET ?? process.env.ETRADE_CONSUMER_SECRET;
+    let acctData, usedSecret = consumerSecret;
     console.log("[ ETrade ] Fetching account list...");
-    const acctData = await etradeGet("/v1/accounts/list", {}, consumerKey, consumerSecret, tokens.accessToken, tokens.accessTokenSecret);
+    try {
+      acctData = await etradeGet("/v1/accounts/list", {}, consumerKey, consumerSecret, tokens.accessToken, tokens.accessTokenSecret);
+    } catch (e) {
+      if (e.message.includes("signature_invalid") && altSecret && altSecret !== consumerSecret) {
+        console.log("[ ETrade ] Primary secret failed — retrying with VITE_ secret...");
+        acctData   = await etradeGet("/v1/accounts/list", {}, consumerKey, altSecret, tokens.accessToken, tokens.accessTokenSecret);
+        usedSecret = altSecret;
+        console.log("[ ETrade ] VITE_ secret worked");
+      } else { throw e; }
+    }
     const accounts = acctData?.AccountListResponse?.Accounts?.Account ?? [];
     if (!accounts.length) throw new Error("No ETrade accounts found");
     console.log(`[ ETrade ] ${accounts.length} account(s): ${accounts.map(a => ETRADE_ACCOUNT_NAMES[String(a.accountId)] ?? a.accountId).join(", ")}`);
@@ -233,7 +260,7 @@ async function main() {
         const data   = await etradeGet(
           `/v1/accounts/${acct.accountIdKey}/transactions`,
           { startDate: startFmt, endDate: endFmt },
-          consumerKey, consumerSecret, tokens.accessToken, tokens.accessTokenSecret
+          consumerKey, usedSecret, tokens.accessToken, tokens.accessTokenSecret
         );
         const txList = data?.TransactionListResponse?.Transaction ?? [];
         const parsed = txList.map(tx => parseEtradeEquityTx(tx, accountName)).filter(Boolean);
@@ -249,7 +276,7 @@ async function main() {
     }
 
     if (allRows.length) {
-      await sbUpsert("stock_transactions", allRows);
+      await sbUpsert("stock_transactions", allRows, "etrade_transaction_id");
       etradeCount = allRows.length;
       console.log(`[ ETrade ] ✓ Upserted ${etradeCount} rows into stock_transactions`);
     } else {
