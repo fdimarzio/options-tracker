@@ -1,5 +1,5 @@
 // scripts/backfill-stock-transactions.js
-// One-time backfill: pulls equity transactions from Schwab + ETrade into stock_transactions.
+// Backfill: pulls all non-option transactions from Schwab + ETrade into stock_transactions.
 // Run: node --env-file=.env.local scripts/backfill-stock-transactions.js
 
 import crypto from "crypto";
@@ -18,6 +18,18 @@ const ETRADE_ACCOUNT_NAMES = {
 };
 
 const START_DATE = "2026-01-01";
+
+// Schwab types to fetch — excludes TRADE (options) which live in contracts table;
+// TRADE is included here only for EQUITY buy/sell parsing (options are skipped by the parser).
+const SCHWAB_TX_TYPES = [
+  "TRADE",
+  "DIVIDEND_OR_INTEREST",
+  "JOURNAL",
+  "RECEIVE_AND_DELIVER",
+  "ELECTRONIC_FUND",
+  "WIRE_IN",
+  "WIRE_OUT",
+].join(",");
 
 // ── Supabase ──────────────────────────────────────────────────────────────────
 async function sbGet(path) {
@@ -58,7 +70,7 @@ async function fetchSchwabTransactions(token) {
   const endUTC   = today.toISOString();
 
   const url = `${SCHWAB_BASE}/trader/v1/accounts/${SCHWAB_ACCOUNT_HASH}/transactions?` +
-    new URLSearchParams({ types: "TRADE", startDate: startUTC, endDate: endUTC });
+    new URLSearchParams({ types: SCHWAB_TX_TYPES, startDate: startUTC, endDate: endUTC });
 
   const r = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } });
   if (!r.ok) throw new Error(`Schwab transactions: ${r.status} ${await r.text()}`);
@@ -66,31 +78,118 @@ async function fetchSchwabTransactions(token) {
   return Array.isArray(data) ? data : (data?.transactions ?? []);
 }
 
-function parseSchwabEquityTx(tx) {
-  const items  = tx.transferItems ?? [];
-  const eqItem = items.find(i => i.instrument?.assetType === "EQUITY");
-  if (!eqItem) return null;
+function schwabIsoDate(tx) {
+  const d = (tx.tradeDate ?? tx.time)?.slice(0, 10) ?? null;
+  return d ? new Date(d + "T16:00:00Z").toISOString() : null;
+}
 
-  const qty = eqItem.amount ?? 0;
-  if (qty === 0) return null;
+function parseSchwabTx(tx) {
+  const id   = String(tx.activityId ?? tx.transactionId ?? "");
+  const items = tx.transferItems ?? [];
+  const net   = tx.netAmount ?? 0;
+  const desc  = tx.description ?? null;
+  const descU = (desc ?? "").toUpperCase();
 
-  const tradeDate = tx.tradeDate
-    ? tx.tradeDate.slice(0, 10)
-    : tx.time?.slice(0, 10) ?? null;
-
-  return {
-    schwab_transaction_id: String(tx.activityId ?? tx.transactionId ?? ""),
-    symbol:           eqItem.instrument?.symbol?.toUpperCase() ?? null,
-    transaction_type: qty > 0 ? "BUY" : "SELL",
-    asset_type:       "EQUITY",
-    quantity:         Math.abs(qty),
-    price:            eqItem.price ?? null,
-    net_amount:       tx.netAmount ?? 0,
-    trade_date:       tradeDate ? new Date(tradeDate + "T16:00:00Z").toISOString() : null,
-    account:          SCHWAB_ACCOUNT_LABEL,
-    description:      tx.description ?? null,
-    raw:              tx,
+  const base = {
+    schwab_transaction_id: id,
+    net_amount:  net,
+    trade_date:  schwabIsoDate(tx),
+    account:     SCHWAB_ACCOUNT_LABEL,
+    description: desc,
+    raw:         tx,
   };
+
+  switch (tx.type) {
+    case "TRADE": {
+      // Only capture EQUITY trades — option trades live in contracts table
+      const eqItem = items.find(i => i.instrument?.assetType === "EQUITY");
+      if (!eqItem) return null;
+      const qty = eqItem.amount ?? 0;
+      if (qty === 0) return null;
+      return {
+        ...base,
+        symbol:           eqItem.instrument.symbol?.toUpperCase() ?? null,
+        transaction_type: qty > 0 ? "BUY" : "SELL",
+        asset_type:       "EQUITY",
+        quantity:         Math.abs(qty),
+        price:            eqItem.price ?? null,
+      };
+    }
+
+    case "DIVIDEND_OR_INTEREST": {
+      // Determine subtype from description and net amount
+      let txType;
+      if (net < 0 || descU.includes("TAX") || descU.includes("WITHHOLD") || descU.includes("BACKUP")) {
+        txType = "TAX_WITHHOLDING";
+      } else if (descU.includes("INTEREST") || descU.includes("MONEY MARKET") || descU.includes("MARGIN INT")) {
+        txType = "INTEREST";
+      } else {
+        txType = "DIVIDEND";
+      }
+      // Extract underlying symbol from equity instrument if present
+      const eqItem = items.find(i => i.instrument?.assetType === "EQUITY");
+      const symbol = eqItem?.instrument?.symbol?.toUpperCase()
+        ?? (txType === "INTEREST" ? "INTEREST" : "CASH");
+      return {
+        ...base,
+        symbol, transaction_type: txType, asset_type: "CASH",
+        quantity: null, price: null,
+      };
+    }
+
+    case "JOURNAL":
+      return {
+        ...base,
+        symbol: "CASH", transaction_type: "JOURNAL", asset_type: "CASH",
+        quantity: null, price: null,
+      };
+
+    case "RECEIVE_AND_DELIVER": {
+      const eqItem = items.find(i => i.instrument?.assetType === "EQUITY");
+      if (eqItem) {
+        const qty = eqItem.amount ?? 0;
+        return {
+          ...base,
+          symbol:           eqItem.instrument.symbol?.toUpperCase() ?? "CASH",
+          transaction_type: qty >= 0 ? "TRANSFER_IN" : "TRANSFER_OUT",
+          asset_type:       "EQUITY",
+          quantity:         Math.abs(qty),
+          price:            eqItem.price ?? null,
+        };
+      }
+      // Cash-based receive/deliver
+      return {
+        ...base,
+        symbol: "CASH", transaction_type: net >= 0 ? "TRANSFER_IN" : "TRANSFER_OUT",
+        asset_type: "CASH", quantity: null, price: null,
+      };
+    }
+
+    case "ELECTRONIC_FUND":
+      // ACH — direction determined by net amount
+      return {
+        ...base,
+        symbol: "CASH", transaction_type: net >= 0 ? "DEPOSIT" : "WITHDRAWAL",
+        asset_type: "CASH", quantity: null, price: null,
+      };
+
+    case "WIRE_IN":
+      return {
+        ...base,
+        symbol: "CASH", transaction_type: "DEPOSIT",
+        asset_type: "CASH", quantity: null, price: null,
+      };
+
+    case "WIRE_OUT":
+      return {
+        ...base,
+        symbol: "CASH", transaction_type: "WITHDRAWAL",
+        asset_type: "CASH", quantity: null, price: null,
+      };
+
+    default:
+      return null;
+  }
 }
 
 // ── ETrade ────────────────────────────────────────────────────────────────────
@@ -121,7 +220,6 @@ function buildEtradeAuthHeader(method, url, consumerKey, consumerSecret, accessT
 }
 
 async function getEtradeTokens() {
-  // Try Supabase first, fall back to env vars
   try {
     const rows = await sbGet("col_prefs?select=cols&id=eq.etrade_tokens");
     const t    = rows?.[0]?.cols;
@@ -132,7 +230,6 @@ async function getEtradeTokens() {
   } catch (e) {
     console.warn("[ ETrade ] Supabase token read failed:", e.message);
   }
-  // Fall back to env vars
   const accessToken       = process.env.ETRADE_ACCESS_TOKEN;
   const accessTokenSecret = process.env.ETRADE_ACCESS_TOKEN_SECRET;
   if (accessToken && accessTokenSecret) {
@@ -160,35 +257,133 @@ function fmtEtradeDate(d) {
   return `${String(et.getMonth() + 1).padStart(2, "0")}${String(et.getDate()).padStart(2, "0")}${et.getFullYear()}`;
 }
 
-function parseEtradeEquityTx(tx, accountName) {
+function etradeIsoDate(tx) {
+  if (!tx.transactionDate) return null;
+  const d = new Date(tx.transactionDate).toLocaleString("en-CA", { timeZone: "America/New_York" }).slice(0, 10);
+  return new Date(d + "T16:00:00Z").toISOString();
+}
+
+function parseEtradeTx(tx, accountName) {
+  const id   = String(tx.transactionId);
   const b    = tx.brokerage ?? {};
   const prod = b.product    ?? {};
+  const net  = tx.amount    ?? 0;
+  const desc = tx.description ?? null;
+  const descU = (desc ?? "").toUpperCase();
+  const txType = tx.transactionType ?? "";
 
-  // Equity only, buys/sells only
-  if (prod.securityType !== "EQ") return null;
-  if (!["Bought", "Sold"].includes(tx.transactionType)) return null;
-
-  const tradeDate = tx.transactionDate
-    ? new Date(tx.transactionDate).toLocaleString("en-CA", { timeZone: "America/New_York" }).slice(0, 10)
-    : null;
-
-  const qty    = Math.abs(b.quantity ?? 0);
-  const price  = b.price ?? null;
-  const amount = tx.amount ?? 0;
-
-  return {
-    etrade_transaction_id: String(tx.transactionId),
-    symbol:           prod.symbol?.toUpperCase() ?? null,
-    transaction_type: tx.transactionType === "Bought" ? "BUY" : "SELL",
-    asset_type:       "EQUITY",
-    quantity:         qty,
-    price,
-    net_amount:       amount,
-    trade_date:       tradeDate ? new Date(tradeDate + "T16:00:00Z").toISOString() : null,
-    account:          accountName,
-    description:      tx.description ?? null,
-    raw:              tx,
+  const base = {
+    etrade_transaction_id: id,
+    net_amount:  net,
+    trade_date:  etradeIsoDate(tx),
+    account:     accountName,
+    description: desc,
+    raw:         tx,
   };
+
+  // ── Equity buy / sell ──────────────────────────────────────────────────────
+  if (prod.securityType === "EQ" && (txType === "Bought" || txType === "Sold")) {
+    return {
+      ...base,
+      symbol:           prod.symbol?.toUpperCase() ?? null,
+      transaction_type: txType === "Bought" ? "BUY" : "SELL",
+      asset_type:       "EQUITY",
+      quantity:         Math.abs(b.quantity ?? 0),
+      price:            b.price ?? null,
+    };
+  }
+
+  // ── Dividend ───────────────────────────────────────────────────────────────
+  if (txType === "Dividend" || txType === "Dividends" || txType === "DIVIDEND") {
+    const isTax = net < 0 || descU.includes("TAX") || descU.includes("WITHHOLD");
+    return {
+      ...base,
+      symbol:           prod.symbol?.toUpperCase() ?? "CASH",
+      transaction_type: isTax ? "TAX_WITHHOLDING" : "DIVIDEND",
+      asset_type:       "CASH", quantity: null, price: null,
+    };
+  }
+
+  // ── Tax withholding (explicit type) ───────────────────────────────────────
+  if (txType === "Tax Withheld" || txType === "Tax Withholding" || descU.includes("TAX WITHHELD")) {
+    return {
+      ...base,
+      symbol:           prod.symbol?.toUpperCase() ?? "CASH",
+      transaction_type: "TAX_WITHHOLDING",
+      asset_type:       "CASH", quantity: null, price: null,
+    };
+  }
+
+  // ── Interest ───────────────────────────────────────────────────────────────
+  if (txType === "Interest" || txType === "INTEREST" || txType === "Money Market Interest"
+      || descU.includes("INTEREST") || descU.includes("MONEY MARKET")) {
+    return {
+      ...base,
+      symbol:           prod.symbol?.toUpperCase() ?? "INTEREST",
+      transaction_type: net < 0 ? "TAX_WITHHOLDING" : "INTEREST",
+      asset_type:       "CASH", quantity: null, price: null,
+    };
+  }
+
+  // ── Journal / adjustment ──────────────────────────────────────────────────
+  if (txType === "Journal" || txType === "Journaling" || txType === "Adjustment") {
+    return {
+      ...base,
+      symbol: "CASH", transaction_type: "JOURNAL",
+      asset_type: "CASH", quantity: null, price: null,
+    };
+  }
+
+  // ── Stock transfer (assignment / exercise / ACAT) ─────────────────────────
+  if (txType === "Transfer" || txType === "Receipt" || txType === "Delivery"
+      || txType === "Stock Receipt" || txType === "Stock Delivery") {
+    if (prod.securityType === "EQ" && prod.symbol) {
+      return {
+        ...base,
+        symbol:           prod.symbol.toUpperCase(),
+        transaction_type: net >= 0 ? "TRANSFER_IN" : "TRANSFER_OUT",
+        asset_type:       "EQUITY",
+        quantity:         Math.abs(b.quantity ?? 0),
+        price:            b.price ?? null,
+      };
+    }
+    return {
+      ...base,
+      symbol: "CASH", transaction_type: net >= 0 ? "TRANSFER_IN" : "TRANSFER_OUT",
+      asset_type: "CASH", quantity: null, price: null,
+    };
+  }
+
+  // ── Deposit / withdrawal ──────────────────────────────────────────────────
+  if (txType === "Deposit" || txType === "Wire transfer" || txType === "Electronic transfer"
+      || txType === "ACH" || txType === "Check") {
+    return {
+      ...base,
+      symbol: "CASH", transaction_type: net >= 0 ? "DEPOSIT" : "WITHDRAWAL",
+      asset_type: "CASH", quantity: null, price: null,
+    };
+  }
+
+  if (txType === "Withdrawal") {
+    return {
+      ...base,
+      symbol: "CASH", transaction_type: "WITHDRAWAL",
+      asset_type: "CASH", quantity: null, price: null,
+    };
+  }
+
+  // Unknown — skip; run with DEBUG=1 to see what's being skipped
+  if (process.env.DEBUG === "1") {
+    console.log(`  [skip] ETrade transactionType="${txType}" securityType="${prod.securityType}" amount=${net} desc="${desc}"`);
+  }
+  return null;
+}
+
+// ── Tally helper ──────────────────────────────────────────────────────────────
+function tally(rows) {
+  const counts = {};
+  for (const r of rows) counts[r.transaction_type] = (counts[r.transaction_type] ?? 0) + 1;
+  return Object.entries(counts).sort((a,b)=>b[1]-a[1]).map(([t,n])=>`${t}:${n}`).join("  ");
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -201,19 +396,19 @@ async function main() {
     console.log("[ Schwab ] Fetching access token from Supabase...");
     const token = await getSchwabToken();
 
-    console.log("[ Schwab ] Fetching transactions...");
+    console.log(`[ Schwab ] Fetching transactions (types: ${SCHWAB_TX_TYPES})...`);
     const rawTxs = await fetchSchwabTransactions(token);
     console.log(`[ Schwab ] ${rawTxs.length} raw transactions retrieved`);
 
-    const rows = rawTxs.map(parseSchwabEquityTx).filter(Boolean);
-    console.log(`[ Schwab ] ${rows.length} equity transactions parsed`);
+    const rows = rawTxs.map(parseSchwabTx).filter(Boolean);
+    console.log(`[ Schwab ] ${rows.length} parsed  |  ${tally(rows)}`);
 
     if (rows.length) {
       await sbUpsert("stock_transactions", rows, "schwab_transaction_id");
       schwabCount = rows.length;
-      console.log(`[ Schwab ] ✓ Upserted ${schwabCount} rows into stock_transactions`);
+      console.log(`[ Schwab ] ✓ Upserted ${schwabCount} rows`);
     } else {
-      console.log("[ Schwab ] No equity transactions to import");
+      console.log("[ Schwab ] No transactions to import");
     }
   } catch (e) {
     console.error("[ Schwab ] ERROR:", e.message);
@@ -223,10 +418,9 @@ async function main() {
   let etradeCount = 0;
   try {
     console.log("\n[ ETrade ] Fetching tokens from Supabase...");
-    const tokens     = await getEtradeTokens();
-    const consumerKey    = process.env.ETRADE_CONSUMER_KEY ?? process.env.VITE_ETRADE_CONSUMER_KEY;
-    // Use VITE_ secret — confirmed to match what the production app used to authorize
-    const usedSecret     = process.env.VITE_ETRADE_CONSUMER_SECRET ?? process.env.ETRADE_CONSUMER_SECRET;
+    const tokens = await getEtradeTokens();
+    const consumerKey = process.env.ETRADE_CONSUMER_KEY ?? process.env.VITE_ETRADE_CONSUMER_KEY;
+    const usedSecret  = process.env.VITE_ETRADE_CONSUMER_SECRET ?? process.env.ETRADE_CONSUMER_SECRET;
     if (!consumerKey || !usedSecret) throw new Error("ETRADE_CONSUMER_KEY / VITE_ETRADE_CONSUMER_SECRET not in .env.local");
 
     console.log("[ ETrade ] Fetching account list...");
@@ -251,8 +445,8 @@ async function main() {
           consumerKey, usedSecret, tokens.accessToken, tokens.accessTokenSecret
         );
         const txList = data?.TransactionListResponse?.Transaction ?? [];
-        const parsed = txList.map(tx => parseEtradeEquityTx(tx, accountName)).filter(Boolean);
-        console.log(`[ ETrade ] ${accountName}: ${txList.length} raw → ${parsed.length} equity tx`);
+        const parsed = txList.map(tx => parseEtradeTx(tx, accountName)).filter(Boolean);
+        console.log(`[ ETrade ] ${accountName}: ${txList.length} raw → ${parsed.length} parsed  |  ${tally(parsed)}`);
         allRows.push(...parsed);
       } catch (e) {
         if (e.message?.includes("204")) {
@@ -266,9 +460,9 @@ async function main() {
     if (allRows.length) {
       await sbUpsert("stock_transactions", allRows, "etrade_transaction_id");
       etradeCount = allRows.length;
-      console.log(`[ ETrade ] ✓ Upserted ${etradeCount} rows into stock_transactions`);
+      console.log(`[ ETrade ] ✓ Upserted ${etradeCount} rows`);
     } else {
-      console.log("[ ETrade ] No equity transactions to import");
+      console.log("[ ETrade ] No transactions to import");
     }
   } catch (e) {
     console.error("[ ETrade ] ERROR:", e.message);
@@ -279,6 +473,7 @@ async function main() {
   console.log(`  Schwab:  ${schwabCount} records`);
   console.log(`  ETrade:  ${etradeCount} records`);
   console.log(`  Total:   ${schwabCount + etradeCount} records upserted into stock_transactions\n`);
+  console.log(`Tip: run with DEBUG=1 to log skipped ETrade transaction types.\n`);
 }
 
 main().catch(e => { console.error("Fatal:", e.message); process.exit(1); });
