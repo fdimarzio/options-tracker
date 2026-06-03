@@ -9,8 +9,7 @@ const SUPABASE_KEY = process.env.VITE_SUPABASE_ANON_KEY;
 const SCHWAB_BASE  = "https://api.schwabapi.com";
 const ETRADE_BASE  = "https://api.etrade.com";
 
-const SCHWAB_ACCOUNT_HASH  = "757F62A9417DA1B75005EAC7370D033ABF819061E60384AA3B0F68A0AAE94961";
-const SCHWAB_ACCOUNT_LABEL = "Schwab 3866";
+// Fetched dynamically — no longer hardcoded to a single account
 
 const ETRADE_ACCOUNT_NAMES = {
   "227156917": "ETrade 6917",
@@ -29,6 +28,11 @@ const SCHWAB_TX_TYPES = [
   "ELECTRONIC_FUND",
   "WIRE_IN",
   "WIRE_OUT",
+  "ACH_RECEIPT",
+  "ACH_DISBURSEMENT",
+  "CASH_RECEIPT",
+  "CASH_DISBURSEMENT",
+  "MONEY_MARKET",
 ].join(",");
 
 // ── Supabase ──────────────────────────────────────────────────────────────────
@@ -64,16 +68,28 @@ async function getSchwabToken() {
   return t.accessToken;
 }
 
-async function fetchSchwabTransactions(token) {
+async function fetchSchwabAccounts(token) {
+  const r = await fetch(`${SCHWAB_BASE}/trader/v1/accounts/accountNumbers`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+  });
+  if (!r.ok) throw new Error(`Schwab accountNumbers: ${r.status} ${await r.text()}`);
+  const data = await r.json();
+  return (Array.isArray(data) ? data : []).map(a => ({
+    hash:  a.hashValue,
+    label: `Schwab ${String(a.accountNumber ?? "").slice(-4)}`,
+  }));
+}
+
+async function fetchSchwabTransactionsForAccount(token, hash) {
   const today    = new Date();
   const startUTC = START_DATE + "T05:00:00.000Z";
   const endUTC   = today.toISOString();
 
-  const url = `${SCHWAB_BASE}/trader/v1/accounts/${SCHWAB_ACCOUNT_HASH}/transactions?` +
+  const url = `${SCHWAB_BASE}/trader/v1/accounts/${hash}/transactions?` +
     new URLSearchParams({ types: SCHWAB_TX_TYPES, startDate: startUTC, endDate: endUTC });
 
   const r = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } });
-  if (!r.ok) throw new Error(`Schwab transactions: ${r.status} ${await r.text()}`);
+  if (!r.ok) throw new Error(`Schwab transactions (${hash.slice(0,8)}...): ${r.status} ${await r.text()}`);
   const data = await r.json();
   return Array.isArray(data) ? data : (data?.transactions ?? []);
 }
@@ -83,7 +99,7 @@ function schwabIsoDate(tx) {
   return d ? new Date(d + "T16:00:00Z").toISOString() : null;
 }
 
-function parseSchwabTx(tx) {
+function parseSchwabTx(tx, accountLabel) {
   const id   = String(tx.activityId ?? tx.transactionId ?? "");
   const items = tx.transferItems ?? [];
   const net   = tx.netAmount ?? 0;
@@ -94,7 +110,7 @@ function parseSchwabTx(tx) {
     schwab_transaction_id: id,
     net_amount:  net,
     trade_date:  schwabIsoDate(tx),
-    account:     SCHWAB_ACCOUNT_LABEL,
+    account:     accountLabel,
     description: desc,
     raw:         tx,
   };
@@ -103,7 +119,15 @@ function parseSchwabTx(tx) {
     case "TRADE": {
       // Only capture EQUITY trades — option trades live in contracts table
       const eqItem = items.find(i => i.instrument?.assetType === "EQUITY");
-      if (!eqItem) return null;
+      if (!eqItem) {
+        if (process.env.DEBUG === "1") {
+          const types = items.map(i => i.instrument?.assetType).filter(Boolean).join(",");
+          if (!types.includes("OPTION")) {
+            console.log(`  [schwab skip] TRADE non-equity types="${types}" net=${net} desc="${(tx.description ?? "").slice(0, 60)}"`);
+          }
+        }
+        return null;
+      }
       const qty = eqItem.amount ?? 0;
       if (qty === 0) return null;
       return {
@@ -166,7 +190,16 @@ function parseSchwabTx(tx) {
     }
 
     case "ELECTRONIC_FUND":
-      // ACH — direction determined by net amount
+    case "ACH_RECEIPT":
+    case "CASH_RECEIPT":
+      return {
+        ...base,
+        symbol: "CASH", transaction_type: net >= 0 ? "DEPOSIT" : "WITHDRAWAL",
+        asset_type: "CASH", quantity: null, price: null,
+      };
+
+    case "ACH_DISBURSEMENT":
+    case "CASH_DISBURSEMENT":
       return {
         ...base,
         symbol: "CASH", transaction_type: net >= 0 ? "DEPOSIT" : "WITHDRAWAL",
@@ -187,7 +220,17 @@ function parseSchwabTx(tx) {
         asset_type: "CASH", quantity: null, price: null,
       };
 
+    case "MONEY_MARKET":
+      return {
+        ...base,
+        symbol: "CASH", transaction_type: net >= 0 ? "INTEREST" : "WITHDRAWAL",
+        asset_type: "CASH", quantity: null, price: null,
+      };
+
     default:
+      if (process.env.DEBUG === "1") {
+        console.log(`  [schwab skip] type="${tx.type}" subType="${tx.subType ?? ""}" net=${net} desc="${(tx.description ?? "").slice(0, 60)}"`);
+      }
       return null;
   }
 }
@@ -426,16 +469,25 @@ async function main() {
     console.log("[ Schwab ] Fetching access token from Supabase...");
     const token = await getSchwabToken();
 
+    const accounts = await fetchSchwabAccounts(token);
+    console.log(`[ Schwab ] ${accounts.length} account(s): ${accounts.map(a => a.label).join(", ")}`);
     console.log(`[ Schwab ] Fetching transactions (types: ${SCHWAB_TX_TYPES})...`);
-    const rawTxs = await fetchSchwabTransactions(token);
-    console.log(`[ Schwab ] ${rawTxs.length} raw transactions retrieved`);
 
-    const rows = rawTxs.map(parseSchwabTx).filter(Boolean);
-    console.log(`[ Schwab ] ${rows.length} parsed  |  ${tally(rows)}`);
+    const allRows = [];
+    for (const acct of accounts) {
+      try {
+        const rawTxs = await fetchSchwabTransactionsForAccount(token, acct.hash);
+        const parsed = rawTxs.map(tx => parseSchwabTx(tx, acct.label)).filter(Boolean);
+        console.log(`[ Schwab ] ${acct.label}: ${rawTxs.length} raw → ${parsed.length} parsed  |  ${tally(parsed)}`);
+        allRows.push(...parsed);
+      } catch (e) {
+        console.warn(`[ Schwab ] ${acct.label} failed:`, e.message);
+      }
+    }
 
-    if (rows.length) {
-      await sbUpsert("stock_transactions", rows, "schwab_transaction_id");
-      schwabCount = rows.length;
+    if (allRows.length) {
+      await sbUpsert("stock_transactions", allRows, "schwab_transaction_id");
+      schwabCount = allRows.length;
       console.log(`[ Schwab ] ✓ Upserted ${schwabCount} rows`);
     } else {
       console.log("[ Schwab ] No transactions to import");
