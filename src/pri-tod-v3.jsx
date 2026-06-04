@@ -658,9 +658,11 @@ function BalanceHistory({ supabase, cashData, onSave }) {
   const withChanges = rows.map((r,i) => {
     const prev = rows[i-1];
     const mom  = prev?.total>0 && r.total>0 ? ((r.total-prev.total)/prev.total*100) : null;
-    const janKey = r.mk.slice(0,4)+"-01";
-    const janRow = rows.find(x=>x.mk===janKey);
-    const ytd  = janRow?.total>0 && r.total>0 ? ((r.total-janRow.total)/janRow.total*100) : null;
+    // YTD: use first month of the year that has a non-zero balance as the base
+    const yearPrefix = r.mk.slice(0,4);
+    const yearRows   = rows.filter(x=>x.mk.startsWith(yearPrefix) && x.total>0);
+    const baseRow    = yearRows[0] || null;
+    const ytd  = baseRow && r.total>0 && baseRow.mk !== r.mk ? ((r.total-baseRow.total)/baseRow.total*100) : null;
     return {...r, mom, ytd};
   });
 
@@ -4120,9 +4122,10 @@ function ImportDailyTab({ contracts, supabase }) {
                   <span style={{color:"#3a4050", fontSize:9}}>{c.createdAt ? new Date(c.createdAt).toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit",hour12:true,timeZone:"America/New_York"}) : "—"}</span>
                 </div>
               ))}
-              <div style={{padding:"6px 12px", borderTop:"1px solid #21262d", display:"flex", gap:16}}>
+              <div style={{padding:"6px 12px", borderTop:"1px solid #21262d", display:"flex", gap:16, flexWrap:"wrap"}}>
                 <span style={{fontSize:9, color:"#8b949e"}}>Total premium: <b style={{color:"#3fb950"}}>{fSign(todayContracts.reduce((s,c)=>s+(+c.premium||0),0))}</b></span>
                 <span style={{fontSize:9, color:"#8b949e"}}>Contracts: <b style={{color:"#e6edf3"}}>{todayContracts.reduce((s,c)=>s+(+c.qty||0),0)}</b></span>
+                {todayCloses.length > 0 && <span style={{fontSize:9, color:"#8b949e"}}>P&amp;L: <b style={{color:todayProfit>=0?"#3fb950":"#ff4560"}}>{todayProfit>=0?"+":""}{todayProfit.toFixed(2)}</b></span>}
               </div>
             </>
         }
@@ -4220,6 +4223,10 @@ export default function App() {
   const [fDateFrom,setFDateFrom] = useState("");
   const [fDateTo,setFDateTo]     = useState("");
   const [fOriginals,setFOriginals] = useState(true); // hide linked close records by default
+  const [fCType,    setFCType]     = useState("All"); // Call / Put
+  const [fCOptType, setFCOptType]  = useState("All"); // STO / BTO / BTC / STC
+  const [fStrategy, setFStrategy]  = useState("All"); // strategy name
+  const [fAuto,     setFAuto]      = useState("All"); // auto / manual
   const [gTicker,setGTicker]     = useState("All");
   const [gOptType,setGOptType]   = useState("All");
   const [gType,setGType]         = useState("All");
@@ -4629,7 +4636,16 @@ export default function App() {
   // Compute OTM% and target profit % for a contract — uses matrix if available, falls back to bands
   const getContractBand = (c) => {
     const refPrice = c.priceAtExecution || c.currentPrice;
-    if (!refPrice || !c.strike) return null;
+    if (!refPrice || !c.strike) {
+      // Fallback: compute targetClose/targetPerShare from premium alone
+      if (!c.premium || !c.qty) return null;
+      const isBTO = c.optType === "BTO";
+      const premPerShare = Math.abs(c.premium) / (c.qty||1) / 100;
+      const tgtPct = 65;
+      const targetPerShare = isBTO ? premPerShare*(1+tgtPct/100) : premPerShare*(1-tgtPct/100);
+      const targetClose    = targetPerShare * 100 * (c.qty||1);
+      return { otmPct: null, bandLabel: "—", bandColor: "#555", tgtPct, targetPerShare, targetClose, isBTO };
+    }
     const otmPct = c.type==="Put"
       ? ((refPrice - c.strike) / refPrice) * 100
       : ((c.strike - refPrice) / refPrice) * 100;
@@ -5413,6 +5429,11 @@ export default function App() {
     if (gType    !== "All" && c.type    !== gType)    return false;
     if (fDateFrom && (c.dateExec||"") < fDateFrom) return false;
     if (fDateTo   && (c.dateExec||"") > fDateTo)   return false;
+    if (fCType    !== "All" && c.type    !== fCType)    return false;
+    if (fCOptType !== "All" && c.optType !== fCOptType) return false;
+    if (fStrategy !== "All" && (c.strategy||"None") !== fStrategy) return false;
+    if (fAuto === "yes" && c.openMethod !== "auto")  return false;
+    if (fAuto === "no"  && c.openMethod === "auto")  return false;
     return true;
   }).sort((a,b) => {
     let av = a[sortKey], bv = b[sortKey];
@@ -6605,6 +6626,8 @@ ${JSON.stringify(summary, null, 1)}`;
         </div>
         <div style={{display:"flex",alignItems:"center",gap:5,flexShrink:0,marginLeft:"auto"}}>
           <div onClick={()=>setShowProfile(true)} style={{width:26,height:26,borderRadius:"50%",background:`${authUser.color}20`,border:`2px solid ${authUser.color}50`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"monospace",fontWeight:700,color:authUser.color,fontSize:9,flexShrink:0,cursor:"pointer"}} title={authUser.name}>{authUser.initials}</div>
+          <button className="hm" onClick={()=>{const v=Math.min(+(uiScale+0.1).toFixed(1),1.3);setUiScale(v);try{localStorage.setItem("pri_ui_scale",v)}catch{}}} title="Increase text size" style={{background:"transparent",border:"1px solid #1c2128",borderRadius:4,padding:"2px 6px",fontSize:10,color:"#555",fontFamily:"monospace",lineHeight:1.5}}>A+</button>
+          <button className="hm" onClick={()=>{const v=Math.max(+(uiScale-0.1).toFixed(1),0.8);setUiScale(v);try{localStorage.setItem("pri_ui_scale",v)}catch{}}} title="Decrease text size" style={{background:"transparent",border:"1px solid #1c2128",borderRadius:4,padding:"2px 6px",fontSize:10,color:"#555",fontFamily:"monospace",lineHeight:1.5}}>A-</button>
           <div ref={menuRef} style={{position:"relative"}}>
             <button onClick={()=>setShowMenu(p=>!p)} style={{background:"transparent",border:"1px solid #1c2128",borderRadius:5,padding:"4px 6px",display:"flex",flexDirection:"column",gap:2.5,alignItems:"center",justifyContent:"center",width:28,height:28}}>
               {[0,1,2].map(i=><div key={i} style={{width:12,height:1.5,background:"#555",borderRadius:1}}/>)}
@@ -7270,19 +7293,36 @@ ${JSON.stringify(summary, null, 1)}`;
                 </div>
               );
             })()}
-            <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
-              <select value={fStatus} onChange={e=>setFStatus(e.target.value)} style={{width:85,fontSize:11,padding:"3px 5px"}}><option value="All">All</option><option value="Open">Open</option><option value="Closed">Closed</option></select>
-              <select value={fAcct} onChange={e=>setFAcct(e.target.value)} style={{width:100,fontSize:11,padding:"3px 5px"}}><option value="All">All Accounts</option><option>Schwab</option><option>Etrade</option></select>
-              <input type="text" placeholder="Search…" value={fSearch} onChange={e=>setFSearch(e.target.value)} style={{width:100,fontSize:11,padding:"3px 5px"}}/>
-              <input type="date" value={fDateFrom} onChange={e=>setFDateFrom(e.target.value)} style={{width:120,fontSize:11,padding:"3px 5px"}} title="From date"/>
-              <input type="date" value={fDateTo}   onChange={e=>setFDateTo(e.target.value)}   style={{width:120,fontSize:11,padding:"3px 5px"}} title="To date"/>
-              {(fDateFrom||fDateTo) && <button onClick={()=>{setFDateFrom("");setFDateTo("");}} style={{background:"#ff456018",color:"#ff4560",border:"1px solid #ff456030",borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"monospace"}}>✕ dates</button>}
-              <button onClick={()=>setFOriginals(p=>!p)}
-                style={{background:fOriginals?"#00ff8814":"#58a6ff14",color:fOriginals?"#00ff88":"#58a6ff",border:`1px solid ${fOriginals?"#00ff8830":"#58a6ff30"}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"monospace",whiteSpace:"nowrap"}}>
-                {fOriginals?"Originals only":"All records"}
-              </button>
-              <span style={{fontSize:9,color:"#3a4050",fontFamily:"monospace"}}>{sortedFiltered.length} rows</span>
-            </div>
+            {(() => {
+              const strategyOpts = ["All","None",...[...new Set(contracts.map(c=>c.strategy).filter(Boolean))].sort()];
+              const acctOpts     = ["All",...[...new Set(contracts.map(c=>c.account).filter(Boolean))].sort()];
+              const hasAdv = fCType!=="All"||fCOptType!=="All"||fStrategy!=="All"||fAuto!=="All";
+              const sel = {fontSize:11,padding:"3px 5px"};
+              return (
+                <>
+                  <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
+                    <select value={fStatus} onChange={e=>setFStatus(e.target.value)} style={{...sel,width:85}}><option value="All">All</option><option value="Open">Open</option><option value="Closed">Closed</option></select>
+                    <select value={fAcct}   onChange={e=>setFAcct(e.target.value)}   style={{...sel,width:110}}>{acctOpts.map(a=><option key={a} value={a}>{a==="All"?"All Accounts":a}</option>)}</select>
+                    <input type="text" placeholder="Search…" value={fSearch} onChange={e=>setFSearch(e.target.value)} style={{...sel,width:100}}/>
+                    <input type="date" value={fDateFrom} onChange={e=>setFDateFrom(e.target.value)} style={{...sel,width:120}} title="From date"/>
+                    <input type="date" value={fDateTo}   onChange={e=>setFDateTo(e.target.value)}   style={{...sel,width:120}} title="To date"/>
+                    {(fDateFrom||fDateTo) && <button onClick={()=>{setFDateFrom("");setFDateTo("");}} style={{background:"#ff456018",color:"#ff4560",border:"1px solid #ff456030",borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"monospace"}}>✕ dates</button>}
+                    <button onClick={()=>setFOriginals(p=>!p)}
+                      style={{background:fOriginals?"#00ff8814":"#58a6ff14",color:fOriginals?"#00ff88":"#58a6ff",border:`1px solid ${fOriginals?"#00ff8830":"#58a6ff30"}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"monospace",whiteSpace:"nowrap"}}>
+                      {fOriginals?"Originals only":"All records"}
+                    </button>
+                    <span style={{fontSize:9,color:"#3a4050",fontFamily:"monospace"}}>{sortedFiltered.length} rows</span>
+                  </div>
+                  <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
+                    <select value={fCType}    onChange={e=>setFCType(e.target.value)}    style={{...sel,width:80}}><option value="All">Call/Put</option><option value="Call">Call</option><option value="Put">Put</option></select>
+                    <select value={fCOptType} onChange={e=>setFCOptType(e.target.value)} style={{...sel,width:85}}><option value="All">STO/BTO…</option><option value="STO">STO</option><option value="BTO">BTO</option><option value="BTC">BTC</option><option value="STC">STC</option></select>
+                    <select value={fStrategy} onChange={e=>setFStrategy(e.target.value)} style={{...sel,width:160}}>{strategyOpts.map(s=><option key={s} value={s}>{s==="All"?"All Strategies":s}</option>)}</select>
+                    <select value={fAuto}     onChange={e=>setFAuto(e.target.value)}     style={{...sel,width:95}}><option value="All">Auto/Manual</option><option value="yes">Auto only</option><option value="no">Manual only</option></select>
+                    {hasAdv && <button onClick={()=>{setFCType("All");setFCOptType("All");setFStrategy("All");setFAuto("All");}} style={{background:"#ff456018",color:"#ff4560",border:"1px solid #ff456030",borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"monospace"}}>✕ filters</button>}
+                  </div>
+                </>
+              );
+            })()}
 
             {/* Contracts table */}
             <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8}} className="ms">
