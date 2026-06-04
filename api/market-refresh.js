@@ -1105,6 +1105,36 @@ async function runChaseLoop(token, sbHeaders) {
         const bid = q.bidPrice ?? 0;
         const ask = q.askPrice ?? 0;
 
+        // If Schwab shows the order as filled, stop chasing and mark accordingly
+        if (order.schwab_order_id) {
+          const hash = order.account?.includes("ETrade") ? null : "757F62A9417DA1B75005EAC7370D033ABF819061E60384AA3B0F68A0AAE94961";
+          if (hash) {
+            const statusRes = await fetch(
+              `${SCHWAB_BASE}/trader/v1/accounts/${hash}/orders/${order.schwab_order_id}`,
+              { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } }
+            ).catch(() => null);
+            if (statusRes?.ok) {
+              const schwabOrder = await statusRes.json().catch(() => null);
+              if (schwabOrder?.status === "FILLED") {
+                const leg = schwabOrder.orderActivityCollection?.[0];
+                await fetch(`${SUPABASE_URL}/rest/v1/trade_orders?id=eq.${order.id}`, {
+                  method: "PATCH",
+                  headers: { ...sbHeaders, Prefer: "return=minimal" },
+                  body: JSON.stringify({
+                    status:       "filled",
+                    chase_active: false,
+                    filled_at:    new Date().toISOString(),
+                    fill_price:   leg?.executionLegs?.[0]?.price ?? null,
+                    fill_qty:     schwabOrder.filledQuantity ?? order.qty,
+                  }),
+                });
+                console.log(`[chase] order ${order.id} already FILLED at Schwab — chase stopped`);
+                continue;
+              }
+            }
+          }
+        }
+
         // For STO (selling): target just below ask so we're most competitive
         // For BTC/BTO (buying): target just above bid
         const isSell    = ["STO","STC"].includes(order.opt_type);
@@ -2712,10 +2742,11 @@ export default async function handler(req, res) {
                   if (schwabOrder.status === "FILLED") {
                     const leg = schwabOrder.orderActivityCollection?.[0];
                     Object.assign(patch, {
-                      status:     "filled",
-                      filled_at:  lastRefresh,
-                      fill_price: leg?.executionLegs?.[0]?.price ?? null,
-                      fill_qty:   schwabOrder.filledQuantity ?? order.qty,
+                      status:       "filled",
+                      chase_active: false,
+                      filled_at:    lastRefresh,
+                      fill_price:   leg?.executionLegs?.[0]?.price ?? null,
+                      fill_qty:     schwabOrder.filledQuantity ?? order.qty,
                     });
                     filledCount++;
                     sendPushover(

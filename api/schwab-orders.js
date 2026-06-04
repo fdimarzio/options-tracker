@@ -297,7 +297,7 @@ export default async function handler(req, res) {
         let patch = { raw_response: schwabOrder };
         if (schwabOrder.status === "FILLED") {
           const leg = schwabOrder.orderActivityCollection?.[0];
-          patch = { ...patch, status: "filled", filled_at: new Date().toISOString(), fill_price: leg?.executionLegs?.[0]?.price ?? null, fill_qty: schwabOrder.filledQuantity ?? order.qty };
+          patch = { ...patch, status: "filled", chase_active: false, filled_at: new Date().toISOString(), fill_price: leg?.executionLegs?.[0]?.price ?? null, fill_qty: schwabOrder.filledQuantity ?? order.qty };
           sendPushover(`✅ Order Filled: ${order.ticker}`, `${orderSummary(order)}\nFill price: $${patch.fill_price?.toFixed(2) ?? "—"} · ${patch.fill_qty} contracts`, `${APP_URL}/?tab=contracts`, 1).catch(()=>{});
         } else if (["CANCELED","REJECTED","EXPIRED","REPLACED"].includes(schwabOrder.status)) {
           patch = { ...patch, status: "cancelled", cancelled_at: new Date().toISOString() };
