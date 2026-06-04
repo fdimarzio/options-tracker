@@ -5002,8 +5002,10 @@ export default function App() {
           return updated;
         });
         // Update Schwab cash
-        if (cash > 0) updateCash("schwab", cash.toFixed(2));
-        // Auto-save current month Schwab balance (cash + stock value) to balance_history
+        // Store full liquidation value as the persistent Schwab balance (not just buying power)
+        if (accountValue > 0) updateCash("schwab", accountValue.toFixed(2));
+        else if (cash > 0)   updateCash("schwab", cash.toFixed(2));
+        // Auto-save current month Schwab balance (liquidation value) to balance_history
         if (accountValue > 0) {
           setSchwabAccountValue(accountValue);
           const mk = new Date().toISOString().slice(0,7);
@@ -5025,6 +5027,11 @@ export default function App() {
         setEtradeMsg("Fetching ETrade positions…");
         const etRes  = await fetch("/api/etrade?action=positions&secret=CronSecret2026!");
         const etData = await etRes.json();
+        // Auto-populate ETrade account value from API response
+        if (etData?.accountValue > 0) {
+          updateCash("etrade", etData.accountValue.toFixed(2));
+          console.log("[etrade] accountValue:", etData.accountValue);
+        }
         if (etData?.positions?.length) {
           // Group by symbol — sum across both ETrade accounts, floor to whole shares
           const etradeShares = {};
@@ -8923,7 +8930,7 @@ ${JSON.stringify(summary, null, 1)}`;
                 {/* Schwab cash — live from API */}
                 <div style={{background:"#0a0e14",border:"1px solid #58a6ff30",borderRadius:8,padding:"8px 12px",minWidth:120,display:"flex",flexDirection:"column",gap:4}}>
                   <div style={{display:"flex",alignItems:"center",gap:5}}>
-                    <span style={{fontSize:7,color:"#58a6ff",fontFamily:"monospace",letterSpacing:"0.08em"}}>SCHWAB CASH</span>
+                    <span style={{fontSize:7,color:"#58a6ff",fontFamily:"monospace",letterSpacing:"0.08em"}}>SCHWAB ACCT</span>
                     {cashData.schwab && <span style={{fontSize:7,color:"#00ff8870",fontFamily:"monospace"}}>live</span>}
                   </div>
                   <div style={{fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:"#58a6ff"}}>
@@ -8932,7 +8939,7 @@ ${JSON.stringify(summary, null, 1)}`;
                 </div>
                 {/* E*TRADE cash — manual */}
                 <div style={{background:"#0a0e14",border:"1px solid #ffd16630",borderRadius:8,padding:"8px 12px",minWidth:120,display:"flex",flexDirection:"column",gap:4}}>
-                  <div style={{fontSize:7,color:"#ffd166",fontFamily:"monospace",letterSpacing:"0.08em"}}>E*TRADE CASH</div>
+                  <div style={{fontSize:7,color:"#ffd166",fontFamily:"monospace",letterSpacing:"0.08em"}}>E*TRADE ACCT</div>
                   <input type="number" defaultValue={cashData.etrade||""} placeholder="0.00"
                     onBlur={e=>updateCash("etrade",e.target.value)}
                     style={{width:"100%",fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:"#ffd166",background:"transparent",border:"none",borderBottom:"1px solid #ffd16630",padding:"2px 0",outline:"none"}}/>
@@ -8940,7 +8947,7 @@ ${JSON.stringify(summary, null, 1)}`;
                 {/* Total */}
                 {((cashData.schwab||0)+(cashData.etrade||0))>0 && (
                   <div style={{background:"#0a0e14",border:"1px solid #00ff8830",borderRadius:8,padding:"8px 12px",minWidth:120,display:"flex",flexDirection:"column",gap:4}}>
-                    <div style={{fontSize:7,color:"#00ff88",fontFamily:"monospace",letterSpacing:"0.08em"}}>TOTAL CASH</div>
+                    <div style={{fontSize:7,color:"#00ff88",fontFamily:"monospace",letterSpacing:"0.08em"}}>TOTAL ACCT</div>
                     <div style={{fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:"#00ff88"}}>{f$((+cashData.schwab||0)+(+cashData.etrade||0))}</div>
                   </div>
                 )}
@@ -8956,12 +8963,12 @@ ${JSON.stringify(summary, null, 1)}`;
                     <div style={{background:"#0a0e14",border:"1px solid #c084fc30",borderRadius:8,padding:"8px 12px",minWidth:140,display:"flex",flexDirection:"column",gap:3}}>
                       <div style={{fontSize:7,color:"#c084fc",fontFamily:"monospace",letterSpacing:"0.08em"}}>SCHWAB AVAILABLE</div>
                       <div style={{fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:schwabAvail>=0?"#00ff88":"#ff4560"}}>{f$(schwabAvail)}</div>
-                      <div style={{fontSize:8,color:"#3a4050",fontFamily:"monospace"}}>cash {f$(+cashData.schwab||0)} − STO {f$(schwabCommitted)} + BTO {f$(schwabBTOAssets)}</div>
+                      <div style={{fontSize:8,color:"#3a4050",fontFamily:"monospace"}}>acct {f$(+cashData.schwab||0)} − STO {f$(schwabCommitted)} + BTO {f$(schwabBTOAssets)}</div>
                     </div>
                     <div style={{background:"#0a0e14",border:"1px solid #c084fc30",borderRadius:8,padding:"8px 12px",minWidth:140,display:"flex",flexDirection:"column",gap:3}}>
                       <div style={{fontSize:7,color:"#c084fc",fontFamily:"monospace",letterSpacing:"0.08em"}}>ETRADE AVAILABLE</div>
                       <div style={{fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:etradeAvail>=0?"#00ff88":"#ff4560"}}>{f$(etradeAvail)}</div>
-                      <div style={{fontSize:8,color:"#3a4050",fontFamily:"monospace"}}>cash {f$(+cashData.etrade||0)} − STO {f$(etradeCommitted)} + BTO {f$(etradeBTOAssets)}</div>
+                      <div style={{fontSize:8,color:"#3a4050",fontFamily:"monospace"}}>acct {f$(+cashData.etrade||0)} − STO {f$(etradeCommitted)} + BTO {f$(etradeBTOAssets)}</div>
                     </div>
                   </>);
                 })()}
