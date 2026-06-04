@@ -1258,6 +1258,33 @@ export default async function handler(req, res) {
       }
     } catch(e) { console.warn("[market-refresh] ETrade token check failed:", e.message); }
 
+    // ── Check Schwab refresh token expiry — warn if within 3 days ──────────
+    try {
+      const SCHWAB_AUTH_URL = "https://options-tracker-five.vercel.app/api/schwab-auth";
+      const stRes  = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.schwab_tokens`, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+      const st     = (await stRes.json())?.[0]?.cols;
+      if (st?.refreshTokenExpiresAt) {
+        const msTilExpiry = st.refreshTokenExpiresAt - Date.now();
+        const daysTil     = msTilExpiry / 86400000;
+        if (daysTil <= 3 && daysTil > 0) {
+          // Notify once per day — check last warn date stored in col_prefs
+          const warnRes  = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.schwab_token_warn`, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+          const warnData = (await warnRes.json())?.[0]?.cols;
+          const todayStr = new Date().toISOString().slice(0, 10);
+          if (warnData?.lastNotified !== todayStr) {
+            const daysLabel = daysTil < 1 ? "< 1 day" : `${Math.ceil(daysTil)} day${Math.ceil(daysTil) === 1 ? "" : "s"}`;
+            await sendPushover("⚠️ Schwab Token Expires Soon", `Refresh token expires in ${daysLabel} — re-authorize now to avoid interruption`, SCHWAB_AUTH_URL, "Re-Authorize Schwab", 1);
+            await fetch(`${SUPABASE_URL}/rest/v1/col_prefs`, {
+              method: "POST",
+              headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
+              body: JSON.stringify({ id: "schwab_token_warn", cols: { lastNotified: todayStr }, updated_at: new Date().toISOString() }),
+            });
+            console.log(`[market-refresh] Schwab token expiry warning sent (expires in ${daysLabel})`);
+          }
+        }
+      }
+    } catch(e) { console.warn("[market-refresh] Schwab token check failed:", e.message); }
+
     const token = await getValidToken();
 
     // ── Load everything in parallel ─────────────────────────────────────────

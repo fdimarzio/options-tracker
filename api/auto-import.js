@@ -270,6 +270,81 @@ function parseEtradeTx(tx, stocksData) {
   };
 }
 
+// ── Auto-resolve option assignments ──────────────────────────────────────────
+// Finds the matching open STO/BTO, closes it with cost_to_close=0 (full premium
+// kept for STO, full loss for BTO), marks exercised=true, logs a resolved anomaly
+// row for audit trail, and sends a 🎯 Pushover. Falls back to pending anomaly
+// if no matching open contract is found.
+async function handleAssignment(parsed) {
+  const { stock, strike, expires, account, date_exec } = parsed;
+
+  // Find matching open contract — same stock/strike/expiry, STO or BTO, no parent
+  const candidates = await sbGet(
+    `contracts?stock=eq.${encodeURIComponent(stock)}&strike=eq.${strike}&expires=eq.${expires}&opt_type=in.(STO,BTO)&status=eq.Open&parent_id=is.null&select=id,stock,strike,expires,premium,qty,opt_type,type,account,date_exec`
+  );
+
+  const parent = Array.isArray(candidates)
+    ? (candidates.find(c => c.account === account) || candidates[0])
+    : null;
+
+  if (parent) {
+    const isSTO    = parent.opt_type === "STO";
+    const profit   = isSTO
+      ? Math.round(Math.abs(+parent.premium) * 100) / 100
+      : Math.round(-Math.abs(+parent.premium) * 100) / 100;
+    const daysHeld = parent.date_exec
+      ? Math.ceil((new Date(date_exec) - new Date(parent.date_exec)) / 86400000)
+      : null;
+
+    await sbPatch("contracts", parent.id, {
+      status:        "Closed",
+      cost_to_close: 0,
+      close_date:    date_exec,
+      profit,
+      profit_pct:    isSTO ? 1.0 : -1.0,
+      exercised:     true,
+      days_held:     daysHeld,
+      notes:         `Auto-resolved: option assigned/exercised on ${date_exec}`,
+    });
+
+    // Log resolved anomaly for audit trail (not shown as pending in UI)
+    try {
+      await sbPost("import_anomalies", {
+        schwab_transaction_id: parsed.schwab_transaction_id,
+        stock, strike: +strike, expires, account, date_exec,
+        opt_type:           "ASSIGNED",
+        type:               parsed.type,
+        qty:                +parsed.qty,
+        premium:            0,
+        anomaly_type:       "assigned",
+        raw_description:    parsed.description || "Option Assigned",
+        broker:             parsed.broker || (account?.startsWith("ETrade") ? "ETrade" : "Schwab"),
+        resolved:           true,
+        resolved_at:        new Date().toISOString(),
+        resolved_parent_id: parent.id,
+        dismissed:          false,
+        notes:              `Auto-resolved → contract #${parent.id} closed. Profit: $${profit.toFixed(2)}`,
+        raw:                parsed.raw || null,
+      }, "resolution=ignore-duplicates");
+    } catch(e) { console.warn("[handleAssignment] anomaly log failed:", e.message); }
+
+    await sendPushover(
+      `🎯 ${stock} $${strike} ${parsed.type} Assigned`,
+      `Contract #${parent.id} closed automatically.\n${isSTO ? `💰 Profit: +$${profit.toFixed(2)} (full premium kept)` : `📉 Loss: $${profit.toFixed(2)} (BTO exercised)`}\nAccount: ${parent.account}\nExpiry: ${expires}`,
+      `${APP_URL}/?tab=contracts`,
+      0,
+      "cashregister"
+    );
+
+    console.log(`[auto-import] ✅ Assignment auto-resolved: ${stock} $${strike} ${expires} → contract #${parent.id}, profit $${profit.toFixed(2)}`);
+    return { resolved: true, parentId: parent.id, profit };
+  }
+
+  // Fallback — no match found, park as pending anomaly
+  console.warn(`[handleAssignment] ⚠️ No open contract found for ${stock} $${strike} ${expires} (${account}) — routing to pending anomaly`);
+  return { resolved: false };
+}
+
 // ── Match closer to open contract ─────────────────────────────────────────────
 function matchToOpen(parsed, openContracts) {
   if (!["BTC","STC","ASSIGNED","EXPIRED"].includes(parsed.opt_type)) return { matchId: null, matchConfidence: null };
@@ -391,9 +466,11 @@ async function commitTx(parsed, matchId, openContracts, stocksData, committedClo
         console.log(`[auto-import] skipping already-merged tx ${parsed.schwab_transaction_id} into contract ${existing.id}`);
         return;
       }
-      // Guard: if existing contract qty >= incoming qty, this is a re-issued ETrade partial
-      // for fills already counted — skip to avoid inflating qty
-      if (+existing.qty >= +parsed.qty) {
+      // Guard: if existing contract qty >= incoming qty on ETrade, this is a re-issued
+      // partial fill already counted — skip to avoid inflating qty.
+      // Schwab never re-issues partials so this guard does NOT apply there.
+      const isEtrade = parsed.account?.toLowerCase().startsWith("etrade");
+      if (isEtrade && +existing.qty >= +parsed.qty) {
         console.log(`[auto-import] skipping re-issued ETrade partial: ${parsed.stock} ${parsed.opt_type} $${parsed.strike} ${parsed.expires} ${parsed.account} — existing qty ${existing.qty} >= incoming qty ${parsed.qty}`);
         return;
       }
@@ -411,6 +488,19 @@ async function commitTx(parsed, matchId, openContracts, stocksData, committedClo
       console.log(`[auto-import] partial fill merged: ${parsed.stock} ${parsed.opt_type} $${parsed.strike} ${parsed.expires} qty ${existing.qty - (+parsed.qty||0)}+${parsed.qty}=${newQty}`);
       return true;
     }
+  }
+
+  // ── Infer strategy from opt_type + type + share ownership ────────────────
+  function inferStrategy(optType, type, stock, sd) {
+    if (!["STO","BTO"].includes(optType)) return null;
+    const shares = sd?.[stock?.toUpperCase()]?.shares;
+    // Only mark naked if shares is explicitly 0 — default to covered when data is missing
+    const isNaked = shares != null && shares === 0;
+    if (optType === "STO" && type === "Call")  return isNaked ? "Naked Call"        : "OTM Covered Call Strategy";
+    if (optType === "STO" && type === "Put")   return isNaked ? "Naked Put"         : "Cash Secured Put";
+    if (optType === "BTO" && type === "Call")  return "Long Call";
+    if (optType === "BTO" && type === "Put")   return "Long Put";
+    return null;
   }
 
   // Insert the transaction
@@ -433,6 +523,7 @@ async function commitTx(parsed, matchId, openContracts, stocksData, committedClo
     exercised: parsed.exercised || "No",
     created_via: "Auto Import",
     parent_id: matchId || null,
+    strategy:  inferStrategy(parsed.opt_type, parsed.type, parsed.stock, stocksData),
   };
 
   let inserted;
@@ -556,7 +647,6 @@ async function commitTx(parsed, matchId, openContracts, stocksData, committedClo
           status:      "Open",
           date_exec:   parent.date_exec,
           account:     parent.account,
-          broker:      parent.broker || null,
           strategy:    parent.strategy || null,
           notes:       `Remaining ${remainingQty} of ${parentQty} after partial close ${parsed.date_exec}`,
           created_via: "Auto Import",
@@ -664,13 +754,14 @@ async function commitTx(parsed, matchId, openContracts, stocksData, committedClo
 }
 
 // ── Pushover ──────────────────────────────────────────────────────────────────
-async function sendPushover(title, message, url, priority = 0) {
+async function sendPushover(title, message, url, priority = 0, sound = null) {
   const token = process.env.PUSHOVER_API_TOKEN;
   const user  = process.env.PUSHOVER_USER_KEY;
   if (!token || !user) return;
+  const resolvedSound = sound || (priority >= 1 ? "cashregister" : "pushover");
   await fetch("https://api.pushover.net/1/messages.json", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token, user, title, message, url: url || `${APP_URL}/?tab=import`, url_title: "Review in App", priority, sound: priority >= 1 ? "cashregister" : "pushover" }),
+    body: JSON.stringify({ token, user, title, message, url: url || `${APP_URL}/?tab=import`, url_title: "Review in App", priority, sound: resolvedSound }),
   });
 }
 
@@ -892,9 +983,15 @@ export default async function handler(req, res) {
         continue;
       }
 
-      // Skip ASSIGNED — always goes to anomaly report for manual review
+
+      // ASSIGNED — auto-resolve if matching open contract found; else fall to pending anomaly
       if (tx.opt_type === "ASSIGNED") {
-        anomalies.push({ ...tx, anomaly_type: "assigned", notes: "Option assigned/exercised — requires manual review", raw: tx.raw });
+        const result = await handleAssignment(tx);
+        if (result.resolved) {
+          committed.push({ ...tx, _assignedParentId: result.parentId, profit: result.profit });
+        } else {
+          anomalies.push({ ...tx, anomaly_type: "assigned", notes: "Option assigned/exercised — no matching open contract found, manual review required", raw: tx.raw });
+        }
         continue;
       }
 
@@ -986,10 +1083,36 @@ export default async function handler(req, res) {
     if (committed.length) {
       const opens  = committed.filter(t => ["STO","BTO"].includes(t.opt_type));
       const closes = committed.filter(t => ["BTC","STC"].includes(t.opt_type));
+
+      // Calculate total profit on closed trades committed this run
+      const totalProfit = closes.reduce((s,t) => {
+        // Look up the profit we wrote to the DB (it's on the parent contract)
+        // committed array has what was inserted; profit is on the closer row
+        return s + (t.profit || 0);
+      }, 0);
+
       let msg = `${committed.length} transaction${committed.length > 1 ? "s" : ""} auto-committed.`;
       if (opens.length)  msg += `\n📤 ${opens.length} open${opens.length > 1 ? "s" : ""}`;
-      if (closes.length) msg += `\n✅ ${closes.length} close${closes.length > 1 ? "s" : ""}`;
-      await sendPushover("📥 Auto-Import Complete", msg, `${APP_URL}/?tab=contracts`, 0);
+      if (closes.length) {
+        msg += `\n✅ ${closes.length} close${closes.length > 1 ? "s" : ""}`;
+        if (totalProfit !== 0) {
+          msg += `\n${totalProfit >= 0 ? "💰" : "📉"} Net P&L: ${totalProfit >= 0 ? "+" : ""}$${totalProfit.toFixed(2)}`;
+        }
+      }
+
+      // Gamify: pick Pushover sound based on profit
+      // cashregister = win 🎰, falling = loss 😢, magic = break-even/no closes
+      const sound = closes.length === 0 ? "magic"
+                  : totalProfit > 0     ? "cashregister"
+                  : totalProfit < 0     ? "falling"
+                  :                       "magic";
+
+      const title = closes.length === 0 ? "📥 Auto-Import Complete"
+                  : totalProfit > 0     ? "🎰 Import Complete — Profitable!"
+                  : totalProfit < 0     ? "📉 Import Complete — Loss"
+                  :                      "📥 Auto-Import Complete";
+
+      await sendPushover(title, msg, `${APP_URL}/?tab=contracts`, 0, sound);
     }
 
     // ── Ecosystem heartbeat ──────────────────────────────────────────────────────
