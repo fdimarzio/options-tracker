@@ -751,8 +751,11 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
   const [savingMom,     setSavingMom]     = useState(false);
   const [analysis,      setAnalysis]      = useState(null);
   const [analyzing,     setAnalyzing]     = useState(false);
+  const [skynetCtrl,    setSkynetCtrl]    = useState(null);
 
   useEffect(() => {
+    supabase.from("skynet_controls").select("*").eq("enabled",true).limit(1).maybeSingle()
+      .then(({data}) => { if (data) setSkynetCtrl(data); });
     Promise.all([
       supabase.from("signal_rules").select("*").order("priority", { ascending: false }),
       supabase.from("signal_log").select("id,signal_type,profit_pct_at_signal,pushed,created_at,rule_id,contract_id"),
@@ -1299,6 +1302,30 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
             </div>
           )}
         </div>
+
+        {/* ── Skynet Controls ── */}
+        {skynetCtrl && (() => {
+          const inp = {fontSize:11,padding:"3px 6px",background:"#0a0e14",border:"1px solid #21262d",borderRadius:3,color:"#ffd166",fontFamily:"monospace",width:90};
+          const sc = skynetCtrl;
+          return (
+            <div style={{background:"#0a0e14",border:"1px solid #ffd16625",borderRadius:8,padding:"12px 14px",marginTop:16}}>
+              <div style={{fontFamily:"monospace",fontSize:9,color:"#ffd166",letterSpacing:"0.08em",marginBottom:10}}>🛡 SKYNET CONTROLS</div>
+              <div style={{display:"flex",gap:16,flexWrap:"wrap",alignItems:"flex-end"}}>
+                <div><div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",marginBottom:3}}>MAX ORDER VALUE $</div>
+                  <input defaultValue={sc.max_order_value} onBlur={async e=>{const v=parseFloat(e.target.value);if(!isNaN(v)){await supabase.from("skynet_controls").update({max_order_value:v,updated_at:new Date().toISOString()}).eq("id",sc.id);setSkynetCtrl(p=>({...p,max_order_value:v}));}}} style={inp}/>
+                </div>
+                <div><div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",marginBottom:3}}>MAX BID/ASK DEV %</div>
+                  <input defaultValue={sc.max_bid_ask_deviation_pct} onBlur={async e=>{const v=parseFloat(e.target.value);if(!isNaN(v)){await supabase.from("skynet_controls").update({max_bid_ask_deviation_pct:v,updated_at:new Date().toISOString()}).eq("id",sc.id);setSkynetCtrl(p=>({...p,max_bid_ask_deviation_pct:v}));}}} style={inp}/>
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  <input type="checkbox" checked={!!sc.block_if_loss} onChange={async e=>{const v=e.target.checked;await supabase.from("skynet_controls").update({block_if_loss:v,updated_at:new Date().toISOString()}).eq("id",sc.id);setSkynetCtrl(p=>({...p,block_if_loss:v}));}} id="sc-bil"/>
+                  <label htmlFor="sc-bil" style={{fontSize:9,color:"#c9d1d9",fontFamily:"monospace",cursor:"pointer"}}>Block if loss</label>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
       </div>
   );
 

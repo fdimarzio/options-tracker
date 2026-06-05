@@ -761,6 +761,27 @@ function shouldNotify(signal, lastNotif) {
   return profitImproved || pctImproved;
 }
 
+// ── Skynet controls check ─────────────────────────────────────────────────────
+// Returns { ok: bool, reason: string }
+function checkSkynetControls({ controls, limitPrice, qty, bid, ask, projectedProfit }) {
+  if (!controls?.enabled) return { ok: true };
+  const orderValue = Math.abs(limitPrice || 0) * (qty || 1) * 100;
+  if (controls.max_order_value && orderValue > +controls.max_order_value) {
+    return { ok: false, reason: `order value $${orderValue.toFixed(0)} > max $${controls.max_order_value}` };
+  }
+  if (controls.max_bid_ask_deviation_pct && bid != null && ask != null && ask > 0) {
+    const mid = (bid + ask) / 2;
+    const devPct = Math.abs(limitPrice - mid) / mid * 100;
+    if (devPct > +controls.max_bid_ask_deviation_pct) {
+      return { ok: false, reason: `limit $${limitPrice} deviates ${devPct.toFixed(1)}% from mid $${mid.toFixed(2)} (max ${controls.max_bid_ask_deviation_pct}%)` };
+    }
+  }
+  if (controls.block_if_loss && projectedProfit != null && projectedProfit < 0) {
+    return { ok: false, reason: `order would result in a loss ($${projectedProfit.toFixed(2)})` };
+  }
+  return { ok: true };
+}
+
 // ── Log signal to signal_log table ───────────────────────────────────────────
 async function logSignal(fields) {
   try {
@@ -1309,6 +1330,14 @@ export default async function handler(req, res) {
     const momentumConfig = (await momentumConfigRes.json())?.[0] || null;
     const priceHistory   = await priceHistoryRes.json();
     const watchlistTickers = ((await watchlistRes.json())?.[0]?.cols?.tickers || []).map(t => t.toUpperCase());
+
+    // Load Skynet controls
+    let skynetControls = { max_order_value: 10000, max_bid_ask_deviation_pct: 15, block_if_loss: true, enabled: true };
+    try {
+      const scRes = await fetch(`${SUPABASE_URL}/rest/v1/skynet_controls?enabled=eq.true&limit=1`, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+      const scRows = await scRes.json();
+      if (Array.isArray(scRows) && scRows.length) skynetControls = scRows[0];
+    } catch(e) { console.warn("[market-refresh] skynet_controls load failed:", e.message); }
 
     if (!contracts.length && !allPositions.length && !watchlistTickers.length) return res.status(200).json({ ok: true, tickers: 0 });
 
@@ -2319,6 +2348,15 @@ export default async function handler(req, res) {
                         console.log(`[auto-sto] wrote ${factorRows.length} factors for signal ${sigId}`);
                       }
                     } catch(e) { console.warn(`[auto-sto] factor capture failed for ${symbol}:`, e.message); }
+                  }
+
+                  // Skynet controls check before live placement
+                  if (!isDryRun) {
+                    const scCheck = checkSkynetControls({ controls: skynetControls, limitPrice, qty: uncovered, bid: bestAsk, ask: bestAsk, projectedProfit: estPremium });
+                    if (!scCheck.ok) {
+                      console.log(`[auto-sto] ${symbol} ${account} blocked by Skynet controls: ${scCheck.reason}`);
+                      continue;
+                    }
                   }
 
                   if (isDryRun) {

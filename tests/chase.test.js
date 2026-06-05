@@ -392,3 +392,53 @@ describe("isContractITM", () => {
     expect(isContractITM({ type:"Put", strike:150, stockPrice:155 })).toBe(false);
   });
 });
+
+// ── Skynet controls check (task #34) ──────────────────────────────────────────
+
+function checkSkynetControls({ controls, limitPrice, qty, bid, ask, projectedProfit }) {
+  if (!controls?.enabled) return { ok: true };
+  const orderValue = Math.abs(limitPrice || 0) * (qty || 1) * 100;
+  if (controls.max_order_value && orderValue > +controls.max_order_value) {
+    return { ok: false, reason: `order value $${orderValue.toFixed(0)} > max $${controls.max_order_value}` };
+  }
+  if (controls.max_bid_ask_deviation_pct && bid != null && ask != null && ask > 0) {
+    const mid = (bid + ask) / 2;
+    const devPct = Math.abs(limitPrice - mid) / mid * 100;
+    if (devPct > +controls.max_bid_ask_deviation_pct) {
+      return { ok: false, reason: `deviation ${devPct.toFixed(1)}%` };
+    }
+  }
+  if (controls.block_if_loss && projectedProfit != null && projectedProfit < 0) {
+    return { ok: false, reason: `loss $${projectedProfit.toFixed(2)}` };
+  }
+  return { ok: true };
+}
+
+const defaultControls = { enabled: true, max_order_value: 10000, max_bid_ask_deviation_pct: 15, block_if_loss: true };
+
+describe("checkSkynetControls", () => {
+  it("passes when all values within limits", () => {
+    expect(checkSkynetControls({ controls: defaultControls, limitPrice: 2.0, qty: 3, bid: 1.95, ask: 2.05, projectedProfit: 150 }).ok).toBe(true);
+  });
+
+  it("blocks when order value exceeds max", () => {
+    expect(checkSkynetControls({ controls: defaultControls, limitPrice: 40, qty: 5, bid: 39, ask: 41, projectedProfit: 500 }).ok).toBe(false);
+  });
+
+  it("blocks when bid/ask deviation exceeds max", () => {
+    expect(checkSkynetControls({ controls: defaultControls, limitPrice: 3.0, qty: 1, bid: 1.0, ask: 2.0, projectedProfit: 100 }).ok).toBe(false);
+  });
+
+  it("blocks when projected loss and block_if_loss=true", () => {
+    expect(checkSkynetControls({ controls: defaultControls, limitPrice: 0.5, qty: 1, bid: 0.48, ask: 0.52, projectedProfit: -50 }).ok).toBe(false);
+  });
+
+  it("allows loss when block_if_loss=false", () => {
+    const controls = { ...defaultControls, block_if_loss: false };
+    expect(checkSkynetControls({ controls, limitPrice: 0.5, qty: 1, bid: 0.48, ask: 0.52, projectedProfit: -50 }).ok).toBe(true);
+  });
+
+  it("bypasses all checks when disabled", () => {
+    expect(checkSkynetControls({ controls: { ...defaultControls, enabled: false }, limitPrice: 999, qty: 100, projectedProfit: -9999 }).ok).toBe(true);
+  });
+});
