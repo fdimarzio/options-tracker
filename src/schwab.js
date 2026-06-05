@@ -157,8 +157,11 @@ export async function fetchPositions() {
     const positions = data?.securitiesAccount?.positions ?? data?.positions ?? [];
     const balances  = data?.securitiesAccount?.currentBalances ?? data?.currentBalances ?? {};
 
-    totalCash  += balances.cashAvailableForTrading ?? 0;
-    totalValue += balances.liquidationValue ?? 0;
+    const acctCash  = balances.cashAvailableForTrading ?? 0;
+    const acctValue = balances.liquidationValue ?? 0;
+    console.log(`[fetchPositions] account ${acct.accountNumber?.slice(-4)} balances — liquidationValue: ${acctValue}, cashAvailableForTrading: ${acctCash}`, Object.keys(balances));
+    totalCash  += acctCash;
+    totalValue += acctValue;
 
     for (const pos of positions) {
       const inst = pos.instrument;

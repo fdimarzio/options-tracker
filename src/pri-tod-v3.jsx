@@ -4862,7 +4862,11 @@ export default function App() {
   const [balHistoryInline, setBalHistoryInline] = useState({});
   const nowMonthKey = new Date().toISOString().slice(0,7);
   const [schwabAccountValue, setSchwabAccountValue] = useState(0);
-  const liveSchwabInline = schwabAccountValue > 0 ? schwabAccountValue : (cashData?.schwab ? +cashData.schwab : null);
+  // Seed from portfolio_snapshots on cold load — most recent daily snapshot has correct account values
+  const latestSnapshot = portfolioSnapshots[0] ?? null;
+  const snapSchwab = latestSnapshot?.schwab_value > 0 ? +latestSnapshot.schwab_value : null;
+  const snapEtrade = latestSnapshot?.etrade_value > 0 ? +latestSnapshot.etrade_value : null;
+  const liveSchwabInline = schwabAccountValue > 0 ? schwabAccountValue : snapSchwab ?? (cashData?.schwab ? +cashData.schwab : null);
   useEffect(()=>{
     supabase.from("col_prefs").select("cols").eq("id","balance_history").maybeSingle()
       .then(({data})=>{ if(data?.cols) setBalHistoryInline(data.cols); });
@@ -5992,7 +5996,9 @@ ${JSON.stringify(summary, null, 1)}`;
                         <div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",marginBottom:2}}>STOP LOSS</div>
                         <input type="number" step="0.1" defaultValue={c.stopLossMultiplier ?? 2.0} onBlur={async e=>{
                           const v = parseFloat(e.target.value); if (isNaN(v)) return;
-                          await supabase.from("contracts").update({stop_loss_multiplier:v}).eq("id",c.id);
+                          const { error } = await supabase.from("contracts").update({stop_loss_multiplier:v}).eq("id",c.id);
+                          if (!error) { setContracts(cs=>cs.map(x=>x.id===c.id?{...x,stopLossMultiplier:v}:x)); setViewC(vc=>vc?.id===c.id?{...vc,stopLossMultiplier:v}:vc); }
+                          else console.error("[exit plan] stop_loss_multiplier save failed:", error.message);
                         }} style={{width:60,fontSize:11,padding:"2px 5px",background:"#0d1117",border:"1px solid #21262d",borderRadius:3,color:"#ffd166",fontFamily:"monospace"}}/>
                         <span style={{fontSize:8,color:"#3a4050",fontFamily:"monospace",marginLeft:3}}>× premium</span>
                       </div>
@@ -6000,7 +6006,9 @@ ${JSON.stringify(summary, null, 1)}`;
                         <div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",marginBottom:2}}>TIME STOP DTE</div>
                         <input type="number" step="1" defaultValue={c.timeStopDte ?? ""} placeholder="—" onBlur={async e=>{
                           const v = e.target.value === "" ? null : parseInt(e.target.value);
-                          await supabase.from("contracts").update({time_stop_dte:v}).eq("id",c.id);
+                          const { error } = await supabase.from("contracts").update({time_stop_dte:v}).eq("id",c.id);
+                          if (!error) { setContracts(cs=>cs.map(x=>x.id===c.id?{...x,timeStopDte:v}:x)); setViewC(vc=>vc?.id===c.id?{...vc,timeStopDte:v}:vc); }
+                          else console.error("[exit plan] time_stop_dte save failed:", error.message);
                         }} style={{width:55,fontSize:11,padding:"2px 5px",background:"#0d1117",border:"1px solid #21262d",borderRadius:3,color:"#ffd166",fontFamily:"monospace"}}/>
                         <span style={{fontSize:8,color:"#3a4050",fontFamily:"monospace",marginLeft:3}}>days</span>
                       </div>
@@ -6008,7 +6016,9 @@ ${JSON.stringify(summary, null, 1)}`;
                         <div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",marginBottom:2}}>DELTA STOP</div>
                         <input type="number" step="0.01" defaultValue={c.deltaStop ?? 0.30} onBlur={async e=>{
                           const v = parseFloat(e.target.value); if (isNaN(v)) return;
-                          await supabase.from("contracts").update({delta_stop:v}).eq("id",c.id);
+                          const { error } = await supabase.from("contracts").update({delta_stop:v}).eq("id",c.id);
+                          if (!error) { setContracts(cs=>cs.map(x=>x.id===c.id?{...x,deltaStop:v}:x)); setViewC(vc=>vc?.id===c.id?{...vc,deltaStop:v}:vc); }
+                          else console.error("[exit plan] delta_stop save failed:", error.message);
                         }} style={{width:60,fontSize:11,padding:"2px 5px",background:"#0d1117",border:"1px solid #21262d",borderRadius:3,color:"#ffd166",fontFamily:"monospace"}}/>
                       </div>
                     </div>
@@ -7879,7 +7889,7 @@ ${JSON.stringify(summary, null, 1)}`;
                         {analyticsView==="monthly" && showBalCols && (() => {
                           const b = balHistoryInline?.[m.key] || {};
                           const schwab = b.schwab ?? (m.key===nowMonthKey&&liveSchwabInline ? liveSchwabInline : null);
-                          const etrade = b.etrade ?? null;
+                          const etrade = b.etrade ?? (m.key===nowMonthKey&&snapEtrade ? snapEtrade : (m.key===nowMonthKey&&cashData?.etrade ? +cashData.etrade : null));
                           const total  = schwab||etrade ? (schwab||0)+(etrade||0) : null;
                           // MoM: compare to previous month in periodData
                           const allKeys = [...periodData].reverse().map(x=>x.key);

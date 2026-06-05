@@ -442,3 +442,52 @@ describe("checkSkynetControls", () => {
     expect(checkSkynetControls({ controls: { ...defaultControls, enabled: false }, limitPrice: 999, qty: 100, projectedProfit: -9999 }).ok).toBe(true);
   });
 });
+
+// ── QA fixes tests ─────────────────────────────────────────────────────────────
+
+// #19: expiry_protection respects dry_run flag
+describe("expiry_protection dry_run flag", () => {
+  function getExpiryDryRun(signalRules) {
+    const expiryRule = (Array.isArray(signalRules) ? signalRules : []).find(r => r.rule_type === "expiry_protection" && r.enabled);
+    return expiryRule ? expiryRule.dry_run !== false : true;
+  }
+
+  it("defaults to dry-run when no expiry_protection rule exists", () => {
+    expect(getExpiryDryRun([])).toBe(true);
+  });
+
+  it("defaults to dry-run when rule has dry_run=true", () => {
+    expect(getExpiryDryRun([{ rule_type: "expiry_protection", enabled: true, dry_run: true }])).toBe(true);
+  });
+
+  it("goes live when rule has dry_run=false", () => {
+    expect(getExpiryDryRun([{ rule_type: "expiry_protection", enabled: true, dry_run: false }])).toBe(false);
+  });
+
+  it("ignores disabled rules", () => {
+    expect(getExpiryDryRun([{ rule_type: "expiry_protection", enabled: false, dry_run: false }])).toBe(true);
+  });
+});
+
+// #45: portfolio_snapshots used as cold-load fallback
+describe("balance cold-load fallback", () => {
+  function resolveBalance(schwabAccountValue, snapSchwab, cacheSchwab) {
+    return schwabAccountValue > 0 ? schwabAccountValue : snapSchwab ?? (cacheSchwab ? +cacheSchwab : null);
+  }
+
+  it("uses live schwabAccountValue when set", () => {
+    expect(resolveBalance(900000, 850000, 6000)).toBe(900000);
+  });
+
+  it("falls back to portfolio snapshot when schwabAccountValue is 0", () => {
+    expect(resolveBalance(0, 850000, 6000)).toBe(850000);
+  });
+
+  it("falls back to cashData when snapshot is null", () => {
+    expect(resolveBalance(0, null, 6000)).toBe(6000);
+  });
+
+  it("returns null when all sources are empty", () => {
+    expect(resolveBalance(0, null, null)).toBeNull();
+  });
+});

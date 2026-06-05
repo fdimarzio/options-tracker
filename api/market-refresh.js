@@ -2952,11 +2952,14 @@ export default async function handler(req, res) {
             continue;
           }
 
-          // 3:30 PM auto-close (dry-run safe — respects existing signal_rules dry_run flag)
+          // 3:30 PM auto-close — respects dry_run flag from signal_rules expiry_protection row
           if (etMinsForExpiry >= CLOSE_MINS && contract.close_method !== "auto") {
+            const expiryRule  = (Array.isArray(signalRules) ? signalRules : []).find(r => r.rule_type === "expiry_protection" && r.enabled);
+            const expiryDryRun = expiryRule ? expiryRule.dry_run !== false : true; // default to dry-run if no rule found
             const isSchwab = contract.account?.startsWith("Schwab");
             const isEtrade = contract.account?.startsWith("ETrade") || contract.account?.startsWith("Etrade");
             let orderResult = null;
+            console.log(`[expiry] ${expiryDryRun ? "[DRY RUN]" : "[LIVE]"} auto-close for ${ticker} $${strike} ${contract.type} (rule: ${expiryRule?.id ?? "none"})`);
             try {
               if (isSchwab) {
                 const previewRes = await fetch(`${APP_URL}/api/schwab-orders?action=preview&secret=${process.env.CRON_SECRET}`, {
@@ -2966,7 +2969,7 @@ export default async function handler(req, res) {
                 if (previewRes?.ok) {
                   orderResult = await fetch(`${APP_URL}/api/schwab-orders?action=approve&secret=${process.env.CRON_SECRET}`, {
                     method: "POST", headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ orderId: previewRes.order?.id, dry_run: false, approved_by: "expiry_protection" }),
+                    body: JSON.stringify({ orderId: previewRes.order?.id, dry_run: expiryDryRun, approved_by: "expiry_protection" }),
                   }).then(r => r.json());
                 }
               } else if (isEtrade) {
@@ -2977,18 +2980,23 @@ export default async function handler(req, res) {
                 if (previewRes?.ok) {
                   orderResult = await fetch(`${APP_URL}/api/schwab-orders?action=order-place&secret=${process.env.CRON_SECRET}`, {
                     method: "POST", headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ orderId: previewRes.order?.id, dry_run: false, approved_by: "expiry_protection" }),
+                    body: JSON.stringify({ orderId: previewRes.order?.id, dry_run: expiryDryRun, approved_by: "expiry_protection" }),
                   }).then(r => r.json());
                 }
               }
               if (orderResult?.ok) {
-                await fetch(`${SUPABASE_URL}/rest/v1/contracts?id=eq.${contract.id}`, {
-                  method: "PATCH",
-                  headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
-                  body: JSON.stringify({ close_method: "auto" }),
-                });
-                await sendPushover(`✅ ${ticker} Auto-Closed — ITM at Expiry`, `Bought back ${contract.type} $${strike} to prevent assignment\nStock: $${stockPrice.toFixed(2)} · ${contract.account}`, `${APP_URL}/?tab=contracts`, "View Contracts", 1);
-                console.log(`[expiry] auto-closed ITM: ${ticker} $${strike} ${contract.type}`);
+                if (!expiryDryRun) {
+                  await fetch(`${SUPABASE_URL}/rest/v1/contracts?id=eq.${contract.id}`, {
+                    method: "PATCH",
+                    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+                    body: JSON.stringify({ close_method: "auto" }),
+                  });
+                  await sendPushover(`✅ ${ticker} Auto-Closed — ITM at Expiry`, `Bought back ${contract.type} $${strike} to prevent assignment\nStock: $${stockPrice.toFixed(2)} · ${contract.account}`, `${APP_URL}/?tab=contracts`, "View Contracts", 1);
+                  console.log(`[expiry] auto-closed ITM: ${ticker} $${strike} ${contract.type}`);
+                } else {
+                  await sendPushover(`🧪 [DRY RUN] ${ticker} Would Auto-Close — ITM`, `${contract.type} $${strike} · Stock: $${stockPrice.toFixed(2)} · ${contract.account}\nSet expiry_protection rule dry_run=false to enable real orders`, `${APP_URL}/?tab=contracts`, "View Contracts", 0);
+                  console.log(`[expiry] DRY RUN — would auto-close: ${ticker} $${strike} ${contract.type}`);
+                }
               }
             } catch(e) { console.warn(`[expiry] auto-close failed for ${ticker}:`, e.message); }
           }
