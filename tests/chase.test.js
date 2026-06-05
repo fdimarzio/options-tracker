@@ -366,3 +366,29 @@ describe("checkDeltaStop", () => {
     expect(checkDeltaStop({ delta: 0.90, deltaStop: null })).toBe(false);
   });
 });
+
+// ── ITM expiry check logic (task #19) ──────────────────────────────────────────
+
+function isContractITM({ type, strike, stockPrice }) {
+  if (type === "Call") return stockPrice > strike;
+  if (type === "Put")  return stockPrice < strike;
+  return false;
+}
+
+describe("isContractITM", () => {
+  it("Call is ITM when stock > strike", () => {
+    expect(isContractITM({ type:"Call", strike:150, stockPrice:155 })).toBe(true);
+  });
+
+  it("Call is OTM when stock < strike", () => {
+    expect(isContractITM({ type:"Call", strike:150, stockPrice:145 })).toBe(false);
+  });
+
+  it("Put is ITM when stock < strike", () => {
+    expect(isContractITM({ type:"Put", strike:150, stockPrice:145 })).toBe(true);
+  });
+
+  it("Put is OTM when stock > strike", () => {
+    expect(isContractITM({ type:"Put", strike:150, stockPrice:155 })).toBe(false);
+  });
+});

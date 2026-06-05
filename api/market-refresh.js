@@ -2877,6 +2877,87 @@ export default async function handler(req, res) {
       });
     } catch(e) { console.warn("[heartbeat] write failed:", e.message); }
 
+    // ── Auto-close ITM contracts at 3:30 PM ET on expiration day ────────────
+    try {
+      const etForExpiry = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
+      const etMinsForExpiry = etForExpiry.getHours() * 60 + etForExpiry.getMinutes();
+      const todayET = etForExpiry.toLocaleString("en-CA", { timeZone: "America/New_York" }).slice(0, 10);
+      const WARN_MINS  = 15 * 60;      // 3:00 PM = 900 mins
+      const CLOSE_MINS = 15 * 60 + 30; // 3:30 PM = 930 mins
+
+      if (etMinsForExpiry >= WARN_MINS) {
+        // Find open STOs expiring today
+        const expiringRes = await fetch(
+          `${SUPABASE_URL}/rest/v1/contracts?select=id,stock,type,opt_type,strike,expires,premium,qty,account,close_method&status=eq.Open&opt_type=eq.STO&expires=eq.${todayET}`,
+          { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+        );
+        const expiringContracts = await expiringRes.json();
+
+        for (const contract of (Array.isArray(expiringContracts) ? expiringContracts : [])) {
+          const ticker     = String(contract.stock || "").toUpperCase();
+          const stockPrice = quotes[ticker]?.lastPrice;
+          if (!stockPrice) continue;
+
+          const strike = +contract.strike;
+          const isCall = contract.type === "Call";
+          const isITM  = isCall ? stockPrice > strike : stockPrice < strike;
+          if (!isITM) continue;
+
+          // 3:00 PM warning
+          if (etMinsForExpiry >= WARN_MINS && etMinsForExpiry < CLOSE_MINS) {
+            await sendPushover(
+              `⚠️ ${ticker} Expires Today ITM`,
+              `${contract.type} $${strike} — stock at $${stockPrice.toFixed(2)} — will auto-close at 3:30 PM ET`,
+              `${APP_URL}/?tab=contracts`, "View Contract", 1
+            );
+            console.log(`[expiry] warned ITM: ${ticker} $${strike} ${contract.type} stock=${stockPrice}`);
+            continue;
+          }
+
+          // 3:30 PM auto-close (dry-run safe — respects existing signal_rules dry_run flag)
+          if (etMinsForExpiry >= CLOSE_MINS && contract.close_method !== "auto") {
+            const isSchwab = contract.account?.startsWith("Schwab");
+            const isEtrade = contract.account?.startsWith("ETrade") || contract.account?.startsWith("Etrade");
+            let orderResult = null;
+            try {
+              if (isSchwab) {
+                const previewRes = await fetch(`${APP_URL}/api/schwab-orders?action=preview&secret=${process.env.CRON_SECRET}`, {
+                  method: "POST", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ contract_id: contract.id, order_type: "MARKET", duration: "DAY", auto_close: true }),
+                }).then(r => r.json());
+                if (previewRes?.ok) {
+                  orderResult = await fetch(`${APP_URL}/api/schwab-orders?action=approve&secret=${process.env.CRON_SECRET}`, {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ orderId: previewRes.order?.id, dry_run: false, approved_by: "expiry_protection" }),
+                  }).then(r => r.json());
+                }
+              } else if (isEtrade) {
+                const previewRes = await fetch(`${APP_URL}/api/schwab-orders?action=order-preview&secret=${process.env.CRON_SECRET}`, {
+                  method: "POST", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ contract_id: contract.id, order_type: "MARKET", duration: "DAY" }),
+                }).then(r => r.json());
+                if (previewRes?.ok) {
+                  orderResult = await fetch(`${APP_URL}/api/schwab-orders?action=order-place&secret=${process.env.CRON_SECRET}`, {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ orderId: previewRes.order?.id, dry_run: false, approved_by: "expiry_protection" }),
+                  }).then(r => r.json());
+                }
+              }
+              if (orderResult?.ok) {
+                await fetch(`${SUPABASE_URL}/rest/v1/contracts?id=eq.${contract.id}`, {
+                  method: "PATCH",
+                  headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+                  body: JSON.stringify({ close_method: "auto" }),
+                });
+                await sendPushover(`✅ ${ticker} Auto-Closed — ITM at Expiry`, `Bought back ${contract.type} $${strike} to prevent assignment\nStock: $${stockPrice.toFixed(2)} · ${contract.account}`, `${APP_URL}/?tab=contracts`, "View Contracts", 1);
+                console.log(`[expiry] auto-closed ITM: ${ticker} $${strike} ${contract.type}`);
+              }
+            } catch(e) { console.warn(`[expiry] auto-close failed for ${ticker}:`, e.message); }
+          }
+        }
+      }
+    } catch(e) { console.warn("[market-refresh] ITM expiry check failed:", e.message); }
+
     // ── Run chase loop on every market refresh ──────────────────────────────
     await runChaseLoop(token, { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" });
 
