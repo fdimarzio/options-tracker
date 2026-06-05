@@ -6725,6 +6725,32 @@ ${JSON.stringify(summary, null, 1)}`;
               </div>
             </div>
             {/* KPIs */}
+            {(() => {
+              // Sleep Number: largest single position / total equity * 100
+              const posValues = Object.entries(stocksData)
+                .filter(([sym]) => sym !== "__cash__")
+                .map(([sym, sd]) => {
+                  const shares = (sd.shares || 0);
+                  const price  = sd.currentPrice || 0;
+                  return { sym, val: shares * price };
+                })
+                .filter(p => p.val > 0);
+              const totalEquity   = posValues.reduce((s, p) => s + p.val, 0);
+              const largest       = posValues.reduce((mx, p) => p.val > mx.val ? p : mx, { sym:"", val:0 });
+              const sleepNumber   = totalEquity > 0 ? Math.round(largest.val / totalEquity * 1000) / 10 : null;
+              const sleepColor    = sleepNumber == null ? "#555" : sleepNumber < 20 ? "#00ff88" : sleepNumber < 30 ? "#ffd166" : "#ff4560";
+              if (sleepNumber == null) return null;
+              return (
+                <div title="Sleep Number: largest single position as % of total equity. Motley Fool rule: stay below 20% to sleep well at night."
+                  style={{background:"#0a0e14",border:`1px solid ${sleepColor}30`,borderRadius:8,padding:"10px 12px",display:"flex",alignItems:"center",gap:10,marginBottom:5,cursor:"default"}}>
+                  <div>
+                    <div style={{fontSize:8,color:"#3a4050",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:2}}>😴 SLEEP NUMBER</div>
+                    <div style={{fontSize:22,fontWeight:700,color:sleepColor,fontFamily:"'JetBrains Mono',monospace",lineHeight:1}}>{sleepNumber.toFixed(1)}%</div>
+                    <div style={{fontSize:8,color:"#3a4050",fontFamily:"monospace",marginTop:2}}>{largest.sym} · {sleepNumber<20?"safe":"⚠ concentrated"}</div>
+                  </div>
+                </div>
+              );
+            })()}
             <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
               <KPI label="Total Premium" value={f$0(totalPrem)}      sub={allF.length+" contracts"}/>
               <KPI label="Realized P/L"  value={fSign0(totalProfit)} sub={winRate+"% win"} color={totalProfit>=0?"#00ff88":"#ff4560"}/>
