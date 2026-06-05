@@ -2351,7 +2351,7 @@ export default async function handler(req, res) {
                   }
 
                   // Skynet controls check before live placement
-                  if (!isDryRun) {
+                  if (!contractDryRun) {
                     const scCheck = checkSkynetControls({ controls: skynetControls, limitPrice, qty: uncovered, bid: bestAsk, ask: bestAsk, projectedProfit: estPremium });
                     if (!scCheck.ok) {
                       console.log(`[auto-sto] ${symbol} ${account} blocked by Skynet controls: ${scCheck.reason}`);
@@ -2513,19 +2513,36 @@ export default async function handler(req, res) {
         const timeToMins  = t => { if (!t) return -1; const [h,m] = t.split(":").map(Number); return h*60+m; };
         const currentMins = timeToMins(etTimeStr);
 
-        // Find first rule whose min_time_et is met (or has no time restriction)
-        const rule = btcRules.find(r => {
-          if (r.min_time_et && timeToMins(r.min_time_et) > currentMins) return false; // too early
-          if (r.max_time_et && timeToMins(r.max_time_et) < currentMins) return false; // too late
-          return true;
-        });
+        // Helper: find best rule for a given ticker (ticker-specific rules have priority)
+        const findRuleForTicker = (tickerSym) => {
+          // 1. Ticker-specific rule (has tickers array containing this symbol)
+          const specific = btcRules.find(r => {
+            if (!Array.isArray(r.tickers) || !r.tickers.includes(tickerSym?.toUpperCase())) return false;
+            if (r.min_time_et && timeToMins(r.min_time_et) > currentMins) return false;
+            if (r.max_time_et && timeToMins(r.max_time_et) < currentMins) return false;
+            if (r.min_dte != null || r.max_dte != null) return true; // DTE check deferred to contract loop
+            return true;
+          });
+          if (specific) return specific;
+          // 2. Generic rule (no tickers filter)
+          return btcRules.find(r => {
+            if (Array.isArray(r.tickers) && r.tickers.length > 0) return false; // skip ticker-specific
+            if (r.min_time_et && timeToMins(r.min_time_et) > currentMins) return false;
+            if (r.max_time_et && timeToMins(r.max_time_et) < currentMins) return false;
+            return true;
+          });
+        };
+
+        // Check if any rule exists for any time
+        const rule = findRuleForTicker(null);
 
         if (!rule) {
           console.log(`[btc_auto] No matching rule for current time ${etTimeStr}`);
         } else {
+          // rule/isDryRun/minProfit resolved per-contract inside loop using findRuleForTicker
           const isDryRun  = rule.dry_run !== false;
           const minProfit = +(rule.min_profit_pct ?? 70);
-          console.log(`[btc_auto] Using rule "${rule.name}" — threshold ${minProfit}% — ${isDryRun ? "DRY RUN" : "LIVE"} — time ${etTimeStr}`);
+          console.log(`[btc_auto] Active rules: ${btcRules.map(r=>`"${r.name}"(${r.tickers?.join(",")||"all"})`).join(", ")} — time ${etTimeStr}`);
 
         // Fetch all open STO Call contracts with full details
         const openSTOs = await fetch(
@@ -2553,6 +2570,19 @@ export default async function handler(req, res) {
 
             const ticker  = String(contract.stock || "").toUpperCase();
             const expires = String(contract.expires || "").slice(0, 10);
+
+            // Resolve per-ticker rule — ticker-specific rules (e.g. AAPL 85%) override generic
+            const contractRule = findRuleForTicker(ticker) || rule;
+            const contractDryRun  = contractRule.dry_run !== false;
+            const contractMinProfit = +(contractRule.min_profit_pct ?? 70);
+            // DTE filter check for ticker-specific rules
+            const contractDte = Math.ceil((new Date(expires) - new Date()) / 86400000);
+            if (contractRule.min_dte != null && contractDte < +contractRule.min_dte) continue;
+            if (contractRule.max_dte != null && contractDte > +contractRule.max_dte && contractRule.tickers?.length) {
+              // Ticker-specific DTE restriction — fall back to generic rule
+              const genericRule = btcRules.find(r => !Array.isArray(r.tickers) || !r.tickers.length);
+              if (!genericRule) continue;
+            }
 
             // Fetch live bid/ask for this contract
             const livePrice = await fetch(
@@ -2582,18 +2612,18 @@ export default async function handler(req, res) {
             const openedVal  = premium; // premium already stored as total (e.g. $1000)
             const profitPct  = ((openedVal - currentVal) / openedVal) * 100;
 
-            console.log(`[btc_auto] ${ticker} $${contract.strike} ${contract.type} — bid:${bid} mid:${mid.toFixed(3)} profit:${profitPct.toFixed(1)}%`);
+            console.log(`[btc_auto] ${ticker} $${contract.strike} ${contract.type} — bid:${bid} mid:${mid.toFixed(3)} profit:${profitPct.toFixed(1)}% — rule:"${contractRule.name}" threshold:${contractMinProfit}%`);
 
-            if (profitPct < minProfit) continue;
+            if (profitPct < contractMinProfit) continue;
 
-            // Use mid if available, fall back to bid — both should still be ≥70% profit
+            // Use mid if available, fall back to bid
             const limitPrice = mid > 0 ? Math.round(mid * 100) / 100 : Math.round(bid * 100) / 100;
             if (!limitPrice) continue;
 
             const isSchwab = contract.account?.startsWith("Schwab");
             const isEtrade = contract.account?.startsWith("ETrade") || contract.account?.startsWith("Etrade");
 
-            console.log(`[btc_auto] ${isDryRun ? "[DRY RUN] " : ""}Placing BTC — ${ticker} $${contract.strike} ${contract.type} ${expires} @ $${limitPrice.toFixed(2)} (${profitPct.toFixed(1)}% profit) — ${contract.account}`);
+            console.log(`[btc_auto] ${contractDryRun ? "[DRY RUN] " : ""}Placing BTC — ${ticker} $${contract.strike} ${contract.type} ${expires} @ $${limitPrice.toFixed(2)} (${profitPct.toFixed(1)}% ≥ ${contractMinProfit}%) — ${contract.account}`);
 
             // ── Log signal first ───────────────────────────────────────────
             const sigId = await logSignal({
@@ -2641,7 +2671,7 @@ export default async function handler(req, res) {
               const approveRes = await fetch(`${APP_URL}/api/schwab-orders?action=approve&secret=${process.env.CRON_SECRET}`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ orderId, dry_run: isDryRun, limit_price: limitPrice, approved_by: "auto" }),
+                body: JSON.stringify({ orderId, dry_run: contractDryRun, limit_price: limitPrice, approved_by: "auto" }),
               }).then(r => r.json());
 
               orderResult = approveRes;
@@ -2666,7 +2696,7 @@ export default async function handler(req, res) {
               const placeRes = await fetch(`${APP_URL}/api/schwab-orders?action=order-place&secret=${process.env.CRON_SECRET}`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ orderId, dry_run: isDryRun, limit_price: limitPrice, approved_by: "auto" }),
+                body: JSON.stringify({ orderId, dry_run: contractDryRun, limit_price: limitPrice, approved_by: "auto" }),
               }).then(r => r.json());
 
               orderResult = placeRes;
@@ -2674,7 +2704,7 @@ export default async function handler(req, res) {
 
             // ── Update contract close_method ───────────────────────────────
             console.log(`[btc_auto] orderResult for ${contract.stock}:`, JSON.stringify(orderResult));
-            if (!isDryRun) {
+            if (!contractDryRun) {
               // Mark close_method=auto regardless of orderResult.ok — order may have
               // succeeded even if the response parsing failed
               await fetch(`${SUPABASE_URL}/rest/v1/contracts?id=eq.${contract.id}`, {
@@ -2689,21 +2719,21 @@ export default async function handler(req, res) {
               await fetch(`${SUPABASE_URL}/rest/v1/decision_log`, {
                 method: "POST",
                 headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
-                body: JSON.stringify({ signal_id: sigId, decision: isDryRun ? "dry_run" : "traded", notes: `auto-btc @ $${limitPrice.toFixed(2)}`, created_at: new Date().toISOString() }),
+                body: JSON.stringify({ signal_id: sigId, decision: contractDryRun ? "dry_run" : "traded", notes: `auto-btc @ $${limitPrice.toFixed(2)}`, created_at: new Date().toISOString() }),
               });
             }
 
             // ── Send Pushover ──────────────────────────────────────────────
-            const dryTag   = isDryRun ? "[DRY RUN] " : "";
+            const dryTag   = contractDryRun ? "[DRY RUN] " : "";
             const profitStr = profitPct.toFixed(1);
             const costStr   = `$${(limitPrice * contract.qty * 100).toFixed(2)}`;
-            const jsonPreview = isDryRun ? `\n\nOrder JSON:\n${JSON.stringify({ contract_id: contract.id, ticker, strike: contract.strike, type: contract.type, expires, qty: contract.qty, limit_price: limitPrice, order_type: "LIMIT", duration: "DAY", account: contract.account, approved_by: "auto" }, null, 2)}` : "";
+            const jsonPreview = contractDryRun ? `\n\nOrder JSON:\n${JSON.stringify({ contract_id: contract.id, ticker, strike: contract.strike, type: contract.type, expires, qty: contract.qty, limit_price: limitPrice, order_type: "LIMIT", duration: "DAY", account: contract.account, approved_by: "auto" }, null, 2)}` : "";
             await sendPushover(
               `🤖 ${dryTag}Auto-BTC: ${ticker} ${contract.type}`,
               `${dryTag}Bought back ${ticker} $${contract.strike} ${contract.type} ${expires}\nLimit: $${limitPrice.toFixed(2)} · Cost: ${costStr} · Profit: ${profitStr}%\nAccount: ${contract.account}${jsonPreview}`,
               sigId ? `${APP_URL}/?action=close&id=${contract.id}&signal_id=${sigId}` : `${APP_URL}/?tab=contracts`,
               "View Contract",
-              isDryRun ? 0 : 1
+              contractDryRun ? 0 : 1
             );
 
           } catch(e) { console.warn(`[btc_auto] Error on contract ${contract.id}:`, e.message); }
