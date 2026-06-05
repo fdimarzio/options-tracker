@@ -336,6 +336,49 @@ async function handleAssignment(parsed) {
       "cashregister"
     );
 
+    // ── Task #43: Wheel strategy auto-classification ──────────────────────────
+    // When a put gets assigned, link all open STO contracts on the same stock
+    // into a Wheel strategy group.
+    try {
+      if (isSTO && parent.opt_type === "STO") {
+        // Find or create a strategy_group_id for this wheel
+        let groupId = parent.strategy_group_id;
+        if (!groupId) {
+          // Use parent.id as a stable group identifier (first contract in the wheel)
+          groupId = parent.id;
+        }
+        // Mark the assigned contract as Wheel
+        await sbPatch("contracts", parent.id, { strategy: "Wheel", strategy_group_id: groupId, strategy_type: "wheel" });
+        // Also mark any other open STOs on this stock that aren't already in a wheel
+        const openSTOs = await sbGet(`contracts?stock=eq.${encodeURIComponent(stock)}&opt_type=eq.STO&status=eq.Open&strategy_group_id=is.null&select=id`);
+        for (const c of (Array.isArray(openSTOs) ? openSTOs : [])) {
+          await sbPatch("contracts", c.id, { strategy: "Wheel", strategy_group_id: groupId, strategy_type: "wheel" });
+        }
+        console.log(`[auto-import] Wheel strategy tagged on ${stock} group ${groupId}`);
+      }
+    } catch(e) { console.warn("[handleAssignment] Wheel tagging failed:", e.message); }
+
+    // ── Task #55: Capture assignment as stock_transactions row ────────────────
+    try {
+      const sharesQty   = (+parsed.qty || 0) * 100;
+      const assignPrice = +strike;
+      const netAmt      = assignPrice * sharesQty;
+      await sbPost("stock_transactions", {
+        contract_id:      parent.id,
+        symbol:           stock,
+        transaction_type: "ASSIGNMENT",
+        asset_type:       "EQUITY",
+        quantity:         sharesQty,
+        price:            assignPrice,
+        net_amount:       isSTO ? -netAmt : netAmt, // STO put assigned = buying shares (cash out)
+        trade_date:       new Date(date_exec + "T16:00:00Z").toISOString(),
+        account:          account,
+        description:      `Assignment from contract ${parent.id}: ${isSTO ? "bought" : "sold"} ${sharesQty} shares of ${stock} at $${assignPrice}`,
+        schwab_transaction_id: parsed.schwab_transaction_id || null,
+      }, "resolution=ignore-duplicates");
+      console.log(`[auto-import] assignment stock_transaction recorded: ${stock} ${sharesQty} shares @ $${assignPrice}`);
+    } catch(e) { console.warn("[handleAssignment] stock_transaction write failed:", e.message); }
+
     console.log(`[auto-import] ✅ Assignment auto-resolved: ${stock} $${strike} ${expires} → contract #${parent.id}, profit $${profit.toFixed(2)}`);
     return { resolved: true, parentId: parent.id, profit };
   }

@@ -8271,6 +8271,44 @@ ${JSON.stringify(summary, null, 1)}`;
                 </div>
               );
             })}
+
+            {/* ── Wheel P&L View ── */}
+            {(() => {
+              const wheelGroups = {};
+              allF.forEach(c => {
+                if (c.strategy !== "Wheel" || !c.strategyGroupId) return;
+                const gid = c.strategyGroupId;
+                if (!wheelGroups[gid]) wheelGroups[gid] = { id: gid, stock: c.stock, contracts: [] };
+                wheelGroups[gid].contracts.push(c);
+              });
+              const groups = Object.values(wheelGroups);
+              if (!groups.length) return null;
+              return (
+                <div style={{marginTop:16}}>
+                  <div style={{fontFamily:"monospace",fontSize:9,color:"#00ff88",letterSpacing:"0.08em",marginBottom:10}}>🔄 WHEEL P&L BY GROUP</div>
+                  {groups.map(g => {
+                    const totalPrem  = g.contracts.reduce((s,c)=>s+(c.premium||0),0);
+                    const closedP    = g.contracts.filter(c=>c.status==="Closed").reduce((s,c)=>s+(c.profit||0),0);
+                    const openPrem   = g.contracts.filter(c=>c.status==="Open").reduce((s,c)=>s+Math.abs(c.premium||0),0);
+                    const currentCostToClose = g.contracts.filter(c=>c.status==="Open").reduce((s,c)=>s+(c.costToClose||0),0);
+                    return (
+                      <div key={g.id} style={{background:"#0a0e14",border:"1px solid #00ff8820",borderRadius:6,padding:"10px 12px",marginBottom:8}}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                          <span style={{fontFamily:"monospace",fontSize:11,fontWeight:700,color:"#e6edf3"}}>{g.stock} — Wheel Group #{g.id}</span>
+                          <span style={{fontFamily:"monospace",fontSize:9,color:"#3a4050"}}>{g.contracts.length} contracts</span>
+                        </div>
+                        <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+                          <span style={{fontSize:9,color:"#8b949e",fontFamily:"monospace"}}>Premium collected: <b style={{color:"#00ff88"}}>{f$(totalPrem)}</b></span>
+                          <span style={{fontSize:9,color:"#8b949e",fontFamily:"monospace"}}>Realized P/L: <b style={{color:closedP>=0?"#00ff88":"#ff4560"}}>{fSign(closedP)}</b></span>
+                          <span style={{fontSize:9,color:"#8b949e",fontFamily:"monospace"}}>Open premium: <b style={{color:"#ffd166"}}>{f$(openPrem)}</b></span>
+                          {currentCostToClose > 0 && <span style={{fontSize:9,color:"#8b949e",fontFamily:"monospace"}}>Current close cost: <b style={{color:"#ff4560"}}>{f$(currentCostToClose)}</b></span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </div>
         )}
 
