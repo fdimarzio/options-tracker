@@ -2085,6 +2085,10 @@ export default async function handler(req, res) {
     } catch(e) { console.warn("[market-refresh] STO scanner failed:", e.message); }
 
     // ── Auto-STO Scanner (place covered call STOs automatically) ──────────
+    // MARKET HOURS GATE — never place orders outside 9:30 AM–4:00 PM ET Mon-Fri
+    if (!isMarketOpen) {
+      console.log("[auto-sto] outside market hours — skipping order placement");
+    } else
     try {
       const stoRuleAuto = (Array.isArray(signalRules) ? signalRules : [])
         .filter(r => r.rule_type === "sto" && r.enabled)
@@ -2536,6 +2540,10 @@ export default async function handler(req, res) {
     } catch(e) { console.warn("[market-refresh] auto-sto scanner failed:", e.message); }
 
     // ── Auto-BTC Scanner (close STOs at profit threshold) ─────────────────
+    // MARKET HOURS GATE — never place orders outside 9:30 AM–4:00 PM ET Mon-Fri
+    if (!isMarketOpen) {
+      console.log("[btc_auto] outside market hours — skipping order placement");
+    } else
     try {
       const btcRules = (Array.isArray(signalRules) ? signalRules : [])
         .filter(r => r.rule_type === "btc_auto" && r.enabled)
@@ -2992,6 +3000,10 @@ export default async function handler(req, res) {
     } catch(e) { console.warn("[heartbeat] write failed:", e.message); }
 
     // ── Auto-close ITM contracts at 3:30 PM ET on expiration day ────────────
+    // MARKET HOURS GATE — only runs during market hours
+    if (!isMarketOpen) {
+      console.log("[expiry] outside market hours — skipping expiry protection checks");
+    } else
     try {
       const etForExpiry = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
       const etMinsForExpiry = etForExpiry.getHours() * 60 + etForExpiry.getMinutes();
