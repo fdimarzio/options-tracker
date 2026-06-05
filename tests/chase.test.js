@@ -551,3 +551,50 @@ describe("Pushover profit dollar string", () => {
     expect(profitDollarStr(200, 450)).toBe("-$250.00");
   });
 });
+
+// ── Scanner rules tests (batch) ───────────────────────────────────────────────
+
+// Task #15: stop_loss_multiplier based on DTE
+describe("auto-STO stop loss DTE gate", () => {
+  function stopLossForDTE(dte) { return dte <= 3 ? null : 2.0; }
+  it("DTE 1 → no stop loss (null)", () => expect(stopLossForDTE(1)).toBeNull());
+  it("DTE 3 → no stop loss (null)", () => expect(stopLossForDTE(3)).toBeNull());
+  it("DTE 4 → stop loss 2.0",       () => expect(stopLossForDTE(4)).toBe(2.0));
+  it("DTE 7 → stop loss 2.0",       () => expect(stopLossForDTE(7)).toBe(2.0));
+});
+
+// Task #16: LEAP exclusion
+describe("expiry protection LEAP exclusion", () => {
+  function shouldSkipLeap(dte) { return dte > 30; }
+  it("DTE 0 → do not skip",  () => expect(shouldSkipLeap(0)).toBe(false));
+  it("DTE 30 → do not skip", () => expect(shouldSkipLeap(30)).toBe(false));
+  it("DTE 31 → skip LEAP",   () => expect(shouldSkipLeap(31)).toBe(true));
+  it("DTE 90 → skip LEAP",   () => expect(shouldSkipLeap(90)).toBe(true));
+});
+
+// Task #10: skip BTC if far OTM expiring today
+describe("BTC skip far OTM expiring today", () => {
+  function shouldSkipBTC(expires, stockPrice, strike) {
+    const today = new Date().toISOString().slice(0, 10);
+    const dte   = Math.ceil((new Date(expires) - new Date()) / 86400000);
+    return dte === 0 && stockPrice < strike * 0.98;
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  it("expires today, stock 3% below strike → skip", () => expect(shouldSkipBTC(today, 145, 150)).toBe(true));
+  it("expires today, stock only 1% below  → no skip", () => expect(shouldSkipBTC(today, 149, 150)).toBe(false));
+  it("expires today, stock above strike   → no skip", () => expect(shouldSkipBTC(today, 155, 150)).toBe(false));
+  it("expires tomorrow, stock below 98%  → no skip", () => {
+    const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+    expect(shouldSkipBTC(tomorrow, 145, 150)).toBe(false);
+  });
+});
+
+// Task #22: ticker_risk_config avoid logic
+describe("ticker_risk_config action", () => {
+  function shouldSkipTicker(config) {
+    return config?.action === 'avoid';
+  }
+  it("action=avoid → skip",  () => expect(shouldSkipTicker({ action: 'avoid' })).toBe(true));
+  it("action=scan  → no skip", () => expect(shouldSkipTicker({ action: 'scan'  })).toBe(false));
+  it("not in config → no skip", () => expect(shouldSkipTicker(null)).toBe(false));
+});

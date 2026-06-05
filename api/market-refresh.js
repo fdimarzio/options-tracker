@@ -2117,6 +2117,19 @@ export default async function handler(req, res) {
             console.log(`[auto-sto] Too early (${etNowAuto.toTimeString().slice(0,5)} ET) — waiting until ${stoRuleAuto.min_time_et || "09:45"}`);
           } else {
 
+            // Load ticker_risk_config for all whitelisted tickers (task #22)
+            let tickerRiskConfig = {};
+            try {
+              const trcRes = await fetch(
+                `${SUPABASE_URL}/rest/v1/ticker_risk_config?select=symbol,min_otm_pct,max_dte,min_iv_pct,max_iv_pct,action`,
+                { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+              );
+              const trcRows = await trcRes.json();
+              if (Array.isArray(trcRows)) trcRows.forEach(r => { tickerRiskConfig[r.symbol.toUpperCase()] = r; });
+            } catch(e) { console.warn("[auto-sto] ticker_risk_config load failed:", e.message); }
+
+            const globalMinIV = +(momentumConfig?.min_iv_pct ?? 25); // task #18 IV floor
+
             console.log(`[auto-sto] Scanning ${autoStoWhitelist.length} whitelisted tickers — ${isDryRun ? "DRY RUN" : "LIVE"}`);
 
             for (const symbol of autoStoWhitelist) {
@@ -2126,6 +2139,21 @@ export default async function handler(req, res) {
 
                 const stockPrice = stockQ.lastPrice;
                 const changePct  = (stockQ.changePct ?? 0) * 100;
+
+                // Task #22: ticker_risk_config check — skip if action=avoid
+                const trc = tickerRiskConfig[symbol];
+                if (trc?.action === 'avoid') {
+                  console.log(`[Scanner] Skipping ${symbol} — ticker_risk_config action=avoid`);
+                  continue;
+                }
+
+                // Task #18: IV floor gate
+                const tickerIV = getAtmIv(chainData, symbol, stockPrice);
+                const minIVFloor = trc?.min_iv_pct != null ? +trc.min_iv_pct : globalMinIV;
+                if (tickerIV != null && tickerIV < minIVFloor) {
+                  console.log(`[Scanner] Skipping ${symbol} — IV ${tickerIV.toFixed(1)}% below ${minIVFloor}% floor`);
+                  continue;
+                }
 
                 // Stock must be up by min_change_pct
                 if (changePct < minChange) {
@@ -2201,6 +2229,10 @@ export default async function handler(req, res) {
                 //      longer DTE requires more cushion
                 const today2 = new Date().toISOString().slice(0,10);
 
+                // Task #22: override min_otm_pct from ticker_risk_config if available
+                const effectiveBaseMinOTM = trc?.min_otm_pct != null ? +trc.min_otm_pct : minOTM;
+                const effectiveMaxDTE     = trc?.max_dte     != null ? +trc.max_dte     : maxDTE;
+
                 // Group valid candidates by expiry, pick nearest expiry first
                 const candidatesByExpiry = {};
                 for (const [chainKey, chain] of Object.entries(chainData)) {
@@ -2208,13 +2240,13 @@ export default async function handler(req, res) {
                   if (chainTicker !== symbol) continue;
                   if (chainExpiry <= today2) continue;
                   const dte = Math.ceil((new Date(chainExpiry) - new Date()) / 86400000);
-                  if (dte < minDTE || dte > maxDTE) continue;
+                  if (dte < minDTE || dte > effectiveMaxDTE) continue;
 
                   // Effective min OTM — table-driven via stoRuleAuto.otm_dte_table
                   // Table format: [{ max_dte: 3, min_otm_pct: 1.75 }, { max_dte: 7, min_otm_pct: 2.00 }, ...]
                   // Rows sorted ascending by max_dte; first row where dte <= max_dte wins.
                   // Falls back to minOTM (rule-level) if no table defined.
-                  let effectiveMinOTM = minOTM;
+                  let effectiveMinOTM = effectiveBaseMinOTM; // task #22: use ticker config if available
                   const otmDteTable = stoRuleAuto.otm_dte_table;
                   if (Array.isArray(otmDteTable) && otmDteTable.length) {
                     const sorted = [...otmDteTable].sort((a, b) => a.max_dte - b.max_dte);
@@ -2459,9 +2491,12 @@ export default async function handler(req, res) {
                             await fetch(`${SUPABASE_URL}/rest/v1/contracts?id=eq.${recentRows[0].id}`, {
                               method: "PATCH",
                               headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
-                              body: JSON.stringify({ open_method: "auto" }),
+                              body: JSON.stringify({
+                              open_method: "auto",
+                              stop_loss_multiplier: bestDTE <= 3 ? null : 2.0, // task #15: no stop loss for DTE≤3
+                            }),
                             });
-                            console.log(`[auto-sto] tagged contract ${recentRows[0].id} open_method=auto`);
+                            console.log(`[auto-sto] tagged contract ${recentRows[0].id} open_method=auto stop_loss=${bestDTE<=3?"null (DTE≤3)":"2.0"}`);
                           }
                         } catch(e) { console.warn(`[auto-sto] open_method tag failed:`, e.message); }
 
@@ -2582,6 +2617,15 @@ export default async function handler(req, res) {
               // Ticker-specific DTE restriction — fall back to generic rule
               const genericRule = btcRules.find(r => !Array.isArray(r.tickers) || !r.tickers.length);
               if (!genericRule) continue;
+            }
+
+            // Task #10: skip BTC if expires today and stock is 2%+ below strike (let it expire worthless)
+            if (contractDte === 0) {
+              const liveStockPrice = quotes[ticker]?.lastPrice;
+              if (liveStockPrice != null && liveStockPrice < +contract.strike * 0.98) {
+                console.log(`[BTC] Skipping ${ticker} — expires today, stock $${liveStockPrice.toFixed(2)} vs strike $${contract.strike}, letting expire worthless`);
+                continue;
+              }
             }
 
             // Fetch live bid/ask for this contract
@@ -2973,6 +3017,13 @@ export default async function handler(req, res) {
           const isITM  = isCall ? stockPrice > strike : stockPrice < strike;
           if (!isITM) continue;
 
+          // Task #16: LEAP exclusion — skip if DTE > 30
+          const expiryDte = Math.ceil((new Date(contract.expires) - new Date()) / 86400000);
+          if (expiryDte > 30) {
+            console.log(`[ExpiryProtection] Skipping ${ticker} — LEAP position (DTE ${expiryDte}), not closing`);
+            continue;
+          }
+
           // 3:00 PM warning
           if (etMinsForExpiry >= WARN_MINS && etMinsForExpiry < CLOSE_MINS) {
             await sendPushover(
@@ -3029,7 +3080,7 @@ export default async function handler(req, res) {
                   console.log(`[expiry] auto-closed ITM: ${ticker} $${strike} ${contract.type}`);
                 } else {
                   await sendPushover(`🧪 [DRY RUN] ${ticker} Would Auto-Close — ITM`, `${contract.type} $${strike} · Stock: $${stockPrice.toFixed(2)} · ${contract.account}\nSet expiry_protection rule dry_run=false to enable real orders`, `${APP_URL}/?tab=contracts`, "View Contracts", 0);
-                  console.log(`[expiry] DRY RUN — would auto-close: ${ticker} $${strike} ${contract.type}`);
+                  console.log(`[ExpiryProtection] DRY RUN — would close ${ticker} ITM contract $${strike} ${contract.type} (stock $${stockPrice.toFixed(2)})`);
                 }
               }
             } catch(e) { console.warn(`[expiry] auto-close failed for ${ticker}:`, e.message); }

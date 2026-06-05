@@ -752,10 +752,13 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
   const [analysis,      setAnalysis]      = useState(null);
   const [analyzing,     setAnalyzing]     = useState(false);
   const [skynetCtrl,    setSkynetCtrl]    = useState(null);
+  const [tickerRiskCfg, setTickerRiskCfg] = useState([]);
 
   useEffect(() => {
     supabase.from("skynet_controls").select("*").eq("enabled",true).limit(1).maybeSingle()
       .then(({data}) => { if (data) setSkynetCtrl(data); });
+    supabase.from("ticker_risk_config").select("*").order("symbol")
+      .then(({data}) => { if (data) setTickerRiskCfg(data); });
     Promise.all([
       supabase.from("signal_rules").select("*").order("priority", { ascending: false }),
       supabase.from("signal_log").select("id,signal_type,profit_pct_at_signal,pushed,created_at,rule_id,contract_id"),
@@ -1325,6 +1328,40 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
             </div>
           );
         })()}
+
+        {/* ── Ticker Risk Config (task #22) ── */}
+        {tickerRiskCfg.length > 0 && (
+          <div style={{background:"#0a0e14",border:"1px solid #58a6ff25",borderRadius:8,padding:"12px 14px",marginTop:16}}>
+            <div style={{fontFamily:"monospace",fontSize:9,color:"#58a6ff",letterSpacing:"0.08em",marginBottom:10}}>📊 TICKER RISK CONFIG</div>
+            <div style={{overflowX:"auto"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:10,fontFamily:"monospace"}}>
+                <thead><tr style={{borderBottom:"1px solid #1c2128"}}>
+                  {["Symbol","Min OTM%","Max DTE","Min IV%","Max IV%","Action","Notes"].map(h=>(
+                    <th key={h} style={{padding:"3px 8px",textAlign:"left",color:"#3a4050",fontWeight:600,fontSize:9}}>{h}</th>
+                  ))}
+                </tr></thead>
+                <tbody>
+                  {tickerRiskCfg.map(r => (
+                    <tr key={r.symbol} style={{borderBottom:"1px solid #0d1117"}}>
+                      <td style={{padding:"4px 8px",color:"#e6edf3",fontWeight:700}}>{r.symbol}</td>
+                      <td style={{padding:"4px 8px"}}><input type="number" step="0.5" defaultValue={r.min_otm_pct} onBlur={async e=>{const v=parseFloat(e.target.value);if(!isNaN(v)){await supabase.from("ticker_risk_config").update({min_otm_pct:v,updated_at:new Date().toISOString()}).eq("symbol",r.symbol);setTickerRiskCfg(p=>p.map(x=>x.symbol===r.symbol?{...x,min_otm_pct:v}:x));}}} style={{width:55,fontSize:10,padding:"2px 4px",background:"#0d1117",border:"1px solid #21262d",borderRadius:3,color:"#ffd166",fontFamily:"monospace"}}/></td>
+                      <td style={{padding:"4px 8px"}}><input type="number" step="1"   defaultValue={r.max_dte??""} placeholder="—" onBlur={async e=>{const v=e.target.value===""?null:parseInt(e.target.value);await supabase.from("ticker_risk_config").update({max_dte:v,updated_at:new Date().toISOString()}).eq("symbol",r.symbol);}} style={{width:45,fontSize:10,padding:"2px 4px",background:"#0d1117",border:"1px solid #21262d",borderRadius:3,color:"#ffd166",fontFamily:"monospace"}}/></td>
+                      <td style={{padding:"4px 8px",color:"#888"}}>{r.min_iv_pct??'—'}</td>
+                      <td style={{padding:"4px 8px",color:"#888"}}>{r.max_iv_pct??'—'}</td>
+                      <td style={{padding:"4px 8px"}}>
+                        <select defaultValue={r.action} onChange={async e=>{const v=e.target.value;await supabase.from("ticker_risk_config").update({action:v,updated_at:new Date().toISOString()}).eq("symbol",r.symbol);setTickerRiskCfg(p=>p.map(x=>x.symbol===r.symbol?{...x,action:v}:x));}} style={{fontSize:10,padding:"2px 4px",background:"#0d1117",border:"1px solid #21262d",borderRadius:3,color:r.action==="avoid"?"#ff4560":"#00ff88",fontFamily:"monospace"}}>
+                          <option value="scan">scan</option>
+                          <option value="avoid">avoid</option>
+                        </select>
+                      </td>
+                      <td style={{padding:"4px 8px",color:"#555",fontSize:9}}>{r.notes}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
       </div>
   );
@@ -4067,7 +4104,7 @@ function AllTransactionsTab({ supabase }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, fontFamily: "monospace" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid #21262d" }}>
-                {["Date","Symbol","Type","Qty","Price","Amount","Account"].map(h => (
+                {["Date","Symbol","Type","Qty","Price","Amount","Account","Rationale"].map(h => (
                   <th key={h} style={{ padding: "6px 8px", textAlign: h === "Qty" || h === "Price" || h === "Amount" ? "right" : "left", color: "#555", fontWeight: 600, fontSize: 9, letterSpacing: "0.06em", whiteSpace: "nowrap" }}>{h}</th>
                 ))}
               </tr>
@@ -4087,6 +4124,21 @@ function AllTransactionsTab({ supabase }) {
                     <td style={{ padding: "5px 8px", textAlign: "right", color: "#c9d1d9" }}>{r.price != null ? `$${(+r.price).toFixed(2)}` : "—"}</td>
                     <td style={{ padding: "5px 8px", textAlign: "right", color: r.net_amount >= 0 ? "#00ff88" : "#ff4560" }}>{r.net_amount != null ? `${r.net_amount >= 0 ? "+" : ""}$${Math.abs(+r.net_amount).toFixed(2)}` : "—"}</td>
                     <td style={{ padding: "5px 8px", color: "#8b949e" }}>{r.account}</td>
+                    <td style={{ padding: "3px 8px" }}>
+                      {isBuy && (
+                        <input
+                          type="text"
+                          defaultValue={r.rationale || ""}
+                          placeholder="why bought…"
+                          onBlur={async e => {
+                            const v = e.target.value.trim();
+                            if (v === (r.rationale || "")) return;
+                            await supabase.from("stock_transactions").update({ rationale: v || null }).eq("id", r.id);
+                          }}
+                          style={{ width: 150, fontSize: 9, padding: "2px 5px", background: "#0a0e14", border: "1px solid #21262d", borderRadius: 3, color: "#c9d1d9", fontFamily: "monospace" }}
+                        />
+                      )}
+                    </td>
                   </tr>
                 );
               })}
