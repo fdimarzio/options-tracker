@@ -379,12 +379,33 @@ export default async function handler(req, res) {
           const port = await etradeGet(`/v1/accounts/${acct.accountIdKey}/portfolio`);
           const positions = port?.PortfolioResponse?.AccountPortfolio?.[0]?.Position || [];
           const totals    = port?.PortfolioResponse?.AccountPortfolio?.[0]?.Totals || {};
-          totalAccountValue += totals.totalMarketValue || 0;
 
-          // Also fetch balance for cash
+          // Fetch balance — with realTimeNAV=true, Computed.RealTimeValues.totalAccountValue
+          // is the full NAV (equity + cash + options). Use it as primary, fall back to equity+cash sum.
           try {
-            const bal  = await etradeGet(`/v1/accounts/${acct.accountIdKey}/balance`, { instType: "BROKERAGE", realTimeNAV: "true" });
-            totalCash += bal?.BalanceResponse?.Computed?.cashAvailableForInvestment || bal?.BalanceResponse?.Computed?.cashBalance || 0;
+            const bal     = await etradeGet(`/v1/accounts/${acct.accountIdKey}/balance`, { instType: "BROKERAGE", realTimeNAV: "true" });
+            const computed = bal?.BalanceResponse?.Computed ?? {};
+            const rtv      = computed?.RealTimeValues ?? {};
+
+            // Diagnostic — log once so we can verify field names from the live API
+            console.log(`[etrade balance] account ${acct.accountId} Computed keys:`, Object.keys(computed));
+            console.log(`[etrade balance] account ${acct.accountId} RealTimeValues:`, JSON.stringify(rtv));
+            console.log(`[etrade balance] account ${acct.accountId} Totals (portfolio):`, JSON.stringify(totals));
+
+            // Prefer full NAV from RealTimeValues, fall back to equity market value + cash
+            const rtNAV   = +(rtv.totalAccountValue || rtv.netMv || 0);
+            const cashBal = +(computed.cashAvailableForInvestment || computed.cashBalance || 0);
+
+            if (rtNAV > 0) {
+              totalAccountValue += rtNAV;
+              console.log(`[etrade balance] account ${acct.accountId} NAV (RealTimeValues): $${rtNAV}`);
+            } else {
+              // Fallback: equity market value + cash (may undercount options/other assets)
+              const equityVal = +(totals.totalMarketValue || 0);
+              totalAccountValue += equityVal + cashBal;
+              totalCash        += cashBal;
+              console.log(`[etrade balance] account ${acct.accountId} NAV (fallback equity+cash): $${equityVal + cashBal}`);
+            }
           } catch(e) { console.warn(`[etrade balance] ${acct.accountIdKey}:`, e.message); }
 
           positions.forEach(p => {
