@@ -679,6 +679,75 @@ Respond in JSON format:
       return res.status(200).json({ok:true,scanned:results.length,vix,results});
     }
 
+    // ── Mode 6: Catalyst Fetch — research & upsert catalysts for a ticker ──────
+    if (mode === "catalyst_fetch") {
+      const { ticker } = req.body;
+      if (!ticker) return res.status(400).json({ error: "ticker required" });
+
+      const today = new Date().toISOString().split("T")[0];
+
+      const systemPrompt = `You are a financial research analyst. Generate an upcoming catalyst calendar for a stock ticker.
+Return ONLY a valid JSON array — no markdown, no explanation, no trailing text.
+Each item must have exactly these fields:
+  event_date   : ISO date "YYYY-MM-DD" (approximate if uncertain)
+  event_name   : string, max 60 chars
+  event_type   : one of: earnings | product | regulatory | macro | conference
+  impact       : one of: HIGH | MEDIUM | LOW
+  description  : 1-2 sentences on what to watch and why it matters
+  source       : where this information comes from (e.g. "Company IR", "SEC filing", "Bloomberg est.")`;
+
+      const userMessage = `Generate 8-12 upcoming catalysts for ${ticker.toUpperCase()} starting from today (${today}) through the next 12 months.
+Include: earnings dates, key conferences, product launches, regulatory decisions, macro events affecting this stock.
+Use your best estimate for dates. Return ONLY the JSON array.`;
+
+      const apiResp = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key":         ANTHROPIC_API_KEY,
+          "anthropic-version": "2023-06-01",
+          "Content-Type":      "application/json",
+        },
+        body: JSON.stringify({
+          model:      MODEL,
+          max_tokens: 2000,
+          system:     systemPrompt,
+          messages:   [{ role: "user", content: userMessage }],
+        }),
+      });
+
+      const apiData = await apiResp.json();
+      if (!apiResp.ok) {
+        const msg = apiData?.error?.message || JSON.stringify(apiData);
+        console.error("[catalyst_fetch] API error:", msg);
+        return res.status(apiResp.status).json({ error: msg });
+      }
+
+      const text = apiData.content?.find(b => b.type === "text")?.text || "";
+      let catalysts = [];
+      try {
+        const match = text.match(/\[[\s\S]*\]/);
+        if (match) catalysts = JSON.parse(match[0]);
+      } catch(e) {
+        console.error("[catalyst_fetch] parse error:", e.message, "raw:", text.slice(0, 300));
+        return res.status(500).json({ error: "Failed to parse catalyst JSON", raw: text.slice(0, 500) });
+      }
+
+      // Stamp ticker on each row
+      catalysts = catalysts
+        .filter(c => c.event_date && c.event_name)
+        .map(c => ({
+          ticker:      ticker.toUpperCase(),
+          event_date:  c.event_date,
+          event_name:  c.event_name,
+          event_type:  c.event_type || "product",
+          impact:      c.impact || "MEDIUM",
+          description: c.description || "",
+          source:      c.source || "",
+        }));
+
+      return res.status(200).json({ ok: true, catalysts });
+    }
+
     return res.status(400).json({ error: `Unknown mode: ${mode}` });
 
   } catch (err) {

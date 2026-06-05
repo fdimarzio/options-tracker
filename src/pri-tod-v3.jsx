@@ -42,8 +42,12 @@ function toApp(row) {
     strategy:         row.strategy || null,
     strategyGroupId:  row.strategy_group_id != null ? +row.strategy_group_id : null,
     strategyType:     row.strategy_type || null,
-    openMethod:       row.open_method || null,
-    closeMethod:      row.close_method || null,
+    openMethod:          row.open_method || null,
+    closeMethod:         row.close_method || null,
+    stopLossMultiplier:  row.stop_loss_multiplier != null ? +row.stop_loss_multiplier : 2.0,
+    timeStopDte:         row.time_stop_dte != null ? +row.time_stop_dte : null,
+    deltaStop:           row.delta_stop != null ? +row.delta_stop : null,
+    lastExitAlertAt:     row.last_exit_alert_at || null,
   };
 }
 function toDB(c) {
@@ -77,8 +81,11 @@ function toDB(c) {
     strategy:           c.strategy || null,
     strategy_group_id:  c.strategyGroupId != null ? +c.strategyGroupId : null,
     strategy_type:      c.strategyType || null,
-    open_method:        c.openMethod || null,
-    close_method:       c.closeMethod || null,
+    open_method:           c.openMethod || null,
+    close_method:          c.closeMethod || null,
+    stop_loss_multiplier:  c.stopLossMultiplier != null ? +c.stopLossMultiplier : 2.0,
+    time_stop_dte:         c.timeStopDte != null ? +c.timeStopDte : null,
+    delta_stop:            c.deltaStop != null ? +c.deltaStop : null,
   };
 }
 function planToApp(row) {
@@ -5919,6 +5926,37 @@ ${JSON.stringify(summary, null, 1)}`;
                   </div>
                 )}
                 {c.notes && <div style={{marginTop:8,fontSize:10,color:"#555",fontStyle:"italic"}}>"{c.notes}"</div>}
+                {/* Exit Plan */}
+                {c.status === "Open" && (
+                  <div style={{marginTop:10,borderTop:"1px solid #1c2128",paddingTop:8}}>
+                    <div style={{fontSize:7,color:"#ffd166",fontFamily:"monospace",letterSpacing:"0.07em",marginBottom:6}}>EXIT PLAN</div>
+                    <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"center"}}>
+                      <div>
+                        <div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",marginBottom:2}}>STOP LOSS</div>
+                        <input type="number" step="0.1" defaultValue={c.stopLossMultiplier ?? 2.0} onBlur={async e=>{
+                          const v = parseFloat(e.target.value); if (isNaN(v)) return;
+                          await supabase.from("contracts").update({stop_loss_multiplier:v}).eq("id",c.id);
+                        }} style={{width:60,fontSize:11,padding:"2px 5px",background:"#0d1117",border:"1px solid #21262d",borderRadius:3,color:"#ffd166",fontFamily:"monospace"}}/>
+                        <span style={{fontSize:8,color:"#3a4050",fontFamily:"monospace",marginLeft:3}}>× premium</span>
+                      </div>
+                      <div>
+                        <div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",marginBottom:2}}>TIME STOP DTE</div>
+                        <input type="number" step="1" defaultValue={c.timeStopDte ?? ""} placeholder="—" onBlur={async e=>{
+                          const v = e.target.value === "" ? null : parseInt(e.target.value);
+                          await supabase.from("contracts").update({time_stop_dte:v}).eq("id",c.id);
+                        }} style={{width:55,fontSize:11,padding:"2px 5px",background:"#0d1117",border:"1px solid #21262d",borderRadius:3,color:"#ffd166",fontFamily:"monospace"}}/>
+                        <span style={{fontSize:8,color:"#3a4050",fontFamily:"monospace",marginLeft:3}}>days</span>
+                      </div>
+                      <div>
+                        <div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",marginBottom:2}}>DELTA STOP</div>
+                        <input type="number" step="0.01" defaultValue={c.deltaStop ?? 0.30} onBlur={async e=>{
+                          const v = parseFloat(e.target.value); if (isNaN(v)) return;
+                          await supabase.from("contracts").update({delta_stop:v}).eq("id",c.id);
+                        }} style={{width:60,fontSize:11,padding:"2px 5px",background:"#0d1117",border:"1px solid #21262d",borderRadius:3,color:"#ffd166",fontFamily:"monospace"}}/>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
               {/* Decay chart */}
               <ContractDecayChart contract={c} stocksData={stocksData} />

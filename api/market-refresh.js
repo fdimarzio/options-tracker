@@ -1289,7 +1289,7 @@ export default async function handler(req, res) {
 
     // ── Load everything in parallel ─────────────────────────────────────────
     const [contractsRes, chainRes, notifRes, matrixRes, allPositions, signalRulesRes, momentumConfigRes, priceHistoryRes, watchlistRes] = await Promise.all([
-      fetch(`${SUPABASE_URL}/rest/v1/contracts?select=id,stock,type,opt_type,strike,expires,premium,qty,account&status=eq.Open`, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }),
+      fetch(`${SUPABASE_URL}/rest/v1/contracts?select=id,stock,type,opt_type,strike,expires,premium,qty,account,stop_loss_multiplier,time_stop_dte,delta_stop,last_exit_alert_at&status=eq.Open`, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }),
       fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.last_chain_refresh`,   { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }),
       fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.notifications_sent`,   { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }),
       fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.dte_matrix`,           { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }),
@@ -1731,6 +1731,63 @@ export default async function handler(req, res) {
     }
 
     } // end isMarketOpen
+
+    // ── Exit plan checks (stop loss, time stop, delta stop) ──────────────────
+    if (isMarketOpen) {
+      try {
+        const todayStr = lastRefresh.slice(0, 10);
+        for (const contract of contracts) {
+          if (contract.opt_type !== "STO") continue;
+          if (!contract.stock || !contract.premium) continue;
+
+          const ticker     = contract.stock.toUpperCase();
+          const stockPrice = quotes[ticker]?.lastPrice;
+          if (!stockPrice) continue;
+
+          const chainKey   = `${ticker}|${contract.expires}`;
+          const chain      = chainData[chainKey];
+          const side       = contract.type === "Call" ? "calls" : "puts";
+          const chainEntry = chain?.[side]?.find(o => Math.abs(+o.strikePrice - +contract.strike) < 0.01);
+          const liveAsk    = chainEntry?.ask ?? null;
+
+          // Only alert once per day per contract
+          const lastAlertDate = contract.last_exit_alert_at?.slice(0, 10);
+          if (lastAlertDate === todayStr) continue;
+
+          let alertMsg = null;
+          const dte = Math.ceil((new Date(contract.expires) - new Date()) / 86400000);
+          const costToClose = liveAsk != null ? liveAsk * (+contract.qty || 1) * 100 : null;
+          const prem = Math.abs(+contract.premium || 0);
+
+          // Stop loss: cost-to-close > premium × multiplier
+          const slMult = +(contract.stop_loss_multiplier ?? 2.0);
+          if (costToClose != null && slMult > 0 && costToClose > prem * slMult) {
+            alertMsg = `🛑 Stop loss triggered: ${ticker} $${contract.strike} ${contract.type} — cost to close $${costToClose.toFixed(0)} > ${slMult}× premium ($${(prem * slMult).toFixed(0)})`;
+          }
+
+          // Time stop: DTE <= time_stop_dte
+          if (!alertMsg && contract.time_stop_dte != null && dte <= +contract.time_stop_dte) {
+            alertMsg = `⏱ Time stop triggered: ${ticker} $${contract.strike} ${contract.type} — DTE ${dte} ≤ ${contract.time_stop_dte}`;
+          }
+
+          // Delta stop: live delta > delta_stop
+          const liveDelta = Math.abs(chainEntry?.delta ?? 0);
+          if (!alertMsg && contract.delta_stop != null && liveDelta > 0 && liveDelta > +(contract.delta_stop)) {
+            alertMsg = `Δ Delta stop triggered: ${ticker} $${contract.strike} ${contract.type} — delta ${liveDelta.toFixed(2)} > ${contract.delta_stop}`;
+          }
+
+          if (alertMsg) {
+            await sendPushover(`⚠️ Exit Plan Alert: ${ticker}`, alertMsg, `${APP_URL}/?tab=contracts`, "View Contracts", 1);
+            await fetch(`${SUPABASE_URL}/rest/v1/contracts?id=eq.${contract.id}`, {
+              method: "PATCH",
+              headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+              body: JSON.stringify({ last_exit_alert_at: lastRefresh }),
+            });
+            console.log(`[exit-plan] ${alertMsg}`);
+          }
+        }
+      } catch(e) { console.warn("[market-refresh] exit plan checks failed:", e.message); }
+    }
 
     // ── Save notification state ─────────────────────────────────────────────
     if (notifications.length) {

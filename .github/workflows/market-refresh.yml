@@ -47,10 +47,11 @@ jobs:
     steps:
       - name: Keep Schwab refresh token alive
         run: |
-          echo "Refreshing Schwab token..."
+          echo "Refreshing Schwab token via schwab-proxy..."
+          # Fetching a simple AAPL quote forces schwab-proxy to validate + refresh
+          # the access token and save it back to Supabase — no separate endpoint needed
           RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
-            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
-            "https://options-tracker-five.vercel.app/api/schwab-token-refresh")
+            "https://options-tracker-five.vercel.app/api/schwab-proxy?path=/marketdata/v1/quotes&symbols=AAPL&fields=quote&x-cron-secret=${{ secrets.CRON_SECRET }}")
 
           HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS" | cut -d: -f2)
           BODY=$(echo "$RESPONSE" | grep -v "HTTP_STATUS")
@@ -63,6 +64,7 @@ jobs:
             echo "https://options-tracker-five.vercel.app/api/schwab-auth"
             exit 1
           fi
+          echo "Token refreshed successfully."
 
       - name: Renew ETrade access token
         run: |
