@@ -2122,6 +2122,7 @@ function SignalLogTab({ supabase }) {
   const [newReason,    setNewReason]    = useState({ reason: "", description: "", action: "" });
   const [factorMap,    setFactorMap]    = useState({}); // { signalId: { factorName: value } }
   const [factorLoading,setFactorLoading]= useState({});  // { signalId: true }
+  const [feedback,     setFeedback]     = useState({}); // { signalId: 'good'|'bad' }
 
   const loadFactors = async (signalId) => {
     if (!signalId || factorMap[signalId]) return;
@@ -2144,7 +2145,8 @@ function SignalLogTab({ supabase }) {
       supabase.from("contracts").select("id,stock,opt_type,type,strike,expires,qty,account,status").eq("status","Open"),
       supabase.from("decision_log").select("signal_id,decision").order("created_at", { ascending: false }).then(r => r).catch(() => ({ data: [] })),
       supabase.from("signal_reasons").select("*").order("reason", { ascending: true }).then(r => r).catch(() => ({ data: [] })),
-    ]).then(([{ data: sl, error: e1 }, { data: ia, error: e2 }, { data: cx }, { data: dl }, { data: rs }]) => {
+      supabase.from("signal_outcomes").select("signal_id,signal_quality,feedback_at").not("signal_quality","is",null).limit(200).then(r=>r).catch(()=>({data:[]})),
+    ]).then(([{ data: sl, error: e1 }, { data: ia, error: e2 }, { data: cx }, { data: dl }, { data: rs }, { data: fb }]) => {
       if (e1) console.warn("[signal_log] fetch error:", e1.message);
       if (e2) console.warn("[import_anomalies] fetch error:", e2.message);
       setSignals(sl || []);
@@ -2161,6 +2163,9 @@ function SignalLogTab({ supabase }) {
       (dl || []).forEach(d => { if (d.signal_id) savedMap[String(d.signal_id)] = d.decision; });
       setSaved(savedMap);
       setReasons(rs || []);
+      const fbMap = {};
+      (fb || []).forEach(r => { if (r.signal_id) fbMap[String(r.signal_id)] = r.signal_quality; });
+      setFeedback(fbMap);
       setLoading(false);
     }).catch(err => {
       console.error("[SignalLogTab] fetch failed:", err);
@@ -2348,19 +2353,36 @@ function SignalLogTab({ supabase }) {
                     <td style={{padding:"7px 10px",fontFamily:"monospace",fontSize:11,color: s.profit_pct_at_signal >= 0.6 ? "#00ff88" : "#888"}}>{s.profit_pct_at_signal != null ? (s.profit_pct_at_signal * 100).toFixed(0) + "%" : "—"}</td>
                     <td style={{padding:"7px 10px",fontFamily:"monospace",fontSize:11,color: s.pushed ? "#00ff88" : "#ff4560"}}>{s.pushed ? "✓" : "✗"}</td>
                     <td style={{padding:"7px 10px"}}>
-                      {saved[String(s.id)] ? (
-                        <span style={{fontFamily:"monospace",fontSize:11,color:"#3a4050"}}>✓ {saved[String(s.id)]}</span>
-                      ) : (
-                        <button onClick={() => {
-                          const newExp = expanded === s.id ? null : s.id;
-                          setExpanded(newExp);
-                          setDecNotes("");
-                          if (newExp && s._source === "signal_log") loadFactors(s.id);
-                        }}
-                          style={{background:"transparent",border:"1px solid #1c2128",borderRadius:3,padding:"3px 10px",fontSize:11,fontFamily:"monospace",color:"#3a4050",cursor:"pointer",whiteSpace:"nowrap"}}>
-                          {expanded === s.id ? "cancel" : "log"}
-                        </button>
-                      )}
+                      <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                        {/* Thumbs up/down feedback */}
+                        {s._source === "signal_log" && (
+                          <>
+                            <button title="Good signal" onClick={async()=>{
+                              const q = "good";
+                              const { error } = await supabase.from("signal_outcomes").upsert({ signal_id: s.id, signal_quality: q, feedback_at: new Date().toISOString() }, { onConflict: "signal_id" });
+                              if (!error) setFeedback(p=>({...p,[String(s.id)]:q}));
+                            }} style={{background: feedback[String(s.id)]==="good" ? "#00ff8825" : "transparent", border:"1px solid "+(feedback[String(s.id)]==="good"?"#00ff8860":"#1c2128"), borderRadius:3, padding:"2px 5px", fontSize:12, cursor:"pointer", lineHeight:1}}>👍</button>
+                            <button title="Bad signal" onClick={async()=>{
+                              const q = "bad";
+                              const { error } = await supabase.from("signal_outcomes").upsert({ signal_id: s.id, signal_quality: q, feedback_at: new Date().toISOString() }, { onConflict: "signal_id" });
+                              if (!error) setFeedback(p=>({...p,[String(s.id)]:q}));
+                            }} style={{background: feedback[String(s.id)]==="bad" ? "#ff456025" : "transparent", border:"1px solid "+(feedback[String(s.id)]==="bad"?"#ff456060":"#1c2128"), borderRadius:3, padding:"2px 5px", fontSize:12, cursor:"pointer", lineHeight:1}}>👎</button>
+                          </>
+                        )}
+                        {saved[String(s.id)] ? (
+                          <span style={{fontFamily:"monospace",fontSize:11,color:"#3a4050"}}>✓ {saved[String(s.id)]}</span>
+                        ) : (
+                          <button onClick={() => {
+                            const newExp = expanded === s.id ? null : s.id;
+                            setExpanded(newExp);
+                            setDecNotes("");
+                            if (newExp && s._source === "signal_log") loadFactors(s.id);
+                          }}
+                            style={{background:"transparent",border:"1px solid #1c2128",borderRadius:3,padding:"3px 10px",fontSize:11,fontFamily:"monospace",color:"#3a4050",cursor:"pointer",whiteSpace:"nowrap"}}>
+                            {expanded === s.id ? "cancel" : "log"}
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                   {expanded === s.id && (
