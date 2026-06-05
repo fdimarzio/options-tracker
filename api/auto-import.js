@@ -10,7 +10,7 @@ const SUPABASE_KEY  = process.env.VITE_SUPABASE_ANON_KEY;
 const SUPABASE_SVC_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_ANON_KEY; // service key for token rows
 const SCHWAB_BASE   = "https://api.schwabapi.com";
 const APP_URL       = "https://options-tracker-five.vercel.app";
-const CUTOVER_DATE  = "2026-05-10";
+const CUTOVER_DATE  = "2026-05-10"; // TODO: move to col_prefs so it can be updated without a deploy
 
 // ── Supabase helpers ──────────────────────────────────────────────────────────
 const sbHeaders = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" };
@@ -135,7 +135,7 @@ async function getValidToken() {
 
 // ── ETrade helpers ────────────────────────────────────────────────────────────
 const ETRADE_BASE     = "https://api.etrade.com";
-const ETRADE_ACCOUNTS = { "227156917": "ETrade 6917", "227418222": "ETrade 8222" };
+const ETRADE_ACCOUNTS = { "227156917": "ETrade 6917", "227418222": "ETrade 8222" }; // TODO: load from col_prefs or env so account IDs aren't hardcoded
 const ETRADE_TX_MAP   = { "Sold Short": "STO", "Sold": "STO", "Bought To Open": "BTO", "Bought To Cover": "BTC", "Bought": "BTC", "Sold To Close": "STC", "Option Assigned": "ASSIGNED", "Expired": "EXPIRED", "Option Expired": "EXPIRED" };
 
 function buildOAuthHeader(method, url, accessToken, accessTokenSecret, params = {}) {

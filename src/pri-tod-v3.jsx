@@ -2120,9 +2120,10 @@ function SignalLogTab({ supabase }) {
   const [reasons,      setReasons]      = useState([]);
   const [showAddReason,setShowAddReason]= useState(false);
   const [newReason,    setNewReason]    = useState({ reason: "", description: "", action: "" });
-  const [factorMap,    setFactorMap]    = useState({}); // { signalId: { factorName: value } }
-  const [factorLoading,setFactorLoading]= useState({});  // { signalId: true }
-  const [feedback,     setFeedback]     = useState({}); // { signalId: 'good'|'bad' }
+  const [factorMap,      setFactorMap]      = useState({}); // { signalId: { factorName: value } }
+  const [factorLoading,  setFactorLoading]  = useState({});  // { signalId: true }
+  const [feedback,       setFeedback]       = useState({}); // { signalId: 'good'|'bad' }
+  const [dismissReason,  setDismissReason]  = useState(""); // quick-pick dismiss reason for current expanded signal
 
   const loadFactors = async (signalId) => {
     if (!signalId || factorMap[signalId]) return;
@@ -2232,9 +2233,17 @@ function SignalLogTab({ supabase }) {
     console.log("[decision_log] result:", { data, error });
     if (error) { alert("Save failed: " + error.message + "\n\nDetails: " + JSON.stringify(error)); return; }
     setSaved(p => ({ ...p, [String(s.id)]: decision }));
+    // Save dismissed_reason to signal_outcomes when passing
+    if (decision === "passed" && dismissReason && s._source === "signal_log") {
+      await supabase.from("signal_outcomes").upsert(
+        { signal_id: s.id, dismissed_reason: dismissReason, signal_quality: "bad", feedback_at: new Date().toISOString() },
+        { onConflict: "signal_id" }
+      ).catch(e => console.warn("[signal_outcomes] dismissed_reason save failed:", e.message));
+    }
     setExpanded(null);
     setDecNotes("");
     setDecReason("");
+    setDismissReason("");
   };
 
   const addReason = async () => {
@@ -2395,6 +2404,14 @@ function SignalLogTab({ supabase }) {
                               {d}
                             </button>
                           ))}
+                          {/* Quick dismiss reason — shown when "passed" is about to be clicked */}
+                          <select value={dismissReason} onChange={e => setDismissReason(e.target.value)}
+                            style={{background:"#0a0e14",border:"1px solid #ff456030",borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"monospace",color:dismissReason?"#ff4560":"#555"}}>
+                            <option value="">dismiss reason (optional)</option>
+                            {["Too risky","Wrong timing","Already positioned","Low premium","Other"].map(r=>(
+                              <option key={r} value={r}>{r}</option>
+                            ))}
+                          </select>
                           {/* Reason dropdown */}
                           <select value={decReason} onChange={e => { setDecReason(e.target.value); if (e.target.value !== "other") setDecNotes(""); }}
                             style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"monospace",color: decReason ? "#c9d1d9" : "#555"}}>
@@ -4105,8 +4122,9 @@ function ImportDailyTab({ contracts, supabase }) {
   const rowStyle = {display:"grid", gridTemplateColumns:"60px 40px 55px 65px 40px 55px 80px 90px 70px", gap:4, padding:"6px 12px", borderBottom:"1px solid #1c2128", alignItems:"center", fontSize:11, fontFamily:"monospace"};
   const hdrStyle = {...rowStyle, fontSize:9, color:"#3a4050", fontWeight:700, letterSpacing:"0.06em", borderBottom:"1px solid #30363d", paddingTop:4, paddingBottom:4};
 
-  // Gamify: compute today's P&L on closes committed today
-  const todayCloses  = todayContracts.filter(c => ["BTC","STC"].includes(c.optType) && c.profit != null);
+  // Gamify: P&L is stored on the PARENT (STO) contract when closed, not the BTC row.
+  // Look for any STO/BTO that was closed today (close_date = TODAY) with profit set.
+  const todayCloses  = (contracts||[]).filter(c => c.closeDate === TODAY && c.profit != null);
   const todayProfit  = todayCloses.reduce((s,c) => s + (+c.profit||0), 0);
   const todayWins    = todayCloses.filter(c => (+c.profit||0) > 0).length;
   const todayLosses  = todayCloses.filter(c => (+c.profit||0) < 0).length;
@@ -5091,9 +5109,11 @@ export default function App() {
         const etRes  = await fetch("/api/etrade?action=positions&secret=CronSecret2026!");
         const etData = await etRes.json();
         // Auto-populate ETrade account value from API response
-        if (etData?.accountValue > 0) {
-          updateCash("etrade", etData.accountValue.toFixed(2));
-          console.log("[etrade] accountValue:", etData.accountValue);
+        // ETrade NAV = equity market value + cash (matches Schwab liquidationValue semantics)
+        const etNAV = (etData?.accountValue || 0) + (etData?.cash || 0);
+        if (etNAV > 0) {
+          updateCash("etrade", etNAV.toFixed(2));
+          console.log("[etrade] NAV:", etNAV, "(equity:", etData?.accountValue, "+ cash:", etData?.cash, ")");
         }
         if (etData?.positions?.length) {
           // Group by symbol — sum across both ETrade accounts, floor to whole shares
@@ -5987,6 +6007,27 @@ ${JSON.stringify(summary, null, 1)}`;
                     <span style={{fontSize:9,color:"#2a3040",fontFamily:"monospace"}}>🔗 Schwab API (coming)</span>
                   </div>
                 )}
+                {/* Target close display */}
+                {(() => {
+                  const bd2 = getContractBand(c);
+                  if (!bd2) return null;
+                  return (
+                    <div style={{marginTop:8,display:"flex",gap:14,flexWrap:"wrap"}}>
+                      <div>
+                        <div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",marginBottom:1}}>TGT CLOSE $</div>
+                        <div style={{fontFamily:"monospace",fontSize:12,color:"#00ff88",fontWeight:700}}>{bd2.targetClose!=null?f$(bd2.targetClose):"—"}</div>
+                      </div>
+                      <div>
+                        <div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",marginBottom:1}}>$/SHARE</div>
+                        <div style={{fontFamily:"monospace",fontSize:12,color:"#00ff88",fontWeight:700}}>{bd2.targetPerShare!=null?"$"+bd2.targetPerShare.toFixed(2):"—"}</div>
+                      </div>
+                      {bd2.tgtPct && <div>
+                        <div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",marginBottom:1}}>TARGET%</div>
+                        <div style={{fontFamily:"monospace",fontSize:12,color:bd2.bandColor||"#ffd166"}}>{bd2.tgtPct}%</div>
+                      </div>}
+                    </div>
+                  );
+                })()}
                 {c.notes && <div style={{marginTop:8,fontSize:10,color:"#555",fontStyle:"italic"}}>"{c.notes}"</div>}
                 {/* Exit Plan */}
                 {c.status === "Open" && (
@@ -6796,28 +6837,53 @@ ${JSON.stringify(summary, null, 1)}`;
               </div>
             </div>
             {/* KPIs */}
+            {/* Sleep Number + Skynet Automation — single combined row */}
             {(() => {
-              // Sleep Number: largest single position / total equity * 100
               const posValues = Object.entries(stocksData)
                 .filter(([sym]) => sym !== "__cash__")
-                .map(([sym, sd]) => {
-                  const shares = (sd.shares || 0);
-                  const price  = sd.currentPrice || 0;
-                  return { sym, val: shares * price };
-                })
+                .map(([sym, sd]) => ({ sym, val: (sd.shares||0) * (sd.currentPrice||0) }))
                 .filter(p => p.val > 0);
-              const totalEquity   = posValues.reduce((s, p) => s + p.val, 0);
-              const largest       = posValues.reduce((mx, p) => p.val > mx.val ? p : mx, { sym:"", val:0 });
-              const sleepNumber   = totalEquity > 0 ? Math.round(largest.val / totalEquity * 1000) / 10 : null;
-              const sleepColor    = sleepNumber == null ? "#555" : sleepNumber < 20 ? "#00ff88" : sleepNumber < 30 ? "#ffd166" : "#ff4560";
-              if (sleepNumber == null) return null;
+              const totalEquity = posValues.reduce((s, p) => s + p.val, 0);
+              const largest     = posValues.reduce((mx, p) => p.val > mx.val ? p : mx, { sym:"", val:0 });
+              const sleepNumber = totalEquity > 0 ? Math.round(largest.val / totalEquity * 1000) / 10 : null;
+              const sleepColor  = sleepNumber == null ? "#555" : sleepNumber < 20 ? "#00ff88" : sleepNumber < 30 ? "#ffd166" : "#ff4560";
               return (
-                <div title="Sleep Number: largest single position as % of total equity. Motley Fool rule: stay below 20% to sleep well at night."
-                  style={{background:"#0a0e14",border:`1px solid ${sleepColor}30`,borderRadius:8,padding:"10px 12px",display:"flex",alignItems:"center",gap:10,marginBottom:5,cursor:"default"}}>
-                  <div>
-                    <div style={{fontSize:8,color:"#3a4050",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:2}}>😴 SLEEP NUMBER</div>
-                    <div style={{fontSize:22,fontWeight:700,color:sleepColor,fontFamily:"'JetBrains Mono',monospace",lineHeight:1}}>{sleepNumber.toFixed(1)}%</div>
-                    <div style={{fontSize:8,color:"#3a4050",fontFamily:"monospace",marginTop:2}}>{largest.sym} · {sleepNumber<20?"safe":"⚠ concentrated"}</div>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"stretch"}}>
+                  {sleepNumber != null && (
+                    <div title="Sleep Number: largest single position as % of total equity. Motley Fool rule: stay below 20% to sleep well at night."
+                      style={{background:"#0a0e14",border:`1px solid ${sleepColor}30`,borderRadius:8,padding:"10px 14px",minWidth:120,cursor:"default"}}>
+                      <div style={{fontSize:8,color:"#3a4050",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:2}}>😴 SLEEP NUMBER</div>
+                      <div style={{fontSize:22,fontWeight:700,color:sleepColor,fontFamily:"'JetBrains Mono',monospace",lineHeight:1}}>{sleepNumber.toFixed(1)}%</div>
+                      <div style={{fontSize:8,color:"#3a4050",fontFamily:"monospace",marginTop:2}}>{largest.sym} · {sleepNumber<20?"safe":"⚠ concentrated"}</div>
+                    </div>
+                  )}
+                  <div style={{flex:1,background:"#0a0e14",border:"1px solid #00ff8815",borderRadius:8,padding:"10px 14px"}}>
+                    <div style={{fontFamily:"monospace",fontSize:8,color:"#00ff88",letterSpacing:"0.07em",marginBottom:8}}>🤖 SKYNET AUTOMATION</div>
+                    <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"center"}}>
+                      {[
+                        { label:"AUTO OPENED", val: autoOpenC.length,    pct: null,           color:"#ffd166" },
+                        { label:"AUTO CLOSED", val: autoClosedC.length,  pct: autoClosePct,   color:"#00ff88" },
+                        { label:"APP CLOSED",  val: appClosedC.length,   pct: appClosePct,    color:"#58a6ff" },
+                        { label:"MANUAL",      val: manualClosedC.length, pct: manualClosePct, color:"#555" },
+                      ].map(s => (
+                        <div key={s.label} style={{display:"flex",alignItems:"center",gap:8}}>
+                          <div>
+                            <div style={{fontFamily:"monospace",fontSize:7,color:"#3a4050",letterSpacing:"0.06em"}}>{s.label}</div>
+                            <div style={{fontFamily:"monospace",fontSize:16,color:s.color}}>{s.val}</div>
+                          </div>
+                          {s.pct != null && <div style={{fontFamily:"monospace",fontSize:11,color:s.color,opacity:0.6}}>{s.pct}%</div>}
+                        </div>
+                      ))}
+                      <div style={{marginLeft:"auto",textAlign:"right"}}>
+                        <div style={{fontFamily:"monospace",fontSize:7,color:"#3a4050",letterSpacing:"0.06em"}}>SKYNET PROFIT</div>
+                        <div style={{fontFamily:"monospace",fontSize:16,color:autoProfit>=0?"#00ff88":"#ff4560"}}>{autoProfit>=0?"+":""}{f$0(autoProfit)}</div>
+                      </div>
+                      <div style={{width:"100%",height:4,borderRadius:2,background:"#1c2128",display:"flex",overflow:"hidden"}}>
+                        <div style={{width:autoClosePct+"%",background:"#00ff88",transition:"width .5s"}}/>
+                        <div style={{width:appClosePct+"%",background:"#58a6ff",transition:"width .5s"}}/>
+                        <div style={{width:manualClosePct+"%",background:"#3a4050",transition:"width .5s"}}/>
+                      </div>
+                    </div>
                   </div>
                 </div>
               );
@@ -6832,36 +6898,6 @@ ${JSON.stringify(summary, null, 1)}`;
               <KPI label="Profit YTD"    value={fSign0(profitYTD)}    sub={thisYear+" · "+(profitDateMode==="accounting"?"cash basis":profitDateMode==="exec"?"opened":"closed")} color={profitYTD>=0?"#00ff88":"#ff4560"}/>
               <KPI label="Premium MTD"   value={f$0(premMTD)}         sub={mLabel} color="#58a6ff"/>
               <KPI label="Premium YTD"   value={f$0(premYTD)}         sub={thisYear} color="#58a6ff"/>
-            </div>
-            {/* Automation stats */}
-            <div style={{background:"#0a0e14",border:"1px solid #00ff8815",borderRadius:8,padding:"10px 14px"}}>
-              <div style={{fontFamily:"monospace",fontSize:8,color:"#00ff88",letterSpacing:"0.07em",marginBottom:10}}>🤖 SKYNET AUTOMATION</div>
-              <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"center"}}>
-                {[
-                  { label:"AUTO OPENED",  val: autoOpenC.length,    pct: null,          color:"#ffd166" },
-                  { label:"AUTO CLOSED",  val: autoClosedC.length,  pct: autoClosePct,  color:"#00ff88" },
-                  { label:"APP CLOSED",   val: appClosedC.length,   pct: appClosePct,   color:"#58a6ff" },
-                  { label:"MANUAL",       val: manualClosedC.length, pct: manualClosePct, color:"#555" },
-                ].map(s => (
-                  <div key={s.label} style={{display:"flex",alignItems:"center",gap:8}}>
-                    <div>
-                      <div style={{fontFamily:"monospace",fontSize:7,color:"#3a4050",letterSpacing:"0.06em"}}>{s.label}</div>
-                      <div style={{fontFamily:"monospace",fontSize:16,color:s.color}}>{s.val}</div>
-                    </div>
-                    {s.pct != null && <div style={{fontFamily:"monospace",fontSize:11,color:s.color,opacity:0.6}}>{s.pct}%</div>}
-                  </div>
-                ))}
-                <div style={{marginLeft:"auto",textAlign:"right"}}>
-                  <div style={{fontFamily:"monospace",fontSize:7,color:"#3a4050",letterSpacing:"0.06em"}}>SKYNET PROFIT</div>
-                  <div style={{fontFamily:"monospace",fontSize:16,color:autoProfit>=0?"#00ff88":"#ff4560"}}>{autoProfit>=0?"+":""}{f$0(autoProfit)}</div>
-                </div>
-                {/* Mini bar showing auto vs app vs manual */}
-                <div style={{width:"100%",height:6,borderRadius:3,background:"#1c2128",display:"flex",overflow:"hidden",marginTop:4}}>
-                  <div style={{width:autoClosePct+"%",background:"#00ff88",transition:"width .5s"}}/>
-                  <div style={{width:appClosePct+"%",background:"#58a6ff",transition:"width .5s"}}/>
-                  <div style={{width:manualClosePct+"%",background:"#3a4050",transition:"width .5s"}}/>
-                </div>
-              </div>
             </div>
             {/* Goals progress */}
             {(goals.dailyPremium||goals.dailyProfit||goals.weeklyPremium||goals.monthlyPremium||goals.weeklyProfit||goals.monthlyProfit) && (() => {
@@ -7652,6 +7688,30 @@ ${JSON.stringify(summary, null, 1)}`;
                   })}
                   {sortedFiltered.length===0 && <tr><td colSpan={cols.filter(c=>c.show).length} style={{padding:22,textAlign:"center",color:"#3a4050",fontSize:11,fontFamily:"monospace"}}>No contracts match filters</td></tr>}
                 </tbody>
+                {sortedFiltered.length > 0 && (() => {
+                  const vis = cols.filter(c=>c.show).map(c=>c.key);
+                  const totalsPremium    = sortedFiltered.filter(c=>["STO","BTO"].includes(c.optType)).reduce((s,c)=>s+(+c.premium||0),0);
+                  const totalsProfit     = sortedFiltered.filter(c=>c.status==="Closed"&&c.profit!=null).reduce((s,c)=>s+(+c.profit||0),0);
+                  const totalsCostClose  = sortedFiltered.filter(c=>c.status==="Open"&&c.costToClose!=null).reduce((s,c)=>s+(+c.costToClose||0),0);
+                  const totalsCount      = sortedFiltered.length;
+                  const closedCount      = sortedFiltered.filter(c=>c.status==="Closed").length;
+                  const openCount        = sortedFiltered.filter(c=>c.status==="Open").length;
+                  const tdS = {padding:"5px 8px",background:"#0a0e14",borderTop:"2px solid #1c2128",fontFamily:"monospace",fontSize:10,color:"#555",fontWeight:700};
+                  return (
+                    <tfoot>
+                      <tr>
+                        {vis.map(key => {
+                          if (key==="ticker")   return <td key={key} style={{...tdS,textAlign:"left",color:"#3a4050"}}>TOTALS ({totalsCount})</td>;
+                          if (key==="premium")  return <td key={key} style={{...tdS,textAlign:"right",color:totalsPremium>=0?"#58a6ff":"#ff4560"}}>{fMoney(totalsPremium)}</td>;
+                          if (key==="profit")   return <td key={key} style={{...tdS,textAlign:"right",color:totalsProfit>=0?"#00ff88":"#ff4560"}}>{closedCount>0?fSign(totalsProfit):"—"}</td>;
+                          if (key==="costToClose") return <td key={key} style={{...tdS,textAlign:"right",color:"#ffd166"}}>{openCount>0?fMoney(totalsCostClose):"—"}</td>;
+                          if (key==="status")   return <td key={key} style={{...tdS,textAlign:"left"}}>{openCount}o/{closedCount}c</td>;
+                          return <td key={key} style={tdS}/>;
+                        })}
+                      </tr>
+                    </tfoot>
+                  );
+                })()}
               </table>
             </div>
 

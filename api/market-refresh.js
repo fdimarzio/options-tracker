@@ -1128,7 +1128,7 @@ async function runChaseLoop(token, sbHeaders) {
 
         // If Schwab shows the order as filled, stop chasing and mark accordingly
         if (order.schwab_order_id) {
-          const hash = order.account?.includes("ETrade") ? null : "757F62A9417DA1B75005EAC7370D033ABF819061E60384AA3B0F68A0AAE94961";
+          const hash = order.account?.includes("ETrade") ? null : "757F62A9417DA1B75005EAC7370D033ABF819061E60384AA3B0F68A0AAE94961 /* TODO: fetch dynamically via getAccountHash() instead of hardcoding */";
           if (hash) {
             const statusRes = await fetch(
               `${SCHWAB_BASE}/trader/v1/accounts/${hash}/orders/${order.schwab_order_id}`,
@@ -1193,7 +1193,7 @@ async function runChaseLoop(token, sbHeaders) {
 
         // Cancel existing Schwab order if submitted
         if (order.schwab_order_id && order.status === "submitted") {
-          const hash = order.account?.includes("ETrade") ? null : "757F62A9417DA1B75005EAC7370D033ABF819061E60384AA3B0F68A0AAE94961";
+          const hash = order.account?.includes("ETrade") ? null : "757F62A9417DA1B75005EAC7370D033ABF819061E60384AA3B0F68A0AAE94961 /* TODO: fetch dynamically via getAccountHash() instead of hardcoding */";
           if (hash) {
             const cancelRes = await fetch(
               `${SCHWAB_BASE}/trader/v1/accounts/${hash}/orders/${order.schwab_order_id}`,
@@ -1217,7 +1217,7 @@ async function runChaseLoop(token, sbHeaders) {
             instrument: { symbol: osi, assetType: "OPTION" },
           }],
         };
-        const hash = "757F62A9417DA1B75005EAC7370D033ABF819061E60384AA3B0F68A0AAE94961";
+        const hash = "757F62A9417DA1B75005EAC7370D033ABF819061E60384AA3B0F68A0AAE94961 /* TODO: fetch dynamically via getAccountHash() instead of hardcoding */";
         const submitRes = await fetch(
           `${SCHWAB_BASE}/trader/v1/accounts/${hash}/orders`,
           { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(payload) }
@@ -2724,13 +2724,15 @@ export default async function handler(req, res) {
             }
 
             // ── Send Pushover ──────────────────────────────────────────────
-            const dryTag   = contractDryRun ? "[DRY RUN] " : "";
+            const dryTag    = contractDryRun ? "[DRY RUN] " : "";
             const profitStr = profitPct.toFixed(1);
+            const profitDollar = Math.round((openedVal - currentVal) * 100) / 100;
+            const profitDollarStr = (profitDollar >= 0 ? "+" : "-") + "$" + Math.abs(profitDollar).toFixed(2);
             const costStr   = `$${(limitPrice * contract.qty * 100).toFixed(2)}`;
             const jsonPreview = contractDryRun ? `\n\nOrder JSON:\n${JSON.stringify({ contract_id: contract.id, ticker, strike: contract.strike, type: contract.type, expires, qty: contract.qty, limit_price: limitPrice, order_type: "LIMIT", duration: "DAY", account: contract.account, approved_by: "auto" }, null, 2)}` : "";
             await sendPushover(
               `🤖 ${dryTag}Auto-BTC: ${ticker} ${contract.type}`,
-              `${dryTag}Bought back ${ticker} $${contract.strike} ${contract.type} ${expires}\nLimit: $${limitPrice.toFixed(2)} · Cost: ${costStr} · Profit: ${profitStr}%\nAccount: ${contract.account}${jsonPreview}`,
+              `${dryTag}Bought back ${ticker} $${contract.strike} ${contract.type} ${expires}\nLimit: $${limitPrice.toFixed(2)} · Cost: ${costStr} · Profit: ${profitDollarStr} (${profitStr}%)\nAccount: ${contract.account}${jsonPreview}`,
               sigId ? `${APP_URL}/?action=close&id=${contract.id}&signal_id=${sigId}` : `${APP_URL}/?tab=contracts`,
               "View Contract",
               contractDryRun ? 0 : 1
@@ -3021,7 +3023,9 @@ export default async function handler(req, res) {
                     headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
                     body: JSON.stringify({ close_method: "auto" }),
                   });
-                  await sendPushover(`✅ ${ticker} Auto-Closed — ITM at Expiry`, `Bought back ${contract.type} $${strike} to prevent assignment\nStock: $${stockPrice.toFixed(2)} · ${contract.account}`, `${APP_URL}/?tab=contracts`, "View Contracts", 1);
+                  const itmProfit = Math.round((Math.abs(+contract.premium||0) - (mid * (+contract.qty||1) * 100)) * 100) / 100;
+                  const itmProfitStr = (itmProfit >= 0 ? "+" : "") + "$" + Math.abs(itmProfit).toFixed(2);
+                  await sendPushover(`✅ ${ticker} Auto-Closed — ITM at Expiry`, `Bought back ${contract.type} $${strike} to prevent assignment\nProfit: ${itmProfitStr} · Stock: $${stockPrice.toFixed(2)} · ${contract.account}`, `${APP_URL}/?tab=contracts`, "View Contracts", 1);
                   console.log(`[expiry] auto-closed ITM: ${ticker} $${strike} ${contract.type}`);
                 } else {
                   await sendPushover(`🧪 [DRY RUN] ${ticker} Would Auto-Close — ITM`, `${contract.type} $${strike} · Stock: $${stockPrice.toFixed(2)} · ${contract.account}\nSet expiry_protection rule dry_run=false to enable real orders`, `${APP_URL}/?tab=contracts`, "View Contracts", 0);

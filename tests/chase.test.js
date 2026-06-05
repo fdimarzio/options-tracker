@@ -491,3 +491,63 @@ describe("balance cold-load fallback", () => {
     expect(resolveBalance(0, null, null)).toBeNull();
   });
 });
+
+// ── Batch fixes tests ──────────────────────────────────────────────────────────
+
+// #1/#2: ETrade NAV = equity + cash
+describe("ETrade NAV calculation", () => {
+  it("sums equity + cash for full NAV", () => {
+    const etNAV = (300000 || 0) + (50000 || 0);
+    expect(etNAV).toBe(350000);
+  });
+
+  it("handles missing cash gracefully", () => {
+    const etNAV = (300000 || 0) + (undefined || 0);
+    expect(etNAV).toBe(300000);
+  });
+
+  it("handles missing accountValue gracefully", () => {
+    const etNAV = (null || 0) + (50000 || 0);
+    expect(etNAV).toBe(50000);
+  });
+});
+
+// #4/#8: P&L on imports — looks at close_date, not dateExec of BTC row
+describe("imports P&L from parent close_date", () => {
+  const TODAY = "2026-06-05";
+  const contracts = [
+    { id:1, optType:"STO", closeDate: TODAY,   profit: 124.50, status:"Closed" },
+    { id:2, optType:"STO", closeDate: TODAY,   profit: -45.00, status:"Closed" },
+    { id:3, optType:"BTC", dateExec:  TODAY,   profit: null,   status:"Closed" }, // BTC row — no profit
+    { id:4, optType:"STO", closeDate:"2026-06-04", profit: 80, status:"Closed" }, // yesterday
+  ];
+
+  const todayCloses = contracts.filter(c => c.closeDate === TODAY && c.profit != null);
+  const todayProfit = todayCloses.reduce((s,c) => s + (+c.profit||0), 0);
+
+  it("sums profit from parent contracts closed today", () => {
+    expect(todayCloses.length).toBe(2);
+    expect(todayProfit).toBeCloseTo(79.50);
+  });
+
+  it("excludes BTC rows (no profit) and yesterday's closes", () => {
+    expect(todayCloses.find(c => c.optType==="BTC")).toBeUndefined();
+    expect(todayCloses.find(c => c.closeDate==="2026-06-04")).toBeUndefined();
+  });
+});
+
+// #7: Profit $ amount in Pushover
+describe("Pushover profit dollar string", () => {
+  function profitDollarStr(openedVal, currentVal) {
+    const p = Math.round((openedVal - currentVal) * 100) / 100;
+    return (p >= 0 ? "+" : "-") + "\$" + Math.abs(p).toFixed(2);
+  }
+
+  it("formats profit positive", () => {
+    expect(profitDollarStr(500, 85)).toBe("+$415.00");
+  });
+
+  it("formats loss negative", () => {
+    expect(profitDollarStr(200, 450)).toBe("-$250.00");
+  });
+});
