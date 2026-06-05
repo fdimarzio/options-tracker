@@ -3931,7 +3931,7 @@ function MonthlyReport({ originals }) {
                     <div style={{height:6,background:"#1c2128",borderRadius:3,overflow:"hidden"}}>
                       <div style={{height:"100%",width:barPct+"%",background:d.profit>=0?"#00ff88":"#ff4560",borderRadius:3}}/>
                     </div>
-                    <span style={{color:d.profit>=0?"#00ff88":"#ff4560",textAlign:"right",fontWeight:700}}>{d.profit>=0?"+":""}{d.profit.toFixed(2)}</span>
+                    <span style={{color:(d.profit??0)>=0?"#00ff88":"#ff4560",textAlign:"right",fontWeight:700}}>{(d.profit??0)>=0?"+":""}{(d.profit??0).toFixed(2)}</span>
                     <span style={{color:"#3a4050",textAlign:"right"}}>{d.count} ct</span>
                     <span style={{color:"#555",textAlign:"right"}}>{Math.round(d.wins/d.count*100)}% W</span>
                   </div>
@@ -4750,7 +4750,8 @@ export default function App() {
     let all = [], from = 0;
     while (true) {
       const { data: pg, error } = await supabase.from("contracts").select("*").order("date_exec",{ascending:false}).range(from, from+999);
-      if (error || !pg?.length) break;
+      if (error) { console.error("[loadAllContracts] fetch error:", error?.message, error?.status, error?.code); break; }
+      if (!pg?.length) break;
       all = [...all, ...pg];
       if (pg.length < 1000) break;
       from += 1000;
@@ -7521,9 +7522,9 @@ ${JSON.stringify(summary, null, 1)}`;
                             case "account": return <td key="account" style={{padding:"5px 8px"}}><Tag color={c.account==="Schwab"?"blue":"amber"}>{c.account}</Tag></td>;
                             case "status":  return <td key="status" style={{padding:"5px 8px"}}><Tag color={c.status==="Open"?"green":"gray"}>{c.status}</Tag></td>;
                             case "itmotm":  return <td key="itmotm" style={{padding:"5px 8px",textAlign:"center"}}>{c.status==="Open"&&itmStatus?<Tag color={itmStatus==="ITM"?"red":"green"}>{itmStatus==="ITM"?"🔴":"🟢"}</Tag>:<span style={{color:"#1c2128",fontSize:10}}>—</span>}</td>;
-                            case "otmPct":  return <td key="otmPct" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:10,color:bd?bd.bandColor:"#555"}}>{bd?bd.otmPct.toFixed(2)+"%":"—"}</td>;
+                            case "otmPct":  return <td key="otmPct" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:10,color:bd?bd.bandColor:"#555"}}>{bd&&bd.otmPct!=null?bd.otmPct.toFixed(2)+"%":"—"}</td>;
                             case "band":    return <td key="band" style={{padding:"5px 8px"}}>{bd?<span style={{fontSize:9,fontFamily:"monospace",background:bd.bandColor+"22",color:bd.bandColor,border:`1px solid ${bd.bandColor}40`,borderRadius:3,padding:"1px 5px"}}>{bd.bandLabel}</span>:<span style={{color:"#1c2128",fontSize:10}}>—</span>}</td>;
-                            case "tgtPerShare": return <td key="tgtPerShare" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:"#00ff88",fontWeight:700}}>{bd?"$"+bd.targetPerShare.toFixed(2):"—"}</td>;
+                            case "tgtPerShare": return <td key="tgtPerShare" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:"#00ff88",fontWeight:700}}>{bd&&bd.targetPerShare!=null?"$"+(bd.targetPerShare).toFixed(2):"—"}</td>;
                             case "tgtClose": return <td key="tgtClose" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:"#00ff88"}}>{bd?f$(bd.targetClose):"—"}</td>;
                             case "liveStockPrice": {
                               if (c.status!=="Open") return <td key="liveStockPrice" style={{padding:"5px 8px",textAlign:"right",color:"#1c2128",fontFamily:"monospace"}}>—</td>;
@@ -8438,7 +8439,7 @@ ${JSON.stringify(summary, null, 1)}`;
                           <div style={{display:"flex",gap:5,alignItems:"center",flexWrap:"wrap"}}>
                             {alerts.map(a => (
                               <div key={a} style={{display:"flex",alignItems:"center",gap:3,background:"#c084fc12",border:"1px solid #c084fc30",borderRadius:20,padding:"2px 8px",fontSize:10,color:"#c084fc"}}>
-                                ${a.toFixed(2)}
+                                ${(+a||0).toFixed(2)}
                                 <button onClick={()=>removeWatchlistAlert(sym,a)} style={{background:"none",border:"none",color:"#c084fc60",cursor:"pointer",fontSize:9,padding:0,lineHeight:1}}>✕</button>
                               </div>
                             ))}
