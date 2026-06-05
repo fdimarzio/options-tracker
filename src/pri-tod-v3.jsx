@@ -4954,6 +4954,8 @@ export default function App() {
   const btoAssetVal    = openC.filter(c=>c.optType==="BTO").reduce((s,c)=>{const lo=findOptionForContract(etradeChains||{},c);return s+((lo?.bid!=null&&lo?.ask!=null)?(lo.bid+lo.ask)/2*(c.qty||1)*100:lo?.mark!=null?lo.mark*(c.qty||1)*100:Math.abs(c.premium||0));},0);
   const committedFunds = stoLiability - btoAssetVal;
   const [etradeLastFetch, setEtradeLastFetch] = useState(null);
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(()=>{ try{ return localStorage.getItem("pri_auto_refresh")!=="off"; }catch{ return true; } });
+  const [lastAutoRefreshAt, setLastAutoRefreshAt] = useState(null);
   const [schwabPositions, setSchwabPositions]   = useState([]);
   const [watchlist, setWatchlist]               = useState([]); // array of ticker strings
   const [watchlistNotes, setWatchlistNotes]     = useState({});
@@ -5257,11 +5259,17 @@ export default function App() {
       return 10*60*1000;
     };
 
-    pollRefresh();
+    const wrappedPoll = async () => {
+      if (!localStorage.getItem("pri_auto_refresh") || localStorage.getItem("pri_auto_refresh") !== "off") {
+        await pollRefresh();
+        setLastAutoRefreshAt(new Date().toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit",second:"2-digit"}));
+      }
+    };
+    wrappedPoll();
     let timer = setInterval(()=>{
-      pollRefresh();
+      wrappedPoll();
       clearInterval(timer);
-      timer = setInterval(pollRefresh, getInterval());
+      timer = setInterval(wrappedPoll, getInterval());
     }, getInterval());
 
     return () => clearInterval(timer);
@@ -6722,6 +6730,9 @@ ${JSON.stringify(summary, null, 1)}`;
           <div onClick={()=>setShowProfile(true)} style={{width:26,height:26,borderRadius:"50%",background:`${authUser.color}20`,border:`2px solid ${authUser.color}50`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"monospace",fontWeight:700,color:authUser.color,fontSize:9,flexShrink:0,cursor:"pointer"}} title={authUser.name}>{authUser.initials}</div>
           <button className="hm" onClick={()=>{const v=Math.min(+(uiScale+0.1).toFixed(1),1.3);setUiScale(v);try{localStorage.setItem("pri_ui_scale",v)}catch{}}} title="Increase text size" style={{background:"transparent",border:"1px solid #1c2128",borderRadius:4,padding:"2px 6px",fontSize:10,color:"#555",fontFamily:"monospace",lineHeight:1.5}}>A+</button>
           <button className="hm" onClick={()=>{const v=Math.max(+(uiScale-0.1).toFixed(1),0.8);setUiScale(v);try{localStorage.setItem("pri_ui_scale",v)}catch{}}} title="Decrease text size" style={{background:"transparent",border:"1px solid #1c2128",borderRadius:4,padding:"2px 6px",fontSize:10,color:"#555",fontFamily:"monospace",lineHeight:1.5}}>A-</button>
+          <button className="hm" title={autoRefreshEnabled ? "Auto-refresh ON — click to disable" : "Auto-refresh OFF — click to enable"} onClick={()=>{ const next=!autoRefreshEnabled; setAutoRefreshEnabled(next); try{localStorage.setItem("pri_auto_refresh",next?"on":"off")}catch{} }} style={{background:autoRefreshEnabled?"#00ff8814":"transparent",border:`1px solid ${autoRefreshEnabled?"#00ff8830":"#1c2128"}`,borderRadius:4,padding:"2px 6px",fontSize:9,color:autoRefreshEnabled?"#00ff88":"#555",fontFamily:"monospace",lineHeight:1.5,whiteSpace:"nowrap"}}>
+            {autoRefreshEnabled ? "⟳ auto" : "⟳ off"}{lastAutoRefreshAt && autoRefreshEnabled ? <span style={{fontSize:7,opacity:0.6,marginLeft:3}}>{lastAutoRefreshAt}</span> : null}
+          </button>
           <div ref={menuRef} style={{position:"relative"}}>
             <button onClick={()=>setShowMenu(p=>!p)} style={{background:"transparent",border:"1px solid #1c2128",borderRadius:5,padding:"4px 6px",display:"flex",flexDirection:"column",gap:2.5,alignItems:"center",justifyContent:"center",width:28,height:28}}>
               {[0,1,2].map(i=><div key={i} style={{width:12,height:1.5,background:"#555",borderRadius:1}}/>)}
