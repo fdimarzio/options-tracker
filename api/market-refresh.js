@@ -704,7 +704,7 @@ async function storeSupportResistance(symbol, srResult) {
   await fetch(`${SUPABASE_URL}/rest/v1/support_resistance?symbol=eq.${symbol.toUpperCase()}`, {
     method:  "DELETE",
     headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
-  }).catch(() => {});
+  }).catch(e => console.warn(`[storeSupportResistance] DELETE failed for ${symbol}:`, e.message));
 
   const rows = [];
   if (srResult.sr_resistance_price) {
@@ -938,7 +938,7 @@ async function runSimulations(symbol, days) {
   if (allRows.length) {
     await fetch(`${SUPABASE_URL}/rest/v1/sim_results?symbol=eq.${encodeURIComponent(symbol)}`, {
       method: "DELETE", headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
-    }).catch(() => {});
+    }).catch(e => console.warn(`[simulate] sim_results DELETE failed for ${symbol}:`, e.message));
     const CHUNK = 200;
     for (let i = 0; i < allRows.length; i += CHUNK) {
       await fetch(`${SUPABASE_URL}/rest/v1/sim_results`, {
@@ -1337,7 +1337,7 @@ export default async function handler(req, res) {
         const candles   = dailyCandles[sym] || [];
         const srResult  = computeSupportResistance(candles, null); // price injected below after quotes
         srCache[sym]    = srResult;
-      } catch(e) {}
+      } catch(e) { console.warn(`[market-refresh] S/R pre-compute failed for ${sym}:`, e.message); }
     }));
 
     const quotes = {};
@@ -1461,7 +1461,7 @@ export default async function handler(req, res) {
           const vixRes  = await fetch(`${SCHWAB_BASE}/marketdata/v1/quotes?symbols=%24VIX&fields=quote&indicative=false`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } });
           const vixData = await vixRes.json();
           snapVix = vixData?.["$VIX"]?.quote?.lastPrice ?? vixData?.["$VIX"]?.lastPrice ?? null;
-        } catch(e) {}
+        } catch(e) { console.warn("[market-refresh] VIX fetch for snapshots failed:", e.message); }
 
         // trendBySymbol hoisted to handler scope for STO scanner access
 
@@ -1570,7 +1570,7 @@ export default async function handler(req, res) {
         await fetch(`${SUPABASE_URL}/rest/v1/option_snapshots?snapshot_at=lt.${new Date(Date.now() - 90*86400000).toISOString()}`, {
           method: "DELETE",
           headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
-        }).catch(() => {});
+        }).catch(e => console.warn("[option-snapshot] purge failed:", e.message));
 
       } catch(e) { console.warn("[option-snapshot] write failed:", e.message); }
     }
