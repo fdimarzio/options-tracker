@@ -56,9 +56,14 @@ async function main() {
   console.log('Syncing tasks...');
   const tasks = await pamGet(
     'tasks',
-    `project_id=eq.${TOD_PROJECT_ID}&select=id,project_id,milestone_id,parent_task_id,assignee,title,notes,status,priority,start_date,due_date,completed_date,points,bonus_category,recurring,created_by,sort_order,bonus_category_name,created_at,updated_at`
+    `project_id=eq.${TOD_PROJECT_ID}&select=id,project_id,milestone_id,parent_task_id,assignee,title,notes,status,priority,start_date,due_date,completed_date,points,bonus_category,recurring,created_by_source,created_by_user_id,sort_order,bonus_category_name,created_at,updated_at`
   );
-  await priUpsert('pam_tasks', tasks.map(t => ({ ...t, synced_at: new Date().toISOString() })));
+  await priUpsert('pam_tasks', tasks.map(({ created_by_source, created_by_user_id, ...t }) => ({
+    ...t,
+    // PRI pam_tasks still has created_by (nullable) — map from source fields best-effort
+    created_by: created_by_user_id ?? created_by_source ?? null,
+    synced_at: new Date().toISOString(),
+  })));
 
   console.log('PAM sync complete.');
 }
