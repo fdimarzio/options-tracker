@@ -598,3 +598,38 @@ describe("ticker_risk_config action", () => {
   it("action=scan  → no skip", () => expect(shouldSkipTicker({ action: 'scan'  })).toBe(false));
   it("not in config → no skip", () => expect(shouldSkipTicker(null)).toBe(false));
 });
+
+// ── Skynet rules — market hours gate (from test-skynet-rules.js, vitest version) ──
+
+function isMarketHoursAt(day, hour, minute) {
+  if (day === 0 || day === 6) return false;
+  const mins = hour * 60 + minute;
+  return mins >= 570 && mins < 960;
+}
+function stopLossForDTE(dte) { return dte <= 3 ? null : 2.0; }
+function btcShouldFire(profitPct, marketOpen, threshold) {
+  return marketOpen && profitPct >= threshold;
+}
+
+describe("Market hours gate (isMarketHours)", () => {
+  it("10am Tuesday passes",       () => expect(isMarketHoursAt(2, 10,  0)).toBe(true));
+  it("9:30am Monday passes",      () => expect(isMarketHoursAt(1,  9, 30)).toBe(true));
+  it("4:01pm Tuesday blocks",     () => expect(isMarketHoursAt(2, 16,  1)).toBe(false));
+  it("9:29am Wednesday blocks",   () => expect(isMarketHoursAt(3,  9, 29)).toBe(false));
+  it("Saturday blocks",           () => expect(isMarketHoursAt(6, 10,  0)).toBe(false));
+  it("Sunday blocks",             () => expect(isMarketHoursAt(0, 10,  0)).toBe(false));
+});
+
+describe("Auto-BTC profit threshold (signal_rules wired)", () => {
+  it("86% profit, market open, 85% rule → fires",  () => expect(btcShouldFire(86, true,  85)).toBe(true));
+  it("84% profit, market open, 85% rule → no fire",() => expect(btcShouldFire(84, true,  85)).toBe(false));
+  it("90% profit, after close → no fire",          () => expect(btcShouldFire(90, false, 85)).toBe(false));
+  it("76% profit, after-3pm 75% rule → fires",     () => expect(btcShouldFire(76, true,  75)).toBe(true));
+});
+
+describe("Stop-loss DTE gate", () => {
+  it("DTE=7 → 2.0 multiplier", () => expect(stopLossForDTE(7)).toBe(2.0));
+  it("DTE=4 → 2.0 multiplier", () => expect(stopLossForDTE(4)).toBe(2.0));
+  it("DTE=3 → null",           () => expect(stopLossForDTE(3)).toBeNull());
+  it("DTE=1 → null",           () => expect(stopLossForDTE(1)).toBeNull());
+});

@@ -1,6 +1,12 @@
 // api/schwab-orders.js
 // Places, cancels, and checks status of Schwab option orders.
 // All orders require manual approval before submission.
+//
+// MARKET HOURS NOTE: This file intentionally has NO market-hours gate.
+// It is a controlled execution endpoint — orders only execute when a human
+// or market-refresh.js explicitly calls approve/order-place. The auto-scanner
+// (market-refresh.js) enforces its own isMarketOpen gate before calling here.
+// Manual order placement from the UI is allowed at any time by design.
 // Dry run mode logs the order without submitting to Schwab.
 //
 // Actions:
