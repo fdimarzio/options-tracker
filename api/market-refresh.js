@@ -2815,14 +2815,36 @@ export default async function handler(req, res) {
           }
         } catch(e) { console.warn("[snapshot] Schwab value failed:", e.message); }
 
-        // ETrade account value
+        // ETrade account value — try live API first, fall back to cached value in stocks_data
         let etradeValue = null, etradeCash = null;
         try {
           const etRes  = await fetch(`${APP_URL}/api/etrade?action=positions&secret=${process.env.CRON_SECRET}`);
-          const etData = await etRes.json();
-          etradeValue  = etData?.accountValue || null;
-          etradeCash   = etData?.cash || null;
-        } catch(e) { console.warn("[snapshot] ETrade value failed:", e.message); }
+          if (etRes.ok) {
+            const etData = await etRes.json();
+            // accountValue = equity market value, cash = cash balance — sum for full NAV
+            const etNAV = (etData?.accountValue || 0) + (etData?.cash || 0);
+            if (etNAV > 0) {
+              etradeValue = etNAV;
+              etradeCash  = etData?.cash || 0;
+              console.log(`[snapshot] ETrade NAV from live API: $${etradeValue} (equity:${etData?.accountValue} cash:${etData?.cash})`);
+            } else {
+              console.warn(`[snapshot] ETrade live API returned zero NAV — will try cache`);
+            }
+          } else {
+            console.warn(`[snapshot] ETrade positions API returned HTTP ${etRes.status} — will try cache`);
+          }
+        } catch(e) { console.warn("[snapshot] ETrade live API failed:", e.message); }
+
+        // Fallback: use the ETrade NAV cached by the frontend (updated when user clicks Live Data)
+        if (!etradeValue) {
+          const cachedEtrade = updatedSD["__cash__"]?.etrade;
+          if (cachedEtrade && +cachedEtrade > 0) {
+            etradeValue = +cachedEtrade;
+            console.log(`[snapshot] ETrade NAV from cached stocks_data: $${etradeValue}`);
+          } else {
+            console.warn("[snapshot] ETrade value unavailable — live API failed and no cached value. etrade_value will be null.");
+          }
+        }
 
         // Open contracts value (sum of premiums on open STOs — money we'd owe to close)
         const openContractValue = contracts

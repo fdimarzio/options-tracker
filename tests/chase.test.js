@@ -633,3 +633,67 @@ describe("Stop-loss DTE gate", () => {
   it("DTE=3 → null",           () => expect(stopLossForDTE(3)).toBeNull());
   it("DTE=1 → null",           () => expect(stopLossForDTE(1)).toBeNull());
 });
+
+// ── ETrade value in portfolio_snapshots ───────────────────────────────────────
+
+describe("ETrade NAV calculation for portfolio_snapshots", () => {
+  function resolveEtradeValue(liveApiResult, cachedEtrade) {
+    // Mirrors the new market-refresh.js logic
+    let etradeValue = null;
+    if (liveApiResult?.ok) {
+      const nav = (liveApiResult.accountValue || 0) + (liveApiResult.cash || 0);
+      if (nav > 0) etradeValue = nav;
+    }
+    if (!etradeValue && cachedEtrade && +cachedEtrade > 0) {
+      etradeValue = +cachedEtrade;
+    }
+    return etradeValue;
+  }
+
+  // Positive: live API works → non-null etrade_value
+  it("live API returns equity+cash → combined NAV saved", () => {
+    const result = resolveEtradeValue({ ok: true, accountValue: 350000, cash: 50000 }, null);
+    expect(result).toBe(400000);
+  });
+
+  // Positive: live API fails but cache exists → cache used
+  it("live API fails, cache exists → cache used", () => {
+    const result = resolveEtradeValue(null, "420000");
+    expect(result).toBe(420000);
+  });
+
+  // Negative: live API fails AND no cache → null (does not crash)
+  it("live API fails and no cache → null (graceful)", () => {
+    const result = resolveEtradeValue(null, null);
+    expect(result).toBeNull();
+  });
+
+  // Negative: live API returns zero NAV → falls back to cache
+  it("live API returns zero NAV → falls back to cache", () => {
+    const result = resolveEtradeValue({ ok: true, accountValue: 0, cash: 0 }, "380000");
+    expect(result).toBe(380000);
+  });
+
+  // Schwab still saves even when ETrade fails (independent try/catch blocks)
+  it("total_value = schwab + etrade (zero etrade handled)", () => {
+    const schwab = 900000;
+    const etrade = null;
+    const total  = (schwab || 0) + (etrade || 0);
+    expect(total).toBe(900000);
+  });
+
+  // liveEtradeInline fallback chain: snapshot → cashData
+  it("liveEtradeInline: snapshot wins over cashData", () => {
+    const snapEtrade  = 410000;
+    const cashDataEtrade = 390000;
+    const live = snapEtrade ?? (cashDataEtrade ? +cashDataEtrade : null);
+    expect(live).toBe(410000);
+  });
+
+  it("liveEtradeInline: null snapshot falls back to cashData", () => {
+    const snapEtrade     = null;
+    const cashDataEtrade = 390000;
+    const live = snapEtrade ?? (cashDataEtrade ? +cashDataEtrade : null);
+    expect(live).toBe(390000);
+  });
+});

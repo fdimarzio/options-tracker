@@ -4937,6 +4937,8 @@ export default function App() {
   const latestSnapshot = portfolioSnapshots[0] ?? null;
   const snapSchwab = latestSnapshot?.schwab_value > 0 ? +latestSnapshot.schwab_value : null;
   const snapEtrade = latestSnapshot?.etrade_value > 0 ? +latestSnapshot.etrade_value : null;
+  // liveEtradeInline: most reliable current ETrade value — snapshot → cachData → null
+  const liveEtradeInline = snapEtrade ?? (cashData?.etrade ? +cashData.etrade : null);
   const liveSchwabInline = schwabAccountValue > 0 ? schwabAccountValue : snapSchwab ?? (cashData?.schwab ? +cashData.schwab : null);
   useEffect(()=>{
     supabase.from("col_prefs").select("cols").eq("id","balance_history").maybeSingle()
@@ -8002,7 +8004,7 @@ ${JSON.stringify(summary, null, 1)}`;
                         {analyticsView==="monthly" && showBalCols && (() => {
                           const b = balHistoryInline?.[m.key] || {};
                           const schwab = b.schwab ?? (m.key===nowMonthKey&&liveSchwabInline ? liveSchwabInline : null);
-                          const etrade = b.etrade ?? (m.key===nowMonthKey&&snapEtrade ? snapEtrade : (m.key===nowMonthKey&&cashData?.etrade ? +cashData.etrade : null));
+                          const etrade = b.etrade ?? (m.key===nowMonthKey&&liveEtradeInline ? liveEtradeInline : null);
                           const total  = schwab||etrade ? (schwab||0)+(etrade||0) : null;
                           // MoM: compare to previous month in periodData
                           const allKeys = [...periodData].reverse().map(x=>x.key);
@@ -9396,8 +9398,8 @@ ${JSON.stringify(summary, null, 1)}`;
                     {/* Breakdown row */}
                     <div style={{display:"flex",gap:16,marginTop:10,flexWrap:"wrap"}}>
                       {[
-                        { label: "Schwab",    value: latest?.schwab_value,          color: "#58a6ff" },
-                        { label: "ETrade",    value: latest?.etrade_value,          color: "#ffd166" },
+                        { label: "Schwab",    value: latest?.schwab_value ?? (liveSchwabInline||null),  color: "#58a6ff" },
+                        { label: "ETrade",    value: latest?.etrade_value ?? liveEtradeInline,           color: "#ffd166" },
                         { label: "Cash",      value: latest?.total_cash,            color: "#888" },
                         { label: "Contracts", value: latest?.open_contracts_value,  color: "#00ff88" },
                       ].map(({ label, value, color }) => value != null && (
