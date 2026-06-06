@@ -3033,6 +3033,8 @@ export default async function handler(req, res) {
       const WARN_MINS  = 15 * 60;      // 3:00 PM = 900 mins
       const CLOSE_MINS = 15 * 60 + 30; // 3:30 PM = 930 mins
 
+      console.log(`[ExpiryProtection] Rule evaluation reached — time ${etForExpiry.toTimeString().slice(0,5)} ET (${etMinsForExpiry}m), date ${todayET}, WARN_MINS=${WARN_MINS}, CLOSE_MINS=${CLOSE_MINS}, in_window=${etMinsForExpiry >= WARN_MINS}`);
+
       if (etMinsForExpiry >= WARN_MINS) {
         // Find open STOs expiring today
         const expiringRes = await fetch(

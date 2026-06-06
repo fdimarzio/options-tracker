@@ -516,69 +516,17 @@ async function main() {
     console.error("[ Schwab ] ERROR:", e.message);
   }
 
-  // ── ETrade ──────────────────────────────────────────────────────────────────
-  let etradeCount = 0;
-  try {
-    console.log("\n[ ETrade ] Fetching tokens from Supabase...");
-    const tokens = await getEtradeTokens();
-    const consumerKey = process.env.ETRADE_CONSUMER_KEY ?? process.env.VITE_ETRADE_CONSUMER_KEY;
-    const usedSecret  = process.env.VITE_ETRADE_CONSUMER_SECRET ?? process.env.ETRADE_CONSUMER_SECRET;
-    if (!consumerKey || !usedSecret) throw new Error("ETRADE_CONSUMER_KEY / VITE_ETRADE_CONSUMER_SECRET not in .env.local");
-
-    console.log("[ ETrade ] Fetching account list...");
-    const acctData = await etradeGet("/v1/accounts/list", {}, consumerKey, usedSecret, tokens.accessToken, tokens.accessTokenSecret);
-    const accounts = acctData?.AccountListResponse?.Accounts?.Account ?? [];
-    if (!accounts.length) throw new Error("No ETrade accounts found");
-    console.log(`[ ETrade ] ${accounts.length} account(s): ${accounts.map(a => ETRADE_ACCOUNT_NAMES[String(a.accountId)] ?? a.accountId).join(", ")}`);
-
-    const startDate = new Date(START_DATE + "T12:00:00");
-    const endDate   = new Date();
-    const startFmt  = fmtEtradeDate(startDate);
-    const endFmt    = fmtEtradeDate(endDate);
-    console.log(`[ ETrade ] Date range: ${startFmt} → ${endFmt}`);
-
-    const allRows = [];
-    for (const acct of accounts) {
-      const accountName = ETRADE_ACCOUNT_NAMES[String(acct.accountId)] ?? `ETrade ${String(acct.accountId).slice(-4)}`;
-      try {
-        const txList = await fetchEtradeTransactionsPaginated(acct.accountIdKey, startFmt, endFmt, consumerKey, usedSecret, tokens);
-        const parsed = txList.map(tx => parseEtradeTx(tx, accountName)).filter(Boolean);
-        console.log(`[ ETrade ] ${accountName}: ${txList.length} raw → ${parsed.length} parsed  |  ${tally(parsed)}`);
-        allRows.push(...parsed);
-      } catch (e) {
-        if (e.message?.includes("204")) {
-          console.log(`[ ETrade ] ${accountName}: no transactions in range`);
-        } else {
-          console.warn(`[ ETrade ] ${accountName} failed:`, e.message);
-        }
-      }
-    }
-
-    // Deduplicate within batch — pagination can return the same tx on adjacent pages
-    const seen = new Set();
-    const deduped = allRows.filter(r => {
-      if (seen.has(r.etrade_transaction_id)) return false;
-      seen.add(r.etrade_transaction_id); return true;
-    });
-    if (deduped.length < allRows.length) console.log(`[ ETrade ] Deduped ${allRows.length - deduped.length} duplicate tx IDs`);
-
-    if (deduped.length) {
-      await sbUpsert("stock_transactions", deduped, "etrade_transaction_id");
-      etradeCount = deduped.length;
-      console.log(`[ ETrade ] ✓ Upserted ${etradeCount} rows`);
-    } else {
-      console.log("[ ETrade ] No transactions to import");
-    }
-  } catch (e) {
-    console.error("[ ETrade ] ERROR:", e.message);
-  }
+  // ── ETrade — SKIPPED (IRA accounts, excluded by design) ─────────────────────
+  // ETrade accounts 6917 and 8222 are IRA accounts. Transactions are excluded
+  // from stock_transactions to avoid mixing taxable and non-taxable activity.
+  console.log("\n[ ETrade ] Skipped — IRA accounts excluded from backfill by design.");
+  const etradeCount = 0;
 
   // ── Summary ─────────────────────────────────────────────────────────────────
   console.log(`\n=== Done ===`);
   console.log(`  Schwab:  ${schwabCount} records`);
-  console.log(`  ETrade:  ${etradeCount} records`);
-  console.log(`  Total:   ${schwabCount + etradeCount} records upserted into stock_transactions\n`);
-  console.log(`Tip: run with DEBUG=1 to log skipped ETrade transaction types.\n`);
+  console.log(`  ETrade:  skipped (IRA — excluded)`);
+  console.log(`  Total:   ${schwabCount} records upserted into stock_transactions\n`);
 }
 
 main().catch(e => { console.error("Fatal:", e.message); process.exit(1); });

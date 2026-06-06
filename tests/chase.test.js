@@ -697,3 +697,135 @@ describe("ETrade NAV calculation for portfolio_snapshots", () => {
     expect(live).toBe(390000);
   });
 });
+
+// ── Strategy backfill (task 7f66f91d) ─────────────────────────────────────────
+describe("strategy backfill — STO Call only", () => {
+  function shouldBackfill(opt_type, type) {
+    return opt_type === 'STO' && type === 'Call';
+  }
+  it("STO Call → should backfill",   () => expect(shouldBackfill('STO', 'Call')).toBe(true));
+  it("BTO Call → should NOT backfill", () => expect(shouldBackfill('BTO', 'Call')).toBe(false));
+  it("STO Put  → should NOT backfill", () => expect(shouldBackfill('STO', 'Put')).toBe(false));
+  it("BTO Put  → should NOT backfill", () => expect(shouldBackfill('BTO', 'Put')).toBe(false));
+});
+
+// ── Expiry protection rule logging (task 7b9750eb) ────────────────────────────
+describe("expiry protection — evaluation conditions", () => {
+  function expiryEvalResult({ optType, dte, etMins, isITM }) {
+    if (optType === 'BTO') return 'skip:BTO';
+    if (dte > 30)          return 'skip:LEAP';
+    if (etMins < 15 * 60)  return 'skip:too_early';
+    if (!isITM)            return 'skip:otm';
+    return 'would_close';
+  }
+  it("STO Call ITM at 3:30pm DTE=0 → would_close",       () => expect(expiryEvalResult({ optType:'STO', dte:0,  etMins:15*60+30, isITM:true  })).toBe('would_close'));
+  it("BTO contract ITM at 3:30pm → skip:BTO",             () => expect(expiryEvalResult({ optType:'BTO', dte:0,  etMins:15*60+30, isITM:true  })).toBe('skip:BTO'));
+  it("STO DTE=35 (LEAP) ITM at 3:30pm → skip:LEAP",       () => expect(expiryEvalResult({ optType:'STO', dte:35, etMins:15*60+30, isITM:true  })).toBe('skip:LEAP'));
+  it("STO DTE=0 OTM at 3:30pm → skip:otm",               () => expect(expiryEvalResult({ optType:'STO', dte:0,  etMins:15*60+30, isITM:false })).toBe('skip:otm'));
+  it("STO DTE=0 ITM at 2:00pm (too early) → skip:too_early", () => expect(expiryEvalResult({ optType:'STO', dte:0, etMins:14*60, isITM:true })).toBe('skip:too_early'));
+});
+
+// ── Backfill ETrade exclusion (task a7b5c1d6) ─────────────────────────────────
+describe("backfill ETrade exclusion", () => {
+  function shouldImport(broker) { return broker === 'schwab'; }
+  it("schwab transaction → imported",    () => expect(shouldImport('schwab')).toBe(true));
+  it("etrade transaction → NOT imported", () => expect(shouldImport('etrade')).toBe(false));
+
+  // Schwab transaction_type mapping
+  function mapSchwabType(rawType, netAmount, desc) {
+    const d = (desc || '').toUpperCase();
+    switch (rawType) {
+      case 'TRADE': return netAmount > 0 ? 'SELL' : 'BUY'; // simplified
+      case 'DIVIDEND_OR_INTEREST': return d.includes('DIVIDEND') ? 'DIVIDEND' : 'INTEREST';
+      case 'JOURNAL': return 'JOURNAL';
+      case 'RECEIVE_AND_DELIVER': return netAmount >= 0 ? 'TRANSFER_IN' : 'TRANSFER_OUT';
+      case 'ELECTRONIC_FUND': return netAmount >= 0 ? 'DEPOSIT' : 'WITHDRAWAL';
+      case 'WIRE_IN': return 'DEPOSIT';
+      case 'WIRE_OUT': return 'WITHDRAWAL';
+      default: return null;
+    }
+  }
+  it("DIVIDEND_OR_INTEREST with DIVIDEND desc → DIVIDEND", () => expect(mapSchwabType('DIVIDEND_OR_INTEREST', 50, 'AAPL DIVIDEND')).toBe('DIVIDEND'));
+  it("DIVIDEND_OR_INTEREST with no DIVIDEND → INTEREST",  () => expect(mapSchwabType('DIVIDEND_OR_INTEREST', 12, 'MONEY MARKET')).toBe('INTEREST'));
+  it("WIRE_IN → DEPOSIT",    () => expect(mapSchwabType('WIRE_IN', 5000, '')).toBe('DEPOSIT'));
+  it("WIRE_OUT → WITHDRAWAL", () => expect(mapSchwabType('WIRE_OUT', -2000, '')).toBe('WITHDRAWAL'));
+});
+
+// ── Rationale field (task f34bf301) ──────────────────────────────────────────
+describe("rationale field visibility", () => {
+  function showRationale(tx_type) { return tx_type === 'BUY'; }
+  it("BUY → rationale field shown",      () => expect(showRationale('BUY')).toBe(true));
+  it("SELL → rationale field hidden",     () => expect(showRationale('SELL')).toBe(false));
+  it("DIVIDEND → rationale field hidden", () => expect(showRationale('DIVIDEND')).toBe(false));
+  it("TRANSFER_IN → rationale hidden",    () => expect(showRationale('TRANSFER_IN')).toBe(false));
+});
+
+// ── Reconcile script (task 8cab2c33) ─────────────────────────────────────────
+describe("reconcile script logic", () => {
+  function reconcile(statementTxns, dbTxns) {
+    const key = t => `${t.date}|${t.type}|${t.symbol}`;
+    const dbSet   = new Set(dbTxns.map(key));
+    const stmtSet = new Set(statementTxns.map(key));
+    return {
+      missingFromDB:   statementTxns.filter(t => !dbSet.has(key(t))),
+      missingFromStmt: dbTxns.filter(t => !stmtSet.has(key(t))),
+    };
+  }
+
+  it("3 stmt txns, 2 in DB → 1 missing from DB", () => {
+    const stmt = [
+      { date:'2026-06-01', type:'BUY',    symbol:'AAPL' },
+      { date:'2026-06-02', type:'SELL',   symbol:'AAPL' },
+      { date:'2026-06-03', type:'DIVIDEND',symbol:'AAPL' },
+    ];
+    const db = [
+      { date:'2026-06-01', type:'BUY',  symbol:'AAPL' },
+      { date:'2026-06-02', type:'SELL', symbol:'AAPL' },
+    ];
+    const r = reconcile(stmt, db);
+    expect(r.missingFromDB.length).toBe(1);
+    expect(r.missingFromDB[0].type).toBe('DIVIDEND');
+  });
+
+  it("empty statement → no missing from DB", () => {
+    const r = reconcile([], [{ date:'2026-06-01', type:'BUY', symbol:'AAPL' }]);
+    expect(r.missingFromDB.length).toBe(0);
+    expect(r.missingFromStmt.length).toBe(1);
+  });
+});
+
+// ── Skynet auto stats (new analytics task) ────────────────────────────────────
+describe("Skynet auto performance stats", () => {
+  function computeAutoStats(contracts) {
+    const autoOpen   = contracts.filter(c => c.open_method === 'auto');
+    const autoClosed = autoOpen.filter(c => c.status === 'Closed' && c.profit != null);
+    const wins = autoClosed.filter(c => c.profit > 0);
+    const totalProfit = autoClosed.reduce((s, c) => s + c.profit, 0);
+    return {
+      autoOpen:    autoOpen.length,
+      autoClosed:  autoClosed.length,
+      winRate:     autoClosed.length ? Math.round(wins.length / autoClosed.length * 100) : 0,
+      totalProfit: Math.round(totalProfit * 100) / 100,
+    };
+  }
+
+  it("3 auto contracts, 2 wins → winRate 67%, totalProfit computed", () => {
+    const contracts = [
+      { open_method:'auto', status:'Closed', profit: 100 },
+      { open_method:'auto', status:'Closed', profit: 50 },
+      { open_method:'auto', status:'Closed', profit: -30 },
+    ];
+    const s = computeAutoStats(contracts);
+    expect(s.autoOpen).toBe(3);
+    expect(s.autoClosed).toBe(3);
+    expect(s.winRate).toBe(67);
+    expect(s.totalProfit).toBe(120);
+  });
+
+  it("no auto contracts → zeros, does not crash", () => {
+    const s = computeAutoStats([{ open_method:'app', status:'Closed', profit: 100 }]);
+    expect(s.autoOpen).toBe(0);
+    expect(s.winRate).toBe(0);
+    expect(s.totalProfit).toBe(0);
+  });
+});

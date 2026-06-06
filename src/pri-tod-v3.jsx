@@ -753,12 +753,36 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
   const [analyzing,     setAnalyzing]     = useState(false);
   const [skynetCtrl,    setSkynetCtrl]    = useState(null);
   const [tickerRiskCfg, setTickerRiskCfg] = useState([]);
+  const [autoStats,     setAutoStats]     = useState(null); // Skynet auto performance
 
   useEffect(() => {
     supabase.from("skynet_controls").select("*").eq("enabled",true).limit(1).maybeSingle()
       .then(({data}) => { if (data) setSkynetCtrl(data); });
     supabase.from("ticker_risk_config").select("*").order("symbol")
       .then(({data}) => { if (data) setTickerRiskCfg(data); });
+    // Load auto-trade performance stats
+    supabase.from("contracts").select("id,profit,profit_pct,open_method,close_method,status,stock,opt_type")
+      .or("open_method.eq.auto,close_method.eq.auto")
+      .then(({data: cx}) => {
+        if (!cx) { setAutoStats({ error: true }); return; }
+        const autoOpen   = cx.filter(c => c.open_method === "auto");
+        const autoClosed = autoOpen.filter(c => c.status === "Closed" && c.profit != null);
+        const fullAuto   = cx.filter(c => c.open_method === "auto" && c.close_method === "auto" && c.profit != null);
+        const wins = autoClosed.filter(c => (+c.profit) > 0);
+        const fullWins = fullAuto.filter(c => (+c.profit) > 0);
+        const sum = arr => arr.reduce((s, c) => s + (+c.profit || 0), 0);
+        const avg = arr => arr.length ? sum(arr) / arr.length : 0;
+        setAutoStats({
+          autoOpen:   autoOpen.length,
+          autoClosed: autoClosed.length,
+          winRate:    autoClosed.length ? Math.round(wins.length / autoClosed.length * 100) : 0,
+          totalProfit: Math.round(sum(autoClosed) * 100) / 100,
+          avgProfit:   Math.round(avg(autoClosed) * 100) / 100,
+          fullAutoCount:  fullAuto.length,
+          fullAutoWinRate: fullAuto.length ? Math.round(fullWins.length / fullAuto.length * 100) : 0,
+          fullAutoProfit:  Math.round(sum(fullAuto) * 100) / 100,
+        });
+      }).catch(() => setAutoStats({ error: true }));
     Promise.all([
       supabase.from("signal_rules").select("*").order("priority", { ascending: false }),
       supabase.from("signal_log").select("id,signal_type,profit_pct_at_signal,pushed,created_at,rule_id,contract_id"),
@@ -855,6 +879,29 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
           <div style={{fontFamily:"monospace",fontSize:11,color:"#00ff88",letterSpacing:"0.07em"}}>🤖 SKYNET — SIGNAL RULES</div>
           {!inline && <button onClick={onClose} style={{background:"transparent",border:"none",color:"#555",fontSize:18,cursor:"pointer"}}>✕</button>}
         </div>
+
+        {/* ── Auto-trade performance stats ── */}
+        {autoStats && !autoStats.error && (
+          <div style={{background:"#0a0e14",border:"1px solid #00ff8820",borderRadius:8,padding:"12px 14px",marginBottom:14}}>
+            <div style={{fontFamily:"monospace",fontSize:8,color:"#00ff88",letterSpacing:"0.08em",marginBottom:10}}>📈 AUTO-TRADE PERFORMANCE</div>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+              {[
+                { label:"AUTO-OPENED",   val: autoStats.autoOpen,    sub: "total contracts",   color:"#ffd166" },
+                { label:"AUTO CLOSED",   val: autoStats.autoClosed,  sub: `${autoStats.winRate}% win rate`, color:"#00ff88" },
+                { label:"AUTO PROFIT",   val: (autoStats.totalProfit >= 0 ? "+" : "") + "$" + Math.abs(autoStats.totalProfit).toLocaleString(), sub: `avg $${autoStats.avgProfit}/trade`, color: autoStats.totalProfit >= 0 ? "#00ff88" : "#ff4560" },
+                { label:"FULL AUTO",     val: autoStats.fullAutoCount, sub: `open+close auto`, color:"#58a6ff" },
+                { label:"FULL AUTO WIN", val: autoStats.fullAutoWinRate + "%", sub: `${autoStats.fullAutoCount} trades`, color:"#58a6ff" },
+                { label:"FULL AUTO P/L", val: (autoStats.fullAutoProfit >= 0 ? "+" : "") + "$" + Math.abs(autoStats.fullAutoProfit).toLocaleString(), sub: "fully automated P/L", color: autoStats.fullAutoProfit >= 0 ? "#00ff88" : "#ff4560" },
+              ].map(s => (
+                <div key={s.label} style={{background:"#080c12",border:"1px solid #1c2128",borderRadius:5,padding:"8px 10px",minWidth:90,flex:"0 0 auto"}}>
+                  <div style={{fontFamily:"monospace",fontSize:7,color:"#3a4050",letterSpacing:"0.07em",marginBottom:3}}>{s.label}</div>
+                  <div style={{fontFamily:"monospace",fontSize:15,fontWeight:700,color:s.color,lineHeight:1}}>{s.val}</div>
+                  <div style={{fontFamily:"monospace",fontSize:7,color:"#2a3040",marginTop:2}}>{s.sub}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* ── Summary stats bar ── */}
         <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:16}}>
