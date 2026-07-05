@@ -590,14 +590,14 @@ async function computeAndStoreIVRank(symbol, ivPct, stockPrice) {
   // 1. Upsert today's reading (one per symbol per day)
   await fetch(`${SUPABASE_URL}/rest/v1/iv_history`, {
     method:  "POST",
-    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
+    headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
     body: JSON.stringify({ symbol: symbol.toUpperCase(), iv_pct: ivPct, stock_price: stockPrice, date: new Date().toISOString().slice(0, 10) }),
   }).catch(e => console.warn(`[iv_history] write failed for ${symbol}:`, e.message));
 
   // 2. Fetch up to 252 trading days of history (1 year)
   const histRes = await fetch(
     `${SUPABASE_URL}/rest/v1/iv_history?select=iv_pct,date&symbol=eq.${symbol.toUpperCase()}&order=date.desc&limit=252`,
-    { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+    { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }
   ).then(r => r.json()).catch(() => []);
 
   const history = Array.isArray(histRes) ? histRes.map(r => +r.iv_pct).filter(v => !isNaN(v)) : [];
@@ -703,7 +703,7 @@ async function storeSupportResistance(symbol, srResult) {
   // Delete old levels for this symbol and re-insert fresh ones
   await fetch(`${SUPABASE_URL}/rest/v1/support_resistance?symbol=eq.${symbol.toUpperCase()}`, {
     method:  "DELETE",
-    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+    headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` },
   }).catch(e => console.warn(`[storeSupportResistance] DELETE failed for ${symbol}:`, e.message));
 
   const rows = [];
@@ -716,7 +716,7 @@ async function storeSupportResistance(symbol, srResult) {
   if (rows.length) {
     await fetch(`${SUPABASE_URL}/rest/v1/support_resistance`, {
       method:  "POST",
-      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+      headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
       body: JSON.stringify(rows),
     }).catch(e => console.warn(`[sr] store failed for ${symbol}:`, e.message));
   }
@@ -731,7 +731,7 @@ async function writeFactorValues(sigId, factors, capturedAt) {
   if (!rows.length) return;
   await fetch(`${SUPABASE_URL}/rest/v1/scoring_factor_values`, {
     method: "POST",
-    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+    headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
     body: JSON.stringify(rows),
   }).catch(e => console.warn("[market-refresh] scoring_factor_values write failed:", e.message));
 }
@@ -741,7 +741,8 @@ async function writeFactorValues(sigId, factors, capturedAt) {
 // Never re-notify within 60 minutes of last notification for same level
 const RENOTIFY_DOLLARS  = 50;
 const RENOTIFY_PCT      = 5;   // percentage points
-const RENOTIFY_COOLDOWN = 60;  // minutes
+const RENOTIFY_COOLDOWN = 90;  // minutes — was 60, raised to reduce alert frequency
+const CLOSE_NOW_COOLDOWN = 30; // minutes — CLOSE_NOW gets a shorter window since it's actionable
 
 function shouldNotify(signal, lastNotif) {
   if (!lastNotif) return true;  // never notified
@@ -751,7 +752,9 @@ function shouldNotify(signal, lastNotif) {
     const sentToday = lastNotif.sentAt?.slice(0, 10) === new Date().toISOString().slice(0, 10);
     return !sentToday;
   }
-  // Cooldown — don't re-notify same level within 60 minutes
+  // Cooldown — never re-notify same level within the cooldown window, regardless
+  // of profit improvement. This was previously bypassable by profit/pct jumps,
+  // causing repeat alerts every 10-15 min on volatile tickers.
   if (lastNotif.sentAt) {
     const minsSince = (Date.now() - new Date(lastNotif.sentAt).getTime()) / 60000;
     if (minsSince < RENOTIFY_COOLDOWN) return false;
@@ -787,7 +790,7 @@ async function logSignal(fields) {
   try {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/signal_log`, {
       method: "POST",
-      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=representation" },
+      headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "return=representation" },
       body: JSON.stringify(fields),
     });
     const rows = await res.json();
@@ -918,7 +921,7 @@ async function simLoadSnapshots(symbol, days) {
   const since = new Date(Date.now() - days * 86400000).toISOString();
   const res = await fetch(
     `${SUPABASE_URL}/rest/v1/option_snapshots?select=id,symbol,expiry,strike,opt_type,snapshot_at,dte,bid,ask,mid,iv,delta,open_interest,stock_price,stock_change_pct,otm_pct,vix,sma20,sma50,rsi14,sma_alignment,trend_regime,day_of_week&symbol=eq.${encodeURIComponent(symbol)}&opt_type=eq.call&snapshot_at=gte.${since}&order=snapshot_at.asc&limit=100000`,
-    { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+    { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }
   );
   return res.json();
 }
@@ -958,13 +961,13 @@ async function runSimulations(symbol, days) {
   const allRows = allResults.flatMap(r => r.trades);
   if (allRows.length) {
     await fetch(`${SUPABASE_URL}/rest/v1/sim_results?symbol=eq.${encodeURIComponent(symbol)}`, {
-      method: "DELETE", headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+      method: "DELETE", headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` },
     }).catch(e => console.warn(`[simulate] sim_results DELETE failed for ${symbol}:`, e.message));
     const CHUNK = 200;
     for (let i = 0; i < allRows.length; i += CHUNK) {
       await fetch(`${SUPABASE_URL}/rest/v1/sim_results`, {
         method: "POST",
-        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+        headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
         body: JSON.stringify(allRows.slice(i, i + CHUNK)),
       }).catch(e => console.warn("[simulate] sim_results write failed:", e.message));
     }
@@ -1005,7 +1008,7 @@ async function runSimulations(symbol, days) {
     for (let i = 0; i < summaryRows.length; i += CHUNK) {
       await fetch(`${SUPABASE_URL}/rest/v1/sim_summary`, {
         method: "POST",
-        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" },
+        headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" },
         body: JSON.stringify(summaryRows.slice(i, i + CHUNK)),
       }).catch(e => console.warn("[simulate] sim_summary write failed:", e.message));
     }
@@ -1026,7 +1029,7 @@ async function runSimulations(symbol, days) {
 async function simGetStatus() {
   const res = await fetch(
     `${SUPABASE_URL}/rest/v1/option_snapshots?select=symbol,snapshot_at&order=snapshot_at.desc&limit=20000`,
-    { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+    { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }
   );
   const rows = await res.json();
   const bySymbol = {};
@@ -1056,7 +1059,7 @@ async function handleSimulate(req, res) {
     if (!symbol) return res.status(400).json({ error: "symbol required" });
     const rows = await fetch(
       `${SUPABASE_URL}/rest/v1/sim_summary?symbol=eq.${encodeURIComponent(symbol)}&order=ev.desc&limit=144`,
-      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+      { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }
     ).then(r => r.json());
     return res.status(200).json({ ok: true, symbol, count: rows.length, results: rows });
   }
@@ -1064,7 +1067,7 @@ async function handleSimulate(req, res) {
   if (action === "toppicks") {
     const rows = await fetch(
       `${SUPABASE_URL}/rest/v1/sim_summary?order=ev.desc&limit=500`,
-      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+      { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }
     ).then(r => r.json());
     const bySymbol = {};
     for (const r of rows) {
@@ -1096,6 +1099,61 @@ async function handleSimulate(req, res) {
   }
 
   return res.status(400).json({ error: `Unknown action: ${action}` });
+}
+
+// ── Auto-purge option_snapshots — batched daily delete to keep the table bounded ──
+// option_snapshots grows fast (every strike/ticker snapshotted ~every minute during
+// market hours), so a single unbounded DELETE can time out on a multi-GB table.
+// Batches by finding the Nth-oldest surviving row's timestamp and deleting up to it,
+// which avoids building a giant id=in.(...) URL for the delete itself.
+async function runSnapshotPurge(sbHeaders) {
+  const RETENTION_DAYS = 60;
+  const BATCH_SIZE = 10000;
+  const cutoff = new Date(Date.now() - RETENTION_DAYS * 86400000).toISOString();
+  let deleted = 0;
+
+  try {
+    while (true) {
+      const batchRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/option_snapshots?select=snapshot_at&snapshot_at=lt.${cutoff}&order=snapshot_at.asc&limit=${BATCH_SIZE}`,
+        { headers: sbHeaders }
+      );
+      const batch = await batchRes.json();
+      if (!Array.isArray(batch) || !batch.length) break;
+
+      const boundary = batch[batch.length - 1].snapshot_at;
+      const delRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/option_snapshots?snapshot_at=lte.${boundary}`,
+        { method: "DELETE", headers: { ...sbHeaders, Prefer: "count=exact" } }
+      );
+      const rangeTotal = delRes.headers.get("content-range")?.split("/")[1];
+      deleted += rangeTotal && rangeTotal !== "*" ? +rangeTotal : batch.length;
+
+      if (batch.length < BATCH_SIZE) break; // last (partial) batch — done
+    }
+
+    const remainRes = await fetch(`${SUPABASE_URL}/rest/v1/option_snapshots?select=id&limit=1`, {
+      headers: { ...sbHeaders, Prefer: "count=exact" },
+    });
+    const remainRange = remainRes.headers.get("content-range")?.split("/")[1];
+    const remaining = remainRange && remainRange !== "*" ? +remainRange : null;
+
+    console.log(`[snapshot_purge] deleted ${deleted} rows, ${remaining ?? "?"} remain`);
+    await fetch(`${SUPABASE_URL}/rest/v1/ecosystem_heartbeat`, {
+      method: "POST",
+      headers: { ...sbHeaders, Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify({ agent_name: "snapshot_purge", last_run_at: new Date().toISOString(), status: "ok", notes: `deleted ${deleted} rows, ${remaining ?? "?"} remain`, updated_at: new Date().toISOString() }),
+    });
+    return { deleted, remaining };
+  } catch (e) {
+    console.warn("[snapshot_purge] failed:", e.message);
+    await fetch(`${SUPABASE_URL}/rest/v1/ecosystem_heartbeat`, {
+      method: "POST",
+      headers: { ...sbHeaders, Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify({ agent_name: "snapshot_purge", last_run_at: new Date().toISOString(), status: "error", notes: e.message, updated_at: new Date().toISOString() }),
+    }).catch(() => {});
+    return { deleted, error: e.message };
+  }
 }
 
 // ── Chase loop — step down limit price on active chase orders ─────────────────
@@ -1156,15 +1214,28 @@ async function runChaseLoop(token, sbHeaders) {
           }
         }
 
-        // For STO (selling): target just below ask so we're most competitive
-        // For BTC/BTO (buying): target just above bid
-        const isSell    = ["STO","STC"].includes(order.opt_type);
-        const rawTarget = isSell ? ask - 0.01 : bid + 0.01;
+        // Chase: step down by one step per cycle (time-based), bounded by floor and ask/bid
+        // For STO: step down from current price toward floor each cycle
+        // For BTC: step up from current price toward floor each cycle
+        const isSell      = ["STO","STC"].includes(order.opt_type);
+        const step        = +(order.chase_step || 0.05);
+        const floor       = +(order.chase_floor || 0);
+        const currentAsk  = ask;
+        const currentBid  = bid;
+        const currentPrice = +(order.limit_price || 0);
 
-        // Round to nearest step
-        const step      = +(order.chase_step || 0.05);
-        const newPrice  = Math.round(rawTarget / step) * step;
-        const floor     = +(order.chase_floor || 0);
+        // Step one increment toward floor each cycle
+        const steppedPrice = isSell
+          ? Math.round((currentPrice - step) / step) * step   // STO: step down
+          : Math.round((currentPrice + step) / step) * step;  // BTC: step up
+
+        // Also cap at market: STO can't exceed ask, BTC can't go below bid
+        const marketCap = isSell ? currentAsk : currentBid;
+        const rawTarget = isSell
+          ? Math.min(steppedPrice, marketCap - 0.01)
+          : Math.max(steppedPrice, marketCap + 0.01);
+
+        const newPrice = Math.round(rawTarget / step) * step;
 
         // Floor hit — stop chasing
         if ((isSell && newPrice <= floor) || (!isSell && newPrice >= floor)) {
@@ -1183,7 +1254,6 @@ async function runChaseLoop(token, sbHeaders) {
         }
 
         // No change needed — already at or better than target
-        const currentPrice = +(order.limit_price || 0);
         if (Math.abs(newPrice - currentPrice) < 0.005) {
           console.log(`[chase] order ${order.id} already at target $${newPrice.toFixed(2)}`);
           continue;
@@ -1265,7 +1335,7 @@ export default async function handler(req, res) {
   try {
     // ── Check ETrade token age — alert if from previous day ─────────────────
     try {
-      const etTokenRes = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.etrade_tokens`, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+      const etTokenRes = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.etrade_tokens`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } });
       const etToken    = (await etTokenRes.json())?.[0]?.cols;
       if (etToken?.savedAt) {
         const nowET    = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
@@ -1282,14 +1352,14 @@ export default async function handler(req, res) {
     // ── Check Schwab refresh token expiry — warn if within 3 days ──────────
     try {
       const SCHWAB_AUTH_URL = "https://options-tracker-five.vercel.app/api/schwab-auth";
-      const stRes  = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.schwab_tokens`, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+      const stRes  = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.schwab_tokens`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } });
       const st     = (await stRes.json())?.[0]?.cols;
       if (st?.refreshTokenExpiresAt) {
         const msTilExpiry = st.refreshTokenExpiresAt - Date.now();
         const daysTil     = msTilExpiry / 86400000;
         if (daysTil <= 3 && daysTil > 0) {
           // Notify once per day — check last warn date stored in col_prefs
-          const warnRes  = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.schwab_token_warn`, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+          const warnRes  = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.schwab_token_warn`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } });
           const warnData = (await warnRes.json())?.[0]?.cols;
           const todayStr = new Date().toISOString().slice(0, 10);
           if (warnData?.lastNotified !== todayStr) {
@@ -1297,7 +1367,7 @@ export default async function handler(req, res) {
             await sendPushover("⚠️ Schwab Token Expires Soon", `Refresh token expires in ${daysLabel} — re-authorize now to avoid interruption`, SCHWAB_AUTH_URL, "Re-Authorize Schwab", 1);
             await fetch(`${SUPABASE_URL}/rest/v1/col_prefs`, {
               method: "POST",
-              headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
+              headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
               body: JSON.stringify({ id: "schwab_token_warn", cols: { lastNotified: todayStr }, updated_at: new Date().toISOString() }),
             });
             console.log(`[market-refresh] Schwab token expiry warning sent (expires in ${daysLabel})`);
@@ -1310,17 +1380,17 @@ export default async function handler(req, res) {
 
     // ── Load everything in parallel ─────────────────────────────────────────
     const [contractsRes, chainRes, notifRes, matrixRes, allPositions, signalRulesRes, momentumConfigRes, priceHistoryRes, watchlistRes] = await Promise.all([
-      fetch(`${SUPABASE_URL}/rest/v1/contracts?select=id,stock,type,opt_type,strike,expires,premium,qty,account,stop_loss_multiplier,time_stop_dte,delta_stop,last_exit_alert_at&status=eq.Open`, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }),
-      fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.last_chain_refresh`,   { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }),
-      fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.notifications_sent`,   { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }),
-      fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.dte_matrix`,           { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }),
+      fetch(`${SUPABASE_URL}/rest/v1/contracts?select=id,stock,type,opt_type,strike,expires,premium,qty,account,stop_loss_multiplier,time_stop_dte,delta_stop,last_exit_alert_at&status=eq.Open`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }),
+      fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.last_chain_refresh`,   { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }),
+      fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.notifications_sent`,   { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }),
+      fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.dte_matrix`,           { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }),
       fetchAllPositions(token),
-      fetch(`${SUPABASE_URL}/rest/v1/signal_rules?enabled=eq.true&order=priority.desc`, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }),
-      fetch(`${SUPABASE_URL}/rest/v1/sto_momentum_config?enabled=eq.true&limit=1`,      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }),
+      fetch(`${SUPABASE_URL}/rest/v1/signal_rules?enabled=eq.true&order=priority.desc`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }),
+      fetch(`${SUPABASE_URL}/rest/v1/sto_momentum_config?enabled=eq.true&limit=1`,      { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }),
       // Load last 35 mins of price snapshots for momentum calculation
-      fetch(`${SUPABASE_URL}/rest/v1/price_snapshots?captured_at=gte.${new Date(Date.now()-35*60000).toISOString()}&order=captured_at.desc`, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }),
+      fetch(`${SUPABASE_URL}/rest/v1/price_snapshots?captured_at=gte.${new Date(Date.now()-35*60000).toISOString()}&order=captured_at.desc`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }),
       // Load watchlist tickers so they get snapshots + DANI history
-      fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.watchlist`,            { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }),
+      fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.watchlist`,            { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }),
     ]);
 
     const contracts      = await contractsRes.json();
@@ -1334,7 +1404,7 @@ export default async function handler(req, res) {
     // Load Skynet controls
     let skynetControls = { max_order_value: 10000, max_bid_ask_deviation_pct: 15, block_if_loss: true, enabled: true };
     try {
-      const scRes = await fetch(`${SUPABASE_URL}/rest/v1/skynet_controls?enabled=eq.true&limit=1`, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+      const scRes = await fetch(`${SUPABASE_URL}/rest/v1/skynet_controls?enabled=eq.true&limit=1`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } });
       const scRows = await scRes.json();
       if (Array.isArray(scRows) && scRows.length) skynetControls = scRows[0];
     } catch(e) { console.warn("[market-refresh] skynet_controls load failed:", e.message); }
@@ -1418,7 +1488,7 @@ export default async function handler(req, res) {
     try {
       const pendingOrders = await fetch(
         `${SUPABASE_URL}/rest/v1/trade_orders?select=contract_id&status=in.(pending_approval,submitted)`,
-        { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+        { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }
       ).then(r => r.json());
       pendingContractIds = new Set((Array.isArray(pendingOrders) ? pendingOrders : []).map(o => String(o.contract_id)));
     } catch(e) { console.warn("[market-refresh] pending orders fetch failed:", e.message); }
@@ -1440,7 +1510,7 @@ export default async function handler(req, res) {
       if (snapshotRows.length) {
         const psRes = await fetch(`${SUPABASE_URL}/rest/v1/price_snapshots`, {
           method: "POST",
-          headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+          headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
           body: JSON.stringify(snapshotRows),
         });
         if (!psRes.ok) {
@@ -1452,7 +1522,7 @@ export default async function handler(req, res) {
         // Purge snapshots older than 2 days
         await fetch(`${SUPABASE_URL}/rest/v1/price_snapshots?captured_at=lt.${new Date(Date.now() - 2*86400000).toISOString()}`, {
           method: "DELETE",
-          headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+          headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` },
         });
       }
     } catch(e) { console.warn("[market-refresh] price snapshot write failed:", e.message); }
@@ -1477,9 +1547,9 @@ export default async function handler(req, res) {
         // Use contract tickers only (they have live positions we care about)
         // Plus any position tickers that might not have contracts yet today
         // Fall back to a default list if no open positions (e.g. outside market hours testing)
-        const DEFAULT_SNAP_TICKERS = ["AAPL","AMZN","NVDA","JPM","OKLO","WDC","AMD","MSFT","TSLA","SPY","GEV"];
+        const DEFAULT_SNAP_TICKERS = ["AAPL","AMZN","NVDA","JPM","OKLO","WDC","AMD","CAT","CEG","BWXT","INFQ"];
         // RESEARCH_TICKERS: always snapshot these regardless of open positions (BTO candidates, validation)
-        const RESEARCH_TICKERS = ["GEV"];
+        const RESEARCH_TICKERS = [];
         const snapTickers = [...new Set([...contractTickers, ...positionTickers])];
         const finalSnapTickers = [...new Set([...(snapTickers.length ? snapTickers : DEFAULT_SNAP_TICKERS), ...RESEARCH_TICKERS])];
         console.log(`[option-snapshot] scanning ${finalSnapTickers.length} tickers: ${finalSnapTickers.join(", ")}`);
@@ -1588,18 +1658,15 @@ export default async function handler(req, res) {
           for (let i = 0; i < optionSnapshotRows.length; i += CHUNK) {
             await fetch(`${SUPABASE_URL}/rest/v1/option_snapshots`, {
               method: "POST",
-              headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+              headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
               body: JSON.stringify(optionSnapshotRows.slice(i, i + CHUNK)),
             });
           }
           console.log(`[option-snapshot] wrote ${optionSnapshotRows.length} rows for ${finalSnapTickers.join(", ")}`);
         }
 
-        // Purge snapshots older than 90 days
-        await fetch(`${SUPABASE_URL}/rest/v1/option_snapshots?snapshot_at=lt.${new Date(Date.now() - 90*86400000).toISOString()}`, {
-          method: "DELETE",
-          headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
-        }).catch(e => console.warn("[option-snapshot] purge failed:", e.message));
+        // Purging is now handled once/day at market open by runSnapshotPurge() (batched, 60-day retention)
+        // — see the daily gate below, replacing the old unbatched every-cycle DELETE that could time out.
 
       } catch(e) { console.warn("[option-snapshot] write failed:", e.message); }
     }
@@ -1607,7 +1674,7 @@ export default async function handler(req, res) {
     const today       = lastRefresh.slice(0, 10);
 
     // ── Save quotes ─────────────────────────────────────────────────────────
-    const sdRes     = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.stocks_data`, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+    const sdRes     = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.stocks_data`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } });
     const existing  = (await sdRes.json())?.[0]?.cols || {};
     const updatedSD = { ...existing };
 
@@ -1644,12 +1711,12 @@ export default async function handler(req, res) {
     await Promise.all([
       fetch(`${SUPABASE_URL}/rest/v1/col_prefs`, {
         method: "POST",
-        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
+        headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
         body: JSON.stringify({ id: "last_market_refresh", cols: { quotes, lastRefresh }, updated_at: lastRefresh }),
       }),
       fetch(`${SUPABASE_URL}/rest/v1/col_prefs`, {
         method: "POST",
-        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
+        headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
         body: JSON.stringify({ id: "stocks_data", cols: updatedSD, updated_at: lastRefresh }),
       }),
     ]);
@@ -1670,6 +1737,25 @@ export default async function handler(req, res) {
     if (!isMarketOpen) {
       console.log(`[market-refresh] outside market hours (${etForGate.toTimeString().slice(0,5)} ET) — skipping all signal notifications`);
     }
+
+    // ── Daily option_snapshots purge — once per day at market open (~9:31am ET) ──
+    try {
+      const PURGE_WINDOW_START = 9 * 60 + 30; // 9:30am ET
+      const PURGE_WINDOW_END   = 9 * 60 + 35; // 9:35am ET — covers the first few 1-min cron ticks
+      if (etGateMins >= PURGE_WINDOW_START && etGateMins <= PURGE_WINDOW_END) {
+        const hbRes = await fetch(
+          `${SUPABASE_URL}/rest/v1/ecosystem_heartbeat?agent_name=eq.snapshot_purge&select=last_run_at`,
+          { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }
+        );
+        const hb = await hbRes.json();
+        const lastRunDate = hb?.[0]?.last_run_at?.slice(0, 10);
+        if (lastRunDate !== today) {
+          await runSnapshotPurge({ apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json" });
+        } else {
+          console.log("[snapshot_purge] already ran today — skipping");
+        }
+      }
+    } catch (e) { console.warn("[snapshot_purge] gate check failed:", e.message); }
 
     // ── Hoist etNow and vix to top-level scope — used by all scanner blocks ──
     const etNow = etForGate; // same timestamp, reuse
@@ -1704,11 +1790,11 @@ export default async function handler(req, res) {
       console.log(`[signal] ${contract.stock} $${contract.strike} ${contract.type} — ask:${chainEntry?.ask} bid:${chainEntry?.bid} mid:${signal.mid?.toFixed(3)} costToClose:$${signal.costToClose} profit:${signal.profitPct?.toFixed(1)}% premium:$${contract.premium} level:${signal.level}`);
 
       const lastNotif = sentData.contracts[String(contract.id)];
-      // CLOSE_NOW: notify at most once per 15 minutes regardless of auto rules
+      // CLOSE_NOW: notify at most once per CLOSE_NOW_COOLDOWN minutes regardless of auto rules
       // (auto-execute handles the trade — Pushover is just FYI)
       if (signal.level === "CLOSE_NOW" && lastNotif?.level === "CLOSE_NOW" && lastNotif?.sentAt) {
         const minsSince = (Date.now() - new Date(lastNotif.sentAt).getTime()) / 60000;
-        if (minsSince < 15) continue;
+        if (minsSince < CLOSE_NOW_COOLDOWN) continue;
       } else if (!shouldNotify(signal, lastNotif)) continue;
 
       const notif = buildNotification(contract, signal, quotes);
@@ -1809,7 +1895,7 @@ export default async function handler(req, res) {
             await sendPushover(`⚠️ Exit Plan Alert: ${ticker}`, alertMsg, `${APP_URL}/?tab=contracts`, "View Contracts", 1);
             await fetch(`${SUPABASE_URL}/rest/v1/contracts?id=eq.${contract.id}`, {
               method: "PATCH",
-              headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+              headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
               body: JSON.stringify({ last_exit_alert_at: lastRefresh }),
             });
             console.log(`[exit-plan] ${alertMsg}`);
@@ -1822,7 +1908,7 @@ export default async function handler(req, res) {
     if (notifications.length) {
       await fetch(`${SUPABASE_URL}/rest/v1/col_prefs`, {
         method: "POST",
-        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
+        headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
         body: JSON.stringify({ id: "notifications_sent", cols: sentData, updated_at: lastRefresh }),
       });
     }
@@ -1839,7 +1925,7 @@ export default async function handler(req, res) {
         // Fetch open STOs to calculate uncovered shares
         const openSTOs = await fetch(
           `${SUPABASE_URL}/rest/v1/contracts?select=stock,qty,account&status=eq.Open&opt_type=eq.STO`,
-          { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+          { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }
         ).then(r => r.json());
 
         const coveredMap = {};
@@ -2078,7 +2164,7 @@ export default async function handler(req, res) {
         // Save notification state
         await fetch(`${SUPABASE_URL}/rest/v1/col_prefs`, {
           method: "POST",
-          headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
+          headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
           body: JSON.stringify({ id: "notifications_sent", cols: sentData, updated_at: lastRefresh }),
         });
       }
@@ -2126,13 +2212,11 @@ export default async function handler(req, res) {
             try {
               const trcRes = await fetch(
                 `${SUPABASE_URL}/rest/v1/ticker_risk_config?select=symbol,min_otm_pct,max_dte,min_iv_pct,max_iv_pct,action`,
-                { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+                { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }
               );
               const trcRows = await trcRes.json();
               if (Array.isArray(trcRows)) trcRows.forEach(r => { tickerRiskConfig[r.symbol.toUpperCase()] = r; });
             } catch(e) { console.warn("[auto-sto] ticker_risk_config load failed:", e.message); }
-
-            const globalMinIV = +(momentumConfig?.min_iv_pct ?? 25); // task #18 IV floor
 
             console.log(`[auto-sto] Scanning ${autoStoWhitelist.length} whitelisted tickers — ${isDryRun ? "DRY RUN" : "LIVE"}`);
 
@@ -2148,14 +2232,6 @@ export default async function handler(req, res) {
                 const trc = tickerRiskConfig[symbol];
                 if (trc?.action === 'avoid') {
                   console.log(`[Scanner] Skipping ${symbol} — ticker_risk_config action=avoid`);
-                  continue;
-                }
-
-                // Task #18: IV floor gate
-                const tickerIV = getAtmIv(chainData, symbol, stockPrice);
-                const minIVFloor = trc?.min_iv_pct != null ? +trc.min_iv_pct : globalMinIV;
-                if (tickerIV != null && tickerIV < minIVFloor) {
-                  console.log(`[Scanner] Skipping ${symbol} — IV ${tickerIV.toFixed(1)}% below ${minIVFloor}% floor`);
                   continue;
                 }
 
@@ -2378,7 +2454,7 @@ export default async function handler(req, res) {
                       if (factorRows.length) {
                         await fetch(`${SUPABASE_URL}/rest/v1/scoring_factor_values`, {
                           method: "POST",
-                          headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+                          headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
                           body: JSON.stringify(factorRows),
                         }).catch(e => console.warn("[auto-sto] factor write failed:", e.message));
                         console.log(`[auto-sto] wrote ${factorRows.length} factors for signal ${sigId}`);
@@ -2387,7 +2463,7 @@ export default async function handler(req, res) {
                   }
 
                   // Skynet controls check before live placement
-                  if (!contractDryRun) {
+                  if (!isDryRun) {
                     const scCheck = checkSkynetControls({ controls: skynetControls, limitPrice, qty: uncovered, bid: bestAsk, ask: bestAsk, projectedProfit: estPremium });
                     if (!scCheck.ok) {
                       console.log(`[auto-sto] ${symbol} ${account} blocked by Skynet controls: ${scCheck.reason}`);
@@ -2477,7 +2553,7 @@ export default async function handler(req, res) {
                           const chaseFloor = Math.round(bestPremium * 100) / 100; // mid = floor
                           await fetch(`${SUPABASE_URL}/rest/v1/trade_orders?id=eq.${tradeOrderId}`, {
                             method: "PATCH",
-                            headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+                            headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
                             body: JSON.stringify({ chase_active: true, chase_floor: chaseFloor, chase_step: 0.05 }),
                           });
                           console.log(`[auto-sto] chase started on order ${tradeOrderId} — ask $${limitPrice} → floor (mid) $${chaseFloor}`);
@@ -2488,13 +2564,13 @@ export default async function handler(req, res) {
                         try {
                           const recentRes = await fetch(
                             `${SUPABASE_URL}/rest/v1/contracts?select=id&stock=eq.${symbol}&strike=eq.${bestStrike}&expires=eq.${bestExpiry}&account=eq.${encodeURIComponent(account)}&status=eq.Open&order=id.desc&limit=1`,
-                            { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+                            { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }
                           );
                           const recentRows = await recentRes.json();
                           if (recentRows?.[0]?.id) {
                             await fetch(`${SUPABASE_URL}/rest/v1/contracts?id=eq.${recentRows[0].id}`, {
                               method: "PATCH",
-                              headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+                              headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
                               body: JSON.stringify({
                               open_method: "auto",
                               stop_loss_multiplier: bestDTE <= 3 ? null : 2.0, // task #15: no stop loss for DTE≤3
@@ -2590,7 +2666,7 @@ export default async function handler(req, res) {
         // Fetch all open STO Call contracts with full details
         const openSTOs = await fetch(
           `${SUPABASE_URL}/rest/v1/contracts?select=id,stock,type,opt_type,strike,expires,premium,qty,account,status&status=eq.Open&opt_type=eq.STO`,
-          { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+          { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }
         ).then(r => r.json());
 
         // Only Calls
@@ -2615,17 +2691,36 @@ export default async function handler(req, res) {
             const expires = String(contract.expires || "").slice(0, 10);
 
             // Resolve per-ticker rule — ticker-specific rules (e.g. AAPL 85%) override generic
-            const contractRule = findRuleForTicker(ticker) || rule;
-            const contractDryRun  = contractRule.dry_run !== false;
-            const contractMinProfit = +(contractRule.min_profit_pct ?? 70);
-            // DTE filter check for ticker-specific rules
+            let contractRule = findRuleForTicker(ticker) || rule;
             const contractDte = Math.ceil((new Date(expires) - new Date()) / 86400000);
-            if (contractRule.min_dte != null && contractDte < +contractRule.min_dte) continue;
-            if (contractRule.max_dte != null && contractDte > +contractRule.max_dte && contractRule.tickers?.length) {
-              // Ticker-specific DTE restriction — fall back to generic rule
-              const genericRule = btcRules.find(r => !Array.isArray(r.tickers) || !r.tickers.length);
-              if (!genericRule) continue;
+
+            // DTE filter: if ticker-specific rule has a DTE restriction that this contract fails,
+            // fall back to the generic rule rather than skipping entirely.
+            // This handles expiry-day (DTE=0) contracts that are in a ticker list with min_dte=1.
+            if (contractRule.tickers?.length) {
+              const dteFailsMin = contractRule.min_dte != null && contractDte < +contractRule.min_dte;
+              const dteFailsMax = contractRule.max_dte != null && contractDte > +contractRule.max_dte;
+              if (dteFailsMin || dteFailsMax) {
+                const genericRule = btcRules.find(r =>
+                  (!Array.isArray(r.tickers) || !r.tickers.length) &&
+                  (!r.min_time_et || timeToMins(r.min_time_et) <= currentMins) &&
+                  (!r.max_time_et || timeToMins(r.max_time_et) >= currentMins)
+                );
+                if (!genericRule) continue; // no fallback available — skip
+                // Check generic rule's DTE constraints too
+                if (genericRule.min_dte != null && contractDte < +genericRule.min_dte) continue;
+                if (genericRule.max_dte != null && contractDte > +genericRule.max_dte) continue;
+                contractRule = genericRule; // use generic rule for this contract
+                console.log(`[btc_auto] ${ticker} DTE=${contractDte} outside ticker-rule window — falling back to generic rule "${genericRule.name}"`);
+              }
+            } else {
+              // Generic rule — apply DTE filters directly
+              if (contractRule.min_dte != null && contractDte < +contractRule.min_dte) continue;
+              if (contractRule.max_dte != null && contractDte > +contractRule.max_dte) continue;
             }
+
+            const contractDryRun    = contractRule.dry_run !== false;
+            const contractMinProfit = +(contractRule.min_profit_pct ?? 70);
 
             // Task #10: skip BTC if expires today and stock is 2%+ below strike (let it expire worthless)
             if (contractDte === 0) {
@@ -2635,6 +2730,19 @@ export default async function handler(req, res) {
                 continue;
               }
             }
+
+            // Guard: skip if a filled BTC trade_order already exists for this contract
+            // This prevents re-firing after a fill that hasn't yet propagated to contract status
+            try {
+              const existingFill = await fetch(
+                `${SUPABASE_URL}/rest/v1/trade_orders?ticker=eq.${ticker}&strike=eq.${contract.strike}&expires=eq.${expires}&opt_type=eq.BTC&status=eq.filled&account=eq.${encodeURIComponent(contract.account)}&limit=1`,
+                { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }
+              ).then(r => r.json()).catch(() => []);
+              if (Array.isArray(existingFill) && existingFill.length > 0) {
+                console.log(`[btc_auto] skipping ${ticker} $${contract.strike} ${expires} — filled trade_order ${existingFill[0].id} already exists, contract may not have updated yet`);
+                continue;
+              }
+            } catch(e) { console.warn(`[btc_auto] filled-order guard check failed:`, e.message); }
 
             // Fetch live bid/ask for this contract
             const livePrice = await fetch(
@@ -2761,7 +2869,7 @@ export default async function handler(req, res) {
               // succeeded even if the response parsing failed
               await fetch(`${SUPABASE_URL}/rest/v1/contracts?id=eq.${contract.id}`, {
                 method: "PATCH",
-                headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+                headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
                 body: JSON.stringify({ close_method: "auto" }),
               });
             }
@@ -2770,7 +2878,7 @@ export default async function handler(req, res) {
             if (sigId) {
               await fetch(`${SUPABASE_URL}/rest/v1/decision_log`, {
                 method: "POST",
-                headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+                headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
                 body: JSON.stringify({ signal_id: sigId, decision: contractDryRun ? "dry_run" : "traded", notes: `auto-btc @ $${limitPrice.toFixed(2)}`, created_at: new Date().toISOString() }),
               });
             }
@@ -2799,7 +2907,7 @@ export default async function handler(req, res) {
     // ── Portfolio snapshot (once per day) ──────────────────────────────────
     try {
       const snapDate = today;
-      const existing = await fetch(`${SUPABASE_URL}/rest/v1/portfolio_snapshots?snapshot_date=eq.${snapDate}&select=id`, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }).then(r => r.json());
+      const existing = await fetch(`${SUPABASE_URL}/rest/v1/portfolio_snapshots?snapshot_date=eq.${snapDate}&select=id`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }).then(r => r.json());
 
       if (!existing?.length) {
         // Schwab account value
@@ -2855,14 +2963,14 @@ export default async function handler(req, res) {
         const totalValue = (schwabValue || 0) + (etradeValue || 0);
 
         // Get yesterday's snapshot for daily change
-        const yest = await fetch(`${SUPABASE_URL}/rest/v1/portfolio_snapshots?order=snapshot_date.desc&limit=1&select=total_value`, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }).then(r => r.json());
+        const yest = await fetch(`${SUPABASE_URL}/rest/v1/portfolio_snapshots?order=snapshot_date.desc&limit=1&select=total_value`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }).then(r => r.json());
         const prevValue    = yest?.[0]?.total_value ? +yest[0].total_value : null;
         const dailyChange  = prevValue ? Math.round((totalValue - prevValue) * 100) / 100 : null;
         const dailyChangePct = prevValue ? Math.round((dailyChange / prevValue) * 10000) / 100 : null;
 
         await fetch(`${SUPABASE_URL}/rest/v1/portfolio_snapshots`, {
           method: "POST",
-          headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
+          headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
           body: JSON.stringify({
             snapshot_date:        snapDate,
             schwab_value:         schwabValue,
@@ -2885,7 +2993,7 @@ export default async function handler(req, res) {
     try {
       const ordersRes  = await fetch(
         `${SUPABASE_URL}/rest/v1/trade_orders?status=eq.submitted&select=id,ticker,type,strike,expires,qty,account,schwab_order_id,opt_type`,
-        { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+        { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }
       );
       const pendingOrders = await ordersRes.json();
 
@@ -2949,7 +3057,7 @@ export default async function handler(req, res) {
                   if (liveQuote && !["filled","cancelled"].includes(data.order?.status)) {
                     await fetch(`${SUPABASE_URL}/rest/v1/trade_orders?id=eq.${order.id}`, {
                       method: "PATCH",
-                      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
+                      headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json" },
                       body: JSON.stringify({ live_quote: liveQuote }),
                     });
                   }
@@ -2982,19 +3090,68 @@ export default async function handler(req, res) {
                       `${order.opt_type} ${order.ticker} $${order.strike} ${order.type} ${order.expires}\nqty ${order.qty} · ${order.account}\nFill: $${patch.fill_price?.toFixed(2) ?? "—"}`,
                       `${APP_URL}/?tab=contracts`, "View in App", 1
                     ).catch(()=>{});
+
+                    // Tag contract open_method/close_method = 'auto' on fill
+                    // For BTC/STC fills: also close the parent STO contract immediately
+                    // (don't rely on auto-import — it may skip if alreadyHandledByTradeOrder)
+                    try {
+                      const isOpen  = ["STO","BTO"].includes(order.opt_type);
+                      const isClose = ["BTC","STC"].includes(order.opt_type);
+                      const methodField = isOpen ? "open_method" : "close_method";
+                      // For BTC: find the open STO to close; for STO: find the most recent contract
+                      const statusFilter = isClose ? "&status=eq.Open" : "";
+                      const contractRes = await fetch(
+                        `${SUPABASE_URL}/rest/v1/contracts?select=id,premium,opt_type&stock=eq.${order.ticker}&strike=eq.${order.strike}&expires=eq.${order.expires}&account=eq.${encodeURIComponent(order.account)}${statusFilter}&order=id.desc&limit=1`,
+                        { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }
+                      );
+                      const contractRows = await contractRes.json();
+                      if (contractRows?.[0]?.id) {
+                        const contractId = contractRows[0].id;
+                        const parentPremium = Math.abs(parseFloat(contractRows[0].premium) || 0);
+                        const fillPrice = patch.fill_price ?? order.limit_price ?? null;
+                        const costToClose = fillPrice ? Math.round(fillPrice * (order.qty || 1) * 100 * 100) / 100 : null;
+                        const profit = costToClose != null ? Math.round((parentPremium - costToClose) * 100) / 100 : null;
+                        const profitPct = profit != null && parentPremium ? Math.round((profit / parentPremium) * 10000) / 10000 : null;
+
+                        const contractPatch = { [methodField]: "auto" };
+                        if (isClose) {
+                          // Close the STO: set status, cost_to_close, profit
+                          Object.assign(contractPatch, {
+                            status:        "Closed",
+                            close_date:    new Date().toISOString().slice(0, 10),
+                            cost_to_close: costToClose,
+                            ...(profit    != null ? { profit }              : {}),
+                            ...(profitPct != null ? { profit_pct: profitPct } : {}),
+                          });
+                          console.log(`[fill] closing contract ${contractId} via BTC fill — cost_to_close=$${costToClose}, profit=$${profit} (${order.ticker})`);
+                        }
+
+                        await fetch(`${SUPABASE_URL}/rest/v1/contracts?id=eq.${contractId}`, {
+                          method: "PATCH",
+                          headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+                          body: JSON.stringify(contractPatch),
+                        });
+                        console.log(`[fill] tagged contract ${contractId} ${methodField}=auto (${order.opt_type} ${order.ticker})`);
+                      }
+                    } catch(e) { console.warn(`[fill] contract tag failed:`, e.message); }
                   } else if (["CANCELED","REJECTED","EXPIRED","REPLACED"].includes(schwabOrder.status)) {
-                    Object.assign(patch, { status: "cancelled", cancelled_at: lastRefresh });
+                    Object.assign(patch, { status: "cancelled", cancelled_at: lastRefresh, chase_active: false });
                     cancelledCount++;
-                    sendPushover(
-                      `❌ Order ${schwabOrder.status}: ${order.ticker}`,
-                      `${order.opt_type} ${order.ticker} $${order.strike} ${order.type} ${order.expires}\n${order.account}`,
-                      `${APP_URL}/?tab=contracts`, "View in App", 0
-                    ).catch(()=>{});
+                    // Only alert if this wasn't an internal chase cancel/resubmit cycle
+                    // Chase cancels are expected — only alert on hard rejections or non-chase orders
+                    const isChaseCancel = order.chase_active && schwabOrder.status === "CANCELED";
+                    if (!isChaseCancel) {
+                      sendPushover(
+                        `❌ Order ${schwabOrder.status}: ${order.ticker}`,
+                        `${order.opt_type} ${order.ticker} $${order.strike} ${order.type} ${order.expires}\n${order.account}`,
+                        `${APP_URL}/?tab=contracts`, "View in App", 0
+                      ).catch(()=>{});
+                    }
                   }
 
                   await fetch(`${SUPABASE_URL}/rest/v1/trade_orders?id=eq.${order.id}`, {
                     method: "PATCH",
-                    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
+                    headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json" },
                     body: JSON.stringify(patch),
                   });
                 }
@@ -3003,7 +3160,7 @@ export default async function handler(req, res) {
               // No Schwab order ID yet — just update the live quote
               await fetch(`${SUPABASE_URL}/rest/v1/trade_orders?id=eq.${order.id}`, {
                 method: "PATCH",
-                headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
+                headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json" },
                 body: JSON.stringify({ live_quote: liveQuote }),
               });
             }
@@ -3016,7 +3173,7 @@ export default async function handler(req, res) {
     try {
       await fetch(`${SUPABASE_URL}/rest/v1/ecosystem_heartbeat`, {
         method: "POST",
-        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" },
+        headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" },
         body: JSON.stringify({ agent_name: "market-refresh", last_run_at: lastRefresh, status: "ok", notes: `${tickers.length} tickers, ${notifications.length} signals`, updated_at: lastRefresh }),
       });
     } catch(e) { console.warn("[heartbeat] write failed:", e.message); }
@@ -3039,7 +3196,7 @@ export default async function handler(req, res) {
         // Find open STOs expiring today
         const expiringRes = await fetch(
           `${SUPABASE_URL}/rest/v1/contracts?select=id,stock,type,opt_type,strike,expires,premium,qty,account,close_method&status=eq.Open&opt_type=eq.STO&expires=eq.${todayET}`,
-          { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+          { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }
         );
         const expiringContracts = await expiringRes.json();
 
@@ -3071,43 +3228,40 @@ export default async function handler(req, res) {
             continue;
           }
 
-          // 3:30 PM auto-close — respects dry_run flag from signal_rules expiry_protection row
+          // 3:30 PM auto-close — Calls only. ITM Puts are left to assign (wheel strategy).
+          if (!isCall) {
+            console.log(`[expiry] Skipping ${ticker} $${strike} Put — ITM Put left to assign (wheel strategy)`);
+            continue;
+          }
+
+          // Schwab only — ETrade is IRA/tax-deferred, ITM Calls there are left to assign too
+          const isSchwabAcct = contract.account?.startsWith("Schwab");
+          if (!isSchwabAcct) {
+            console.log(`[expiry] Skipping ${ticker} $${strike} Call — ETrade account, left to assign (wheel strategy)`);
+            continue;
+          }
+
           if (etMinsForExpiry >= CLOSE_MINS && contract.close_method !== "auto") {
             const expiryRule  = (Array.isArray(signalRules) ? signalRules : []).find(r => r.rule_type === "expiry_protection" && r.enabled);
             const expiryDryRun = expiryRule ? expiryRule.dry_run !== false : true; // default to dry-run if no rule found
-            const isSchwab = contract.account?.startsWith("Schwab");
-            const isEtrade = contract.account?.startsWith("ETrade") || contract.account?.startsWith("Etrade");
             let orderResult = null;
             console.log(`[expiry] ${expiryDryRun ? "[DRY RUN]" : "[LIVE]"} auto-close for ${ticker} $${strike} ${contract.type} (rule: ${expiryRule?.id ?? "none"})`);
             try {
-              if (isSchwab) {
-                const previewRes = await fetch(`${APP_URL}/api/schwab-orders?action=preview&secret=${process.env.CRON_SECRET}`, {
+              const previewRes = await fetch(`${APP_URL}/api/schwab-orders?action=preview&secret=${process.env.CRON_SECRET}`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ contract_id: contract.id, order_type: "MARKET", duration: "DAY", auto_close: true }),
+              }).then(r => r.json());
+              if (previewRes?.ok) {
+                orderResult = await fetch(`${APP_URL}/api/schwab-orders?action=approve&secret=${process.env.CRON_SECRET}`, {
                   method: "POST", headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ contract_id: contract.id, order_type: "MARKET", duration: "DAY", auto_close: true }),
+                  body: JSON.stringify({ orderId: previewRes.order?.id, dry_run: expiryDryRun, approved_by: "expiry_protection" }),
                 }).then(r => r.json());
-                if (previewRes?.ok) {
-                  orderResult = await fetch(`${APP_URL}/api/schwab-orders?action=approve&secret=${process.env.CRON_SECRET}`, {
-                    method: "POST", headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ orderId: previewRes.order?.id, dry_run: expiryDryRun, approved_by: "expiry_protection" }),
-                  }).then(r => r.json());
-                }
-              } else if (isEtrade) {
-                const previewRes = await fetch(`${APP_URL}/api/schwab-orders?action=order-preview&secret=${process.env.CRON_SECRET}`, {
-                  method: "POST", headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ contract_id: contract.id, order_type: "MARKET", duration: "DAY" }),
-                }).then(r => r.json());
-                if (previewRes?.ok) {
-                  orderResult = await fetch(`${APP_URL}/api/schwab-orders?action=order-place&secret=${process.env.CRON_SECRET}`, {
-                    method: "POST", headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ orderId: previewRes.order?.id, dry_run: expiryDryRun, approved_by: "expiry_protection" }),
-                  }).then(r => r.json());
-                }
               }
               if (orderResult?.ok) {
                 if (!expiryDryRun) {
                   await fetch(`${SUPABASE_URL}/rest/v1/contracts?id=eq.${contract.id}`, {
                     method: "PATCH",
-                    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+                    headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
                     body: JSON.stringify({ close_method: "auto" }),
                   });
                   const itmProfit = Math.round((Math.abs(+contract.premium||0) - (mid * (+contract.qty||1) * 100)) * 100) / 100;
@@ -3126,7 +3280,7 @@ export default async function handler(req, res) {
     } catch(e) { console.warn("[market-refresh] ITM expiry check failed:", e.message); }
 
     // ── Run chase loop on every market refresh ──────────────────────────────
-    await runChaseLoop(token, { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" });
+    await runChaseLoop(token, { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json" });
 
     res.status(200).json({
       ok: true, time: lastRefresh,
@@ -3144,7 +3298,7 @@ export default async function handler(req, res) {
     try {
       await fetch(`${SUPABASE_URL}/rest/v1/ecosystem_heartbeat`, {
         method: "POST",
-        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" },
+        headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" },
         body: JSON.stringify({ agent_name: "market-refresh", last_run_at: new Date().toISOString(), status: "error", notes: err.message, updated_at: new Date().toISOString() }),
       });
     } catch(e2) {}

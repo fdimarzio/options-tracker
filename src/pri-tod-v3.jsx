@@ -281,6 +281,11 @@ const DEFAULT_COLS = [
   {key:"signal",         label:"Signal",      show:true,  sortKey:null,          right:false},
 ];
 
+// ── Theme helper — module-level so all components can access it ───────────────
+// _lightMode is synced from App state on every render (see App component body)
+let _lightMode = false;
+const th = (d, l) => _lightMode ? l : d;
+
 // ── UI Primitives ─────────────────────────────────────────────────────────────
 const Tag = ({children, color="green"}) => {
   const pal = {green:"#00ff88",red:"#ff4560",blue:"#58a6ff",amber:"#ffd166",gray:"#555",purple:"#c084fc"};
@@ -288,10 +293,10 @@ const Tag = ({children, color="green"}) => {
   return <span style={{fontSize:10,fontFamily:"'JetBrains Mono',monospace",background:`${c}18`,color:c,border:`1px solid ${c}30`,borderRadius:3,padding:"1px 6px",whiteSpace:"nowrap"}}>{children}</span>;
 };
 const KPI = ({label,value,sub,color="#00ff88"}) => (
-  <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:"10px 12px",flex:1,minWidth:88}}>
-    <div style={{fontSize:8,color:"#3a4050",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:2,textTransform:"uppercase"}}>{label}</div>
+  <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8,padding:"10px 12px",flex:1,minWidth:88}}>
+    <div style={{fontSize:8,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:2,textTransform:"uppercase"}}>{label}</div>
     <div style={{fontSize:15,fontWeight:700,color,fontFamily:"'JetBrains Mono',monospace",lineHeight:1.2}}>{value}</div>
-    {sub && <div style={{fontSize:8,color:"#2a3040",marginTop:1,fontFamily:"monospace"}}>{sub}</div>}
+    {sub && <div style={{fontSize:8,color:th("#2a3040","#6b5f55"),marginTop:1,fontFamily:"monospace"}}>{sub}</div>}
   </div>
 );
 const FL = ({children,req}) => (
@@ -302,7 +307,7 @@ const FL = ({children,req}) => (
 const ChartTip = ({active,payload,label}) => {
   if (!active||!payload?.length) return null;
   return (
-    <div style={{background:"#0d1117",border:"1px solid #21262d",borderRadius:5,padding:"8px 11px"}}>
+    <div style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:5,padding:"8px 11px"}}>
       <div style={{color:"#555",fontSize:10,marginBottom:4,fontFamily:"monospace"}}>{label}</div>
       {payload.map((p,i) => <div key={i} style={{color:p.color,fontSize:11,fontFamily:"monospace"}}>{p.name}: {p.name==="Contracts"?p.value:f$(p.value)}</div>)}
     </div>
@@ -464,19 +469,19 @@ function ContractDecayChart({ contract, stocksData }) {
         </defs>
 
         {/* Chart background */}
-        <rect x={PAD.left} y={PAD.top} width={cW} height={cH} fill="#0a0e14" rx="2"/>
+        <rect x={PAD.left} y={PAD.top} width={cW} height={cH} fill={th("#0a0e14","#f8f3eb")} rx="2"/>
 
         {/* ── Left axis: stock price ticks ── */}
         {stockTicks.map(({v,label}) => {
           const y = scaleS(v);
           return (
             <g key={v}>
-              <line x1={PAD.left-3} y1={y} x2={PAD.left} y2={y} stroke="#3a4050" strokeWidth="0.5"/>
-              <text x={PAD.left-5} y={y+3} textAnchor="end" fontSize="7" fill="#3a4050" fontFamily="monospace">{label}</text>
+              <line x1={PAD.left-3} y1={y} x2={PAD.left} y2={y} stroke={th("#3a4050","#8a7e74")} strokeWidth="0.5"/>
+              <text x={PAD.left-5} y={y+3} textAnchor="end" fontSize="7" fill={th("#3a4050","#8a7e74")} fontFamily="monospace">{label}</text>
             </g>
           );
         })}
-        <text x={PAD.left-30} y={PAD.top+cH/2} textAnchor="middle" fontSize="7" fill="#3a4050" fontFamily="monospace"
+        <text x={PAD.left-30} y={PAD.top+cH/2} textAnchor="middle" fontSize="7" fill={th("#3a4050","#8a7e74")} fontFamily="monospace"
           transform={`rotate(-90,${PAD.left-30},${PAD.top+cH/2})`}>Stock ($)</text>
 
         {/* ── Right axis: option value ticks ── */}
@@ -492,7 +497,7 @@ function ContractDecayChart({ contract, stocksData }) {
         {/* Horizontal grid lines (align to stock axis) */}
         {stockTicks.map(({v}) => (
           <line key={v} x1={PAD.left} y1={scaleS(v)} x2={PAD.left+cW} y2={scaleS(v)}
-            stroke="#1c2128" strokeWidth="0.5"/>
+            stroke={th("#1c2128","#b8a898")} strokeWidth="0.5"/>
         ))}
 
         {/* ITM shade: for calls shade above strike, for puts shade below */}
@@ -503,8 +508,8 @@ function ContractDecayChart({ contract, stocksData }) {
 
         {/* ── Strike price dotted horizontal line ── */}
         <line x1={PAD.left} y1={strikeY} x2={PAD.left+cW} y2={strikeY}
-          stroke="#8b949e" strokeWidth="1.5" strokeDasharray="6,3" opacity="0.8"/>
-        <text x={PAD.left+cW-2} y={strikeY-3} textAnchor="end" fontSize="7" fill="#8b949e" fontFamily="monospace">
+          stroke={th("#8b949e","#5a5248")} strokeWidth="1.5" strokeDasharray="6,3" opacity="0.8"/>
+        <text x={PAD.left+cW-2} y={strikeY-3} textAnchor="end" fontSize="7" fill={th("#8b949e","#5a5248")} fontFamily="monospace">
           Strike ${K.toFixed(2)}
         </text>
 
@@ -522,10 +527,10 @@ function ContractDecayChart({ contract, stocksData }) {
         )}
 
         {/* ── Stock price line (entry → today) ── */}
-        <path d={stockLinePath} fill="none" stroke="#c9d1d9" strokeWidth="1.6" strokeLinecap="round"/>
+        <path d={stockLinePath} fill="none" stroke={th("#c9d1d9","#1a1a18")} strokeWidth="1.6" strokeLinecap="round"/>
 
         {/* Entry stock dot */}
-        <circle cx={sX(0)} cy={entryStockY} r="3" fill="#58a6ff" stroke="#0a0e14" strokeWidth="1.5"/>
+        <circle cx={sX(0)} cy={entryStockY} r="3" fill="#58a6ff" stroke={th("#0a0e14","#f8f3eb")} strokeWidth="1.5"/>
         <text x={sX(0)+5} y={entryStockY-3} fontSize="7" fill="#58a6ff80" fontFamily="monospace">${S0.toFixed(0)}</text>
 
         {/* Today vertical */}
@@ -535,7 +540,7 @@ function ContractDecayChart({ contract, stocksData }) {
         )}
 
         {/* Live stock price dot */}
-        <circle cx={todayX} cy={liveStockY} r="4" fill={itmColor} stroke="#0a0e14" strokeWidth="1.5"/>
+        <circle cx={todayX} cy={liveStockY} r="4" fill={itmColor} stroke={th("#0a0e14","#f8f3eb")} strokeWidth="1.5"/>
         {liveStock != null && (
           <text x={todayX+(liveStockY < strikeY+12 ? 6 : -6)} y={liveStockY-4}
             textAnchor={liveStockY < strikeY+12 ? 'start' : 'end'}
@@ -543,14 +548,14 @@ function ContractDecayChart({ contract, stocksData }) {
         )}
 
         {/* Today dot on option curve */}
-        <circle cx={todayX} cy={todayOptY} r="4" fill="#58a6ff" stroke="#0a0e14" strokeWidth="1.5"/>
+        <circle cx={todayX} cy={todayOptY} r="4" fill="#58a6ff" stroke={th("#0a0e14","#f8f3eb")} strokeWidth="1.5"/>
 
         {/* ── X-axis ── */}
-        <line x1={PAD.left} y1={PAD.top+cH} x2={PAD.left+cW} y2={PAD.top+cH} stroke="#21262d" strokeWidth="1"/>
+        <line x1={PAD.left} y1={PAD.top+cH} x2={PAD.left+cW} y2={PAD.top+cH} stroke={th("#21262d","#c8b8a8")} strokeWidth="1"/>
         {xLabels.map(({d,label}) => (
           <text key={d} x={sX(d)} y={PAD.top+cH+11}
             textAnchor={d===0?'start':d===totalDays?'end':'middle'}
-            fontSize="7" fill="#3a4050" fontFamily="monospace">{label}</text>
+            fontSize="7" fill={th("#3a4050","#8a7e74")} fontFamily="monospace">{label}</text>
         ))}
         {daysElapsed > 2 && daysElapsed < totalDays - 2 && (
           <text x={todayX} y={PAD.top+cH+11} textAnchor="middle" fontSize="7" fill="#58a6ff" fontFamily="monospace">Now</text>
@@ -558,9 +563,9 @@ function ContractDecayChart({ contract, stocksData }) {
 
         {/* Legend */}
         <g transform={`translate(${PAD.left},${H-3})`}>
-          <line x1="0" y1="-1" x2="10" y2="-1" stroke="#c9d1d9" strokeWidth="1.5"/>
+          <line x1="0" y1="-1" x2="10" y2="-1" stroke={th("#c9d1d9","#1a1a18")} strokeWidth="1.5"/>
           <text x="13" y="2" fontSize="7" fill="#555" fontFamily="monospace">stock</text>
-          <line x1="42" y1="-1" x2="52" y2="-1" stroke="#8b949e" strokeWidth="1.5" strokeDasharray="5,2"/>
+          <line x1="42" y1="-1" x2="52" y2="-1" stroke={th("#8b949e","#5a5248")} strokeWidth="1.5" strokeDasharray="5,2"/>
           <text x="55" y="2" fontSize="7" fill="#555" fontFamily="monospace">strike</text>
           <line x1="92" y1="-1" x2="102" y2="-1" stroke="#ff4560" strokeWidth="1.5"/>
           <text x="105" y="2" fontSize="7" fill="#555" fontFamily="monospace">option value</text>
@@ -673,12 +678,12 @@ function BalanceHistory({ supabase, cashData, onSave }) {
     return {...r, mom, ytd};
   });
 
-  if (!balHistory) return <div style={{padding:20,color:"#3a4050",fontFamily:"monospace",fontSize:10}}>Loading balance history…</div>;
+  if (!balHistory) return <div style={{padding:20,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:10}}>Loading balance history…</div>;
 
   return (
-    <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:"12px",marginTop:9}}>
+    <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8,padding:"12px",marginTop:9}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-        <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em"}}>ACCOUNT BALANCE HISTORY</div>
+        <div style={{fontSize:7,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",letterSpacing:"0.08em"}}>ACCOUNT BALANCE HISTORY</div>
         <button onClick={()=>{
           if(balEditMode){
             const updated = {...balHistory};
@@ -688,7 +693,7 @@ function BalanceHistory({ supabase, cashData, onSave }) {
             setBalEdits({});
           }
           setBalEditMode(v=>!v);
-        }} style={{background:balEditMode?"#00ff8814":"transparent",border:"1px solid "+(balEditMode?"#00ff8844":"#21262d"),borderRadius:4,color:balEditMode?"#00ff88":"#3a4050",fontFamily:"monospace",fontSize:9,padding:"3px 10px",cursor:"pointer"}}>
+        }} style={{background:balEditMode?"#00ff8814":"transparent",border:"1px solid "+(balEditMode?"#00ff8844":th("#21262d","#c8b8a8")),borderRadius:4,color:balEditMode?"#00ff88":th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:9,padding:"3px 10px",cursor:"pointer"}}>
           {balEditMode?"💾 Save":"✎ Edit"}
         </button>
       </div>
@@ -696,7 +701,7 @@ function BalanceHistory({ supabase, cashData, onSave }) {
         <table style={{width:"100%",borderCollapse:"collapse",fontSize:10,fontFamily:"monospace"}}>
           <thead>
             <tr style={{borderBottom:"1px solid #1c2128"}}>
-              <th style={{padding:"4px 8px",textAlign:"left",color:"#3a4050",fontWeight:400}}>Month</th>
+              <th style={{padding:"4px 8px",textAlign:"left",color:th("#3a4050","#8a7e74"),fontWeight:400}}>Month</th>
               <th style={{padding:"4px 8px",textAlign:"right",color:"#58a6ff",fontWeight:400}}>Schwab</th>
               <th style={{padding:"4px 8px",textAlign:"right",color:"#ffd166",fontWeight:400}}>ETrade</th>
               <th style={{padding:"4px 8px",textAlign:"right",color:"#00ff88",fontWeight:400}}>Total</th>
@@ -707,7 +712,7 @@ function BalanceHistory({ supabase, cashData, onSave }) {
           <tbody>
             {withChanges.map(r=>(
               <tr key={r.mk} style={{borderBottom:"1px solid #0d1117",background:r.mk===thisMonthKey?"#00ff8806":"transparent"}}>
-                <td style={{padding:"4px 8px",color:r.mk===thisMonthKey?"#00ff88":"#8b949e"}}>{r.mk}{r.isLive&&<span style={{fontSize:7,color:"#00ff8870",marginLeft:4}}>live</span>}</td>
+                <td style={{padding:"4px 8px",color:r.mk===thisMonthKey?"#00ff88":th("#8b949e","#5a5248")}}>{r.mk}{r.isLive&&<span style={{fontSize:7,color:"#00ff8870",marginLeft:4}}>live</span>}</td>
                 <td style={{padding:"4px 8px",textAlign:"right"}}>
                   {balEditMode && r.mk!==thisMonthKey ? (
                     <input type="number" defaultValue={r.schwab||""} placeholder="—" onBlur={e=>setBalEdits(p=>({...p,[r.mk]:{...(p[r.mk]||{}),schwab:e.target.value?+e.target.value:null}}))}
@@ -721,8 +726,8 @@ function BalanceHistory({ supabase, cashData, onSave }) {
                   ) : <span style={{color:"#ffd166"}}>{r.etrade!=null?"$"+(+r.etrade).toLocaleString("en-US",{maximumFractionDigits:0}):"—"}</span>}
                 </td>
                 <td style={{padding:"4px 8px",textAlign:"right",color:"#00ff88",fontWeight:700}}>{r.total>0?"$"+(r.total).toLocaleString("en-US",{maximumFractionDigits:0}):"—"}</td>
-                <td style={{padding:"4px 8px",textAlign:"right",color:r.mom>0?"#00ff88":r.mom<0?"#ff4560":"#3a4050"}}>{r.mom!=null?(r.mom>0?"+":"")+r.mom.toFixed(1)+"%":"—"}</td>
-                <td style={{padding:"4px 8px",textAlign:"right",color:r.ytd>0?"#ff9f1c":r.ytd<0?"#ff4560":"#3a4050"}}>{r.ytd!=null?(r.ytd>0?"+":"")+r.ytd.toFixed(1)+"%":"—"}</td>
+                <td style={{padding:"4px 8px",textAlign:"right",color:r.mom>0?"#00ff88":r.mom<0?"#ff4560":th("#3a4050","#8a7e74")}}>{r.mom!=null?(r.mom>0?"+":"")+r.mom.toFixed(1)+"%":"—"}</td>
+                <td style={{padding:"4px 8px",textAlign:"right",color:r.ytd>0?"#ff9f1c":r.ytd<0?"#ff4560":th("#3a4050","#8a7e74")}}>{r.ytd!=null?(r.ytd>0?"+":"")+r.ytd.toFixed(1)+"%":"—"}</td>
               </tr>
             ))}
           </tbody>
@@ -882,7 +887,7 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
 
         {/* ── Auto-trade performance stats ── */}
         {autoStats && !autoStats.error && (
-          <div style={{background:"#0a0e14",border:"1px solid #00ff8820",borderRadius:8,padding:"12px 14px",marginBottom:14}}>
+          <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #00ff8820",borderRadius:8,padding:"12px 14px",marginBottom:14}}>
             <div style={{fontFamily:"monospace",fontSize:8,color:"#00ff88",letterSpacing:"0.08em",marginBottom:10}}>📈 AUTO-TRADE PERFORMANCE</div>
             <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
               {[
@@ -893,10 +898,10 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
                 { label:"FULL AUTO WIN", val: autoStats.fullAutoWinRate + "%", sub: `${autoStats.fullAutoCount} trades`, color:"#58a6ff" },
                 { label:"FULL AUTO P/L", val: (autoStats.fullAutoProfit >= 0 ? "+" : "") + "$" + Math.abs(autoStats.fullAutoProfit).toLocaleString(), sub: "fully automated P/L", color: autoStats.fullAutoProfit >= 0 ? "#00ff88" : "#ff4560" },
               ].map(s => (
-                <div key={s.label} style={{background:"#080c12",border:"1px solid #1c2128",borderRadius:5,padding:"8px 10px",minWidth:90,flex:"0 0 auto"}}>
-                  <div style={{fontFamily:"monospace",fontSize:7,color:"#3a4050",letterSpacing:"0.07em",marginBottom:3}}>{s.label}</div>
+                <div key={s.label} style={{background:th("#080c12","#ede8df"),border:"1px solid #1c2128",borderRadius:5,padding:"8px 10px",minWidth:90,flex:"0 0 auto"}}>
+                  <div style={{fontFamily:"monospace",fontSize:7,color:th("#3a4050","#8a7e74"),letterSpacing:"0.07em",marginBottom:3}}>{s.label}</div>
                   <div style={{fontFamily:"monospace",fontSize:15,fontWeight:700,color:s.color,lineHeight:1}}>{s.val}</div>
-                  <div style={{fontFamily:"monospace",fontSize:7,color:"#2a3040",marginTop:2}}>{s.sub}</div>
+                  <div style={{fontFamily:"monospace",fontSize:7,color:th("#2a3040","#6b5f55"),marginTop:2}}>{s.sub}</div>
                 </div>
               ))}
             </div>
@@ -904,41 +909,42 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
         )}
 
         {/* ── Summary stats bar ── */}
-        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:16}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:8,marginBottom:16}}>
           {[
             { label:"TOTAL FIRED",    val: Object.values(stats).filter(v=>typeof v==="object").reduce((s,v)=>s+(v.fired||0),0) },
             { label:"TOTAL PUSHED",   val: Object.values(stats).filter(v=>typeof v==="object").reduce((s,v)=>s+(v.pushed||0),0) },
+            { label:"AUTO OPENED",    val: autoStats?.autoOpen ?? 0, color:"#58a6ff" },
             { label:"AUTO CLOSED",    val: stats._autoCount ?? 0 },
             { label:"AUTO PROFIT",    val: f$(stats._autoProfit), color:"#00ff88" },
           ].map(s => (
-            <div key={s.label} style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:6,padding:"8px 10px"}}>
-              <div style={{fontFamily:"monospace",fontSize:8,color:"#3a4050",letterSpacing:"0.07em",marginBottom:4}}>{s.label}</div>
-              <div style={{fontFamily:"monospace",fontSize:16,color:s.color||"#e6edf3"}}>{s.val}</div>
+            <div key={s.label} style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:6,padding:"8px 10px"}}>
+              <div style={{fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74"),letterSpacing:"0.07em",marginBottom:4}}>{s.label}</div>
+              <div style={{fontFamily:"monospace",fontSize:16,color:s.color||th("#e6edf3","#0d0d0b")}}>{s.val}</div>
             </div>
           ))}
         </div>
 
         {loading ? (
-          <div style={{fontFamily:"monospace",fontSize:11,color:"#3a4050",padding:20,textAlign:"center"}}>Loading...</div>
+          <div style={{fontFamily:"monospace",fontSize:11,color:th("#3a4050","#8a7e74"),padding:20,textAlign:"center"}}>Loading...</div>
         ) : rules.length === 0 ? (
-          <div style={{fontFamily:"monospace",fontSize:11,color:"#3a4050",padding:20,textAlign:"center"}}>No rules found. Insert via SQL to get started.</div>
+          <div style={{fontFamily:"monospace",fontSize:11,color:th("#3a4050","#8a7e74"),padding:20,textAlign:"center"}}>No rules found. Insert via SQL to get started.</div>
         ) : (
           rules.map(rule => {
             const st = stats[`rule_${rule.id}`] || stats[rule.rule_type] || {};
             const hasEdits = Object.keys(edits[rule.id] || {}).length > 0;
             return (
-              <div key={rule.id} style={{background:"#0a0e14",border:"1px solid " + (hasEdits ? "#ffd16640" : "#1c2128"),borderRadius:8,padding:14,marginBottom:10}}>
+              <div key={rule.id} style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid " + (hasEdits ? "#ffd16640" : th("#1c2128","#b8a898")),borderRadius:8,padding:14,marginBottom:10}}>
 
                 {/* Rule header */}
                 <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap"}}>
                   <span style={{fontFamily:"monospace",fontSize:10,fontWeight:700,color:ruleTypeColor(rule.rule_type)}}>{ruleTypeLabel(rule.rule_type)}</span>
-                  <span style={{fontFamily:"monospace",fontSize:10,color:"#8b949e"}}>{rule.name}</span>
+                  <span style={{fontFamily:"monospace",fontSize:10,color:th("#8b949e","#5a5248")}}>{rule.name}</span>
                   <span style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
                     {/* Enabled toggle */}
-                    <label style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",fontFamily:"monospace",fontSize:9,color:"#8b949e"}}>
+                    <label style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",fontFamily:"monospace",fontSize:9,color:th("#8b949e","#5a5248")}}>
                       <div onClick={()=>setEdit(rule.id,"enabled",!getEdit(rule,"enabled"))}
-                        style={{width:28,height:15,borderRadius:8,background:getEdit(rule,"enabled")?"#00ff88":"#21262d",position:"relative",cursor:"pointer",transition:"background .2s"}}>
-                        <div style={{position:"absolute",top:2,left:getEdit(rule,"enabled")?13:2,width:11,height:11,borderRadius:"50%",background:"#010409",transition:"left .2s"}}/>
+                        style={{width:28,height:15,borderRadius:8,background:getEdit(rule,"enabled")?"#00ff88":th("#21262d","#c8b8a8"),position:"relative",cursor:"pointer",transition:"background .2s"}}>
+                        <div style={{position:"absolute",top:2,left:getEdit(rule,"enabled")?13:2,width:11,height:11,borderRadius:"50%",background:th("#010409","#f5f0e8"),transition:"left .2s"}}/>
                       </div>
                       {getEdit(rule,"enabled") ? "ON" : "OFF"}
                     </label>
@@ -954,7 +960,7 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
                             }
                           }}
                           style={{width:28,height:15,borderRadius:8,background:getEdit(rule,"dry_run") ? "#ffd166" : "#00ff88",position:"relative",cursor:"pointer",transition:"background .2s"}}>
-                          <div style={{position:"absolute",top:2,left:getEdit(rule,"dry_run") ? 2 : 13,width:11,height:11,borderRadius:"50%",background:"#010409",transition:"left .2s"}}/>
+                          <div style={{position:"absolute",top:2,left:getEdit(rule,"dry_run") ? 2 : 13,width:11,height:11,borderRadius:"50%",background:th("#010409","#f5f0e8"),transition:"left .2s"}}/>
                         </div>
                         {getEdit(rule,"dry_run") ? "DRY RUN" : "LIVE"}
                       </label>
@@ -978,8 +984,8 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
                     ] : []),
                   ].map(s => (
                     <div key={s.label}>
-                      <div style={{fontFamily:"monospace",fontSize:7,color:"#3a4050",letterSpacing:"0.07em"}}>{s.label}</div>
-                      <div style={{fontFamily:"monospace",fontSize:13,color:s.color||"#e6edf3"}}>{s.val}</div>
+                      <div style={{fontFamily:"monospace",fontSize:7,color:th("#3a4050","#8a7e74"),letterSpacing:"0.07em"}}>{s.label}</div>
+                      <div style={{fontFamily:"monospace",fontSize:13,color:s.color||th("#e6edf3","#0d0d0b")}}>{s.val}</div>
                     </div>
                   ))}
                 </div>
@@ -988,61 +994,61 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
                 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))",gap:8}}>
                   {rule.rule_type === "btc_auto" && <>
                     <div>
-                      <div style={{fontFamily:"monospace",fontSize:8,color:"#3a4050",marginBottom:3}}>MIN PROFIT %</div>
-                      <input type="number" value={getEdit(rule,"min_profit_pct")??""} onChange={e=>setEdit(rule.id,"min_profit_pct",+e.target.value)} style={{background:"#0d1117",border:"1px solid #21262d",borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"monospace",color:"#c9d1d9",width:"100%"}} />
+                      <div style={{fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74"),marginBottom:3}}>MIN PROFIT %</div>
+                      <input type="number" value={getEdit(rule,"min_profit_pct")??""} onChange={e=>setEdit(rule.id,"min_profit_pct",+e.target.value)} style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"monospace",color:th("#c9d1d9","#1a1a18"),width:"100%"}} />
                     </div>
                     <div>
-                      <div style={{fontFamily:"monospace",fontSize:8,color:"#3a4050",marginBottom:3}}>FIRES AFTER (ET)</div>
-                      <input type="time" value={getEdit(rule,"min_time_et")||""} onChange={e=>setEdit(rule.id,"min_time_et",e.target.value||null)} style={{background:"#0d1117",border:"1px solid #21262d",borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"monospace",color: getEdit(rule,"min_time_et") ? "#ffd166" : "#555",width:"100%"}} />
+                      <div style={{fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74"),marginBottom:3}}>FIRES AFTER (ET)</div>
+                      <input type="time" value={getEdit(rule,"min_time_et")||""} onChange={e=>setEdit(rule.id,"min_time_et",e.target.value||null)} style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"monospace",color: getEdit(rule,"min_time_et") ? "#ffd166" : "#555",width:"100%"}} />
                     </div>
                     <div>
-                      <div style={{fontFamily:"monospace",fontSize:8,color:"#3a4050",marginBottom:3}}>FIRES BEFORE (ET)</div>
-                      <input type="time" value={getEdit(rule,"max_time_et")||""} onChange={e=>setEdit(rule.id,"max_time_et",e.target.value||null)} style={{background:"#0d1117",border:"1px solid #21262d",borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"monospace",color: getEdit(rule,"max_time_et") ? "#ffd166" : "#555",width:"100%"}} />
+                      <div style={{fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74"),marginBottom:3}}>FIRES BEFORE (ET)</div>
+                      <input type="time" value={getEdit(rule,"max_time_et")||""} onChange={e=>setEdit(rule.id,"max_time_et",e.target.value||null)} style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"monospace",color: getEdit(rule,"max_time_et") ? "#ffd166" : "#555",width:"100%"}} />
                     </div>
                     <div>
-                      <div style={{fontFamily:"monospace",fontSize:8,color:"#3a4050",marginBottom:3}}>OPT TYPE</div>
-                      <select value={getEdit(rule,"opt_type")||"Call"} onChange={e=>setEdit(rule.id,"opt_type",e.target.value)} style={{background:"#0d1117",border:"1px solid #21262d",borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"monospace",color:"#c9d1d9",width:"100%"}}>
+                      <div style={{fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74"),marginBottom:3}}>OPT TYPE</div>
+                      <select value={getEdit(rule,"opt_type")||"Call"} onChange={e=>setEdit(rule.id,"opt_type",e.target.value)} style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"monospace",color:th("#c9d1d9","#1a1a18"),width:"100%"}}>
                         <option>Call</option><option>Put</option><option>Both</option>
                       </select>
                     </div>
                   </>}
                   {rule.rule_type === "sto" && <>
                     <div>
-                      <div style={{fontFamily:"monospace",fontSize:8,color:"#3a4050",marginBottom:3}}>MIN CHANGE %</div>
-                      <input type="number" value={getEdit(rule,"min_change_pct")??""} onChange={e=>setEdit(rule.id,"min_change_pct",+e.target.value)} style={{background:"#0d1117",border:"1px solid #21262d",borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"monospace",color:"#c9d1d9",width:"100%"}} />
+                      <div style={{fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74"),marginBottom:3}}>MIN CHANGE %</div>
+                      <input type="number" value={getEdit(rule,"min_change_pct")??""} onChange={e=>setEdit(rule.id,"min_change_pct",+e.target.value)} style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"monospace",color:th("#c9d1d9","#1a1a18"),width:"100%"}} />
                     </div>
                     <div>
-                      <div style={{fontFamily:"monospace",fontSize:8,color:"#3a4050",marginBottom:3}}>MIN TIME ET</div>
-                      <input type="text" value={getEdit(rule,"min_time_et")||""} onChange={e=>setEdit(rule.id,"min_time_et",e.target.value)} placeholder="09:45" style={{background:"#0d1117",border:"1px solid #21262d",borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"monospace",color:"#c9d1d9",width:"100%"}} />
+                      <div style={{fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74"),marginBottom:3}}>MIN TIME ET</div>
+                      <input type="text" value={getEdit(rule,"min_time_et")||""} onChange={e=>setEdit(rule.id,"min_time_et",e.target.value)} placeholder="09:45" style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"monospace",color:th("#c9d1d9","#1a1a18"),width:"100%"}} />
                     </div>
                     <div>
-                      <div style={{fontFamily:"monospace",fontSize:8,color:"#3a4050",marginBottom:3}}>MIN DTE</div>
-                      <input type="number" value={getEdit(rule,"min_dte")??""} onChange={e=>setEdit(rule.id,"min_dte",+e.target.value)} style={{background:"#0d1117",border:"1px solid #21262d",borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"monospace",color:"#c9d1d9",width:"100%"}} />
+                      <div style={{fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74"),marginBottom:3}}>MIN DTE</div>
+                      <input type="number" value={getEdit(rule,"min_dte")??""} onChange={e=>setEdit(rule.id,"min_dte",+e.target.value)} style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"monospace",color:th("#c9d1d9","#1a1a18"),width:"100%"}} />
                     </div>
                     <div>
-                      <div style={{fontFamily:"monospace",fontSize:8,color:"#3a4050",marginBottom:3}}>MAX DTE</div>
-                      <input type="number" value={getEdit(rule,"max_dte")??""} onChange={e=>setEdit(rule.id,"max_dte",+e.target.value)} style={{background:"#0d1117",border:"1px solid #21262d",borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"monospace",color:"#c9d1d9",width:"100%"}} />
+                      <div style={{fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74"),marginBottom:3}}>MAX DTE</div>
+                      <input type="number" value={getEdit(rule,"max_dte")??""} onChange={e=>setEdit(rule.id,"max_dte",+e.target.value)} style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"monospace",color:th("#c9d1d9","#1a1a18"),width:"100%"}} />
                     </div>
                     <div>
-                      <div style={{fontFamily:"monospace",fontSize:8,color:"#3a4050",marginBottom:3}}>MIN PREMIUM $</div>
-                      <input type="number" value={getEdit(rule,"min_premium")??""} onChange={e=>setEdit(rule.id,"min_premium",+e.target.value)} style={{background:"#0d1117",border:"1px solid #21262d",borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"monospace",color:"#c9d1d9",width:"100%"}} />
+                      <div style={{fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74"),marginBottom:3}}>MIN PREMIUM $</div>
+                      <input type="number" value={getEdit(rule,"min_premium")??""} onChange={e=>setEdit(rule.id,"min_premium",+e.target.value)} style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"monospace",color:th("#c9d1d9","#1a1a18"),width:"100%"}} />
                     </div>
                     <div>
-                      <div style={{fontFamily:"monospace",fontSize:8,color:"#3a4050",marginBottom:3}}>MIN OTM %</div>
-                      <input type="number" value={getEdit(rule,"min_otm_pct")??""} onChange={e=>setEdit(rule.id,"min_otm_pct",+e.target.value)} style={{background:"#0d1117",border:"1px solid #21262d",borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"monospace",color:"#c9d1d9",width:"100%"}} />
+                      <div style={{fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74"),marginBottom:3}}>MIN OTM %</div>
+                      <input type="number" value={getEdit(rule,"min_otm_pct")??""} onChange={e=>setEdit(rule.id,"min_otm_pct",+e.target.value)} style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"monospace",color:th("#c9d1d9","#1a1a18"),width:"100%"}} />
                     </div>
                     <div>
-                      <div style={{fontFamily:"monospace",fontSize:8,color:"#3a4050",marginBottom:3}}>MAX OTM %</div>
-                      <input type="number" value={getEdit(rule,"max_otm_pct")??""} onChange={e=>setEdit(rule.id,"max_otm_pct",+e.target.value)} style={{background:"#0d1117",border:"1px solid #21262d",borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"monospace",color:"#c9d1d9",width:"100%"}} />
+                      <div style={{fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74"),marginBottom:3}}>MAX OTM %</div>
+                      <input type="number" value={getEdit(rule,"max_otm_pct")??""} onChange={e=>setEdit(rule.id,"max_otm_pct",+e.target.value)} style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"monospace",color:th("#c9d1d9","#1a1a18"),width:"100%"}} />
                     </div>
                     <div>
-                      <div style={{fontFamily:"monospace",fontSize:8,color:"#3a4050",marginBottom:3}}>MIN VIX</div>
-                      <input type="number" value={getEdit(rule,"min_vix")??""} onChange={e=>setEdit(rule.id,"min_vix",+e.target.value)} style={{background:"#0d1117",border:"1px solid #21262d",borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"monospace",color:"#c9d1d9",width:"100%"}} />
+                      <div style={{fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74"),marginBottom:3}}>MIN VIX</div>
+                      <input type="number" value={getEdit(rule,"min_vix")??""} onChange={e=>setEdit(rule.id,"min_vix",+e.target.value)} style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"monospace",color:th("#c9d1d9","#1a1a18"),width:"100%"}} />
                     </div>
                   </>}
                   <div>
-                    <div style={{fontFamily:"monospace",fontSize:8,color:"#3a4050",marginBottom:3}}>PRIORITY</div>
-                    <input type="number" value={getEdit(rule,"priority")??""} onChange={e=>setEdit(rule.id,"priority",+e.target.value)} style={{background:"#0d1117",border:"1px solid #21262d",borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"monospace",color:"#c9d1d9",width:"100%"}} />
+                    <div style={{fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74"),marginBottom:3}}>PRIORITY</div>
+                    <input type="number" value={getEdit(rule,"priority")??""} onChange={e=>setEdit(rule.id,"priority",+e.target.value)} style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"monospace",color:th("#c9d1d9","#1a1a18"),width:"100%"}} />
                   </div>
                 </div>
 
@@ -1051,23 +1057,23 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
                   const table = getEdit(rule, "otm_dte_table") || [];
                   const rows = Array.isArray(table) ? [...table].sort((a,b) => a.max_dte - b.max_dte) : [];
                   return (
-                    <div style={{marginTop:12,padding:10,background:"#0d1117",border:"1px solid #1c2128",borderRadius:6}}>
+                    <div style={{marginTop:12,padding:10,background:th("#0d1117","#f5f0e8"),border:"1px solid #1c2128",borderRadius:6}}>
                       <div style={{fontFamily:"monospace",fontSize:9,color:"#58a6ff",marginBottom:8,letterSpacing:"0.05em"}}>📊 OTM % BY DTE TABLE</div>
-                      <div style={{fontFamily:"monospace",fontSize:8,color:"#3a4050",marginBottom:6}}>Shorter DTE → tighter OTM. Each row sets the minimum OTM% for contracts up to that DTE.</div>
+                      <div style={{fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74"),marginBottom:6}}>Shorter DTE → tighter OTM. Each row sets the minimum OTM% for contracts up to that DTE.</div>
                       <div style={{display:"grid",gridTemplateColumns:"80px 100px 30px",gap:4,alignItems:"center"}}>
-                        <div style={{fontFamily:"monospace",fontSize:7,color:"#3a4050"}}>MAX DTE</div>
-                        <div style={{fontFamily:"monospace",fontSize:7,color:"#3a4050"}}>MIN OTM %</div>
+                        <div style={{fontFamily:"monospace",fontSize:7,color:th("#3a4050","#8a7e74")}}>MAX DTE</div>
+                        <div style={{fontFamily:"monospace",fontSize:7,color:th("#3a4050","#8a7e74")}}>MIN OTM %</div>
                         <div/>
                         {rows.map((row, i) => (
                           <div key={i} style={{display:"contents"}}>
                             <input type="number" value={row.max_dte} onChange={e => {
                               const updated = [...rows]; updated[i] = { ...updated[i], max_dte: +e.target.value };
                               setEdit(rule.id, "otm_dte_table", updated);
-                            }} style={{background:"#161b22",border:"1px solid #21262d",borderRadius:3,padding:"3px 6px",fontSize:10,fontFamily:"monospace",color:"#c9d1d9",width:"100%"}} />
+                            }} style={{background:th("#161b22","#ede8df"),border:"1px solid #21262d",borderRadius:3,padding:"3px 6px",fontSize:10,fontFamily:"monospace",color:th("#c9d1d9","#1a1a18"),width:"100%"}} />
                             <input type="number" step="0.25" value={row.min_otm_pct} onChange={e => {
                               const updated = [...rows]; updated[i] = { ...updated[i], min_otm_pct: +e.target.value };
                               setEdit(rule.id, "otm_dte_table", updated);
-                            }} style={{background:"#161b22",border:"1px solid #21262d",borderRadius:3,padding:"3px 6px",fontSize:10,fontFamily:"monospace",color:"#c9d1d9",width:"100%"}} />
+                            }} style={{background:th("#161b22","#ede8df"),border:"1px solid #21262d",borderRadius:3,padding:"3px 6px",fontSize:10,fontFamily:"monospace",color:th("#c9d1d9","#1a1a18"),width:"100%"}} />
                             <button onClick={() => { const updated = rows.filter((_,j) => j!==i); setEdit(rule.id, "otm_dte_table", updated); }}
                               style={{background:"transparent",border:"none",color:"#f85149",cursor:"pointer",fontSize:12,padding:0}}>×</button>
                           </div>
@@ -1087,39 +1093,39 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
                   const setMF = (field, val) => setEdit(rule.id, "momentum_filters", { ...mf, [field]: val });
                   const trendOptions = ["bullish", "neutral", "bearish"];
                   const currentTrends = Array.isArray(mf.require_trend) ? mf.require_trend : [];
-                  const toggleStyle = (on) => ({width:28,height:15,borderRadius:8,background:on?"#00ff88":"#21262d",position:"relative",cursor:"pointer",transition:"background .2s",display:"inline-block"});
-                  const thumbStyle = (on) => ({position:"absolute",top:2,left:on?13:2,width:11,height:11,borderRadius:"50%",background:"#010409",transition:"left .2s"});
+                  const toggleStyle = (on) => ({width:28,height:15,borderRadius:8,background:on?"#00ff88":th("#21262d","#c8b8a8"),position:"relative",cursor:"pointer",transition:"background .2s",display:"inline-block"});
+                  const thumbStyle = (on) => ({position:"absolute",top:2,left:on?13:2,width:11,height:11,borderRadius:"50%",background:th("#010409","#f5f0e8"),transition:"left .2s"});
                   const sectionLabel = {fontFamily:"monospace",fontSize:9,letterSpacing:"0.05em",marginBottom:6,marginTop:10};
-                  const fieldLabel = {fontFamily:"monospace",fontSize:8,color:"#3a4050",marginBottom:3};
-                  const inputStyle = {background:"#161b22",border:"1px solid #21262d",borderRadius:3,padding:"3px 6px",fontSize:10,fontFamily:"monospace",color:"#c9d1d9",width:"100%"};
+                  const fieldLabel = {fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74"),marginBottom:3};
+                  const inputStyle = {background:th("#161b22","#ede8df"),border:"1px solid #21262d",borderRadius:3,padding:"3px 6px",fontSize:10,fontFamily:"monospace",color:th("#c9d1d9","#1a1a18"),width:"100%"};
                   return (
-                    <div style={{marginTop:8,padding:10,background:"#0d1117",border:"1px solid #1c2128",borderRadius:6}}>
+                    <div style={{marginTop:8,padding:10,background:th("#0d1117","#f5f0e8"),border:"1px solid #1c2128",borderRadius:6}}>
                       <div style={{fontFamily:"monospace",fontSize:9,color:"#ffd166",marginBottom:4,letterSpacing:"0.05em"}}>⚡ MOMENTUM FILTERS</div>
-                      <div style={{fontFamily:"monospace",fontSize:8,color:"#3a4050",marginBottom:8}}>All momentum checks for this STO rule. Toggle each gate individually.</div>
+                      <div style={{fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74"),marginBottom:8}}>All momentum checks for this STO rule. Toggle each gate individually.</div>
 
                       {/* ── Intraday momentum gates ── */}
                       <div style={{...sectionLabel,color:"#58a6ff"}}>INTRADAY GATES</div>
                       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:8}}>
-                        <div style={{padding:8,background:"#161b22",borderRadius:4,border:"1px solid #1c2128"}}>
+                        <div style={{padding:8,background:th("#161b22","#ede8df"),borderRadius:4,border:"1px solid #1c2128"}}>
                           <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
                             <div onClick={()=>setMF("pullback_enabled",!mf.pullback_enabled)} style={toggleStyle(mf.pullback_enabled)}><div style={thumbStyle(mf.pullback_enabled)}/></div>
-                            <span style={{fontFamily:"monospace",fontSize:8,color:"#c9d1d9"}}>Pullback from high</span>
+                            <span style={{fontFamily:"monospace",fontSize:8,color:th("#c9d1d9","#1a1a18")}}>Pullback from high</span>
                           </div>
                           <div style={fieldLabel}>MIN PULLBACK %</div>
                           <input type="number" step="0.1" value={mf.min_pullback_from_high_pct??""} onChange={e=>setMF("min_pullback_from_high_pct",e.target.value===""?null:+e.target.value)} style={inputStyle} placeholder="0.3" />
                         </div>
-                        <div style={{padding:8,background:"#161b22",borderRadius:4,border:"1px solid #1c2128"}}>
+                        <div style={{padding:8,background:th("#161b22","#ede8df"),borderRadius:4,border:"1px solid #1c2128"}}>
                           <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
                             <div onClick={()=>setMF("require_decelerating",!mf.require_decelerating)} style={toggleStyle(mf.require_decelerating)}><div style={thumbStyle(mf.require_decelerating)}/></div>
-                            <span style={{fontFamily:"monospace",fontSize:8,color:"#c9d1d9"}}>Deceleration gate</span>
+                            <span style={{fontFamily:"monospace",fontSize:8,color:th("#c9d1d9","#1a1a18")}}>Deceleration gate</span>
                           </div>
                           <div style={fieldLabel}>LOOKBACK MINS</div>
                           <input type="number" value={mf.momentum_lookback_mins??""} onChange={e=>setMF("momentum_lookback_mins",e.target.value===""?null:+e.target.value)} style={inputStyle} placeholder="30" />
                         </div>
-                        <div style={{padding:8,background:"#161b22",borderRadius:4,border:"1px solid #1c2128"}}>
+                        <div style={{padding:8,background:th("#161b22","#ede8df"),borderRadius:4,border:"1px solid #1c2128"}}>
                           <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
                             <div onClick={()=>setMF("gap_enabled",!mf.gap_enabled)} style={toggleStyle(mf.gap_enabled)}><div style={thumbStyle(mf.gap_enabled)}/></div>
-                            <span style={{fontFamily:"monospace",fontSize:8,color:"#c9d1d9"}}>Gap-up filter</span>
+                            <span style={{fontFamily:"monospace",fontSize:8,color:th("#c9d1d9","#1a1a18")}}>Gap-up filter</span>
                           </div>
                           <div style={fieldLabel}>MAX GAP UP %</div>
                           <input type="number" step="0.5" value={mf.max_gap_up_pct??""} onChange={e=>setMF("max_gap_up_pct",e.target.value===""?null:+e.target.value)} style={inputStyle} placeholder="2.0" />
@@ -1153,11 +1159,11 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
                           {trendOptions.map(t => {
                             const active = currentTrends.includes(t);
                             return (
-                              <label key={t} style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer",fontFamily:"monospace",fontSize:9,color:active?"#c9d1d9":"#3a4050"}}>
+                              <label key={t} style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer",fontFamily:"monospace",fontSize:9,color:active?th("#c9d1d9","#1a1a18"):th("#3a4050","#8a7e74")}}>
                                 <div onClick={() => {
                                   const next = active ? currentTrends.filter(x=>x!==t) : [...currentTrends, t];
                                   setMF("require_trend", next.length ? next : null);
-                                }} style={{width:14,height:14,borderRadius:3,border:"1px solid "+(active?"#58a6ff":"#21262d"),background:active?"#58a6ff20":"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:"#58a6ff"}}>
+                                }} style={{width:14,height:14,borderRadius:3,border:"1px solid "+(active?"#58a6ff":th("#21262d","#c8b8a8")),background:active?"#58a6ff20":"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:"#58a6ff"}}>
                                   {active && "\u2713"}
                                 </div>
                                 {t}
@@ -1201,28 +1207,28 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
           const setME = (field, val) => setMomentumEdits(p => ({ ...p, [field]: val }));
           const hasEdits = Object.keys(me).length > 0;
           const Toggle = ({ field, label }) => (
-            <label style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",fontFamily:"monospace",fontSize:9,color:"#8b949e"}}>
-              <div onClick={()=>setME(field,!getME(field))} style={{width:28,height:15,borderRadius:8,background:getME(field)?"#ffd166":"#21262d",position:"relative",cursor:"pointer",transition:"background .2s"}}>
-                <div style={{position:"absolute",top:2,left:getME(field)?13:2,width:11,height:11,borderRadius:"50%",background:"#010409",transition:"left .2s"}}/>
+            <label style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",fontFamily:"monospace",fontSize:9,color:th("#8b949e","#5a5248")}}>
+              <div onClick={()=>setME(field,!getME(field))} style={{width:28,height:15,borderRadius:8,background:getME(field)?"#ffd166":th("#21262d","#c8b8a8"),position:"relative",cursor:"pointer",transition:"background .2s"}}>
+                <div style={{position:"absolute",top:2,left:getME(field)?13:2,width:11,height:11,borderRadius:"50%",background:th("#010409","#f5f0e8"),transition:"left .2s"}}/>
               </div>
               {label}
             </label>
           );
           return (
-            <div style={{background:"#0a0e14",border:"1px solid "+(hasEdits?"#ffd16640":"#1c2128"),borderRadius:8,padding:14,marginTop:10}}>
+            <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid "+(hasEdits?"#ffd16640":th("#1c2128","#b8a898")),borderRadius:8,padding:14,marginTop:10}}>
               <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap"}}>
                 <span style={{fontFamily:"monospace",fontSize:10,fontWeight:700,color:"#ffd166"}}>📈 STO MOMENTUM FILTERS</span>
-                <span style={{fontFamily:"monospace",fontSize:10,color:"#8b949e"}}>{mc.name}</span>
+                <span style={{fontFamily:"monospace",fontSize:10,color:th("#8b949e","#5a5248")}}>{mc.name}</span>
                 <Toggle field="enabled" label="enabled" />
               </div>
-              {mc.description && <div style={{fontFamily:"monospace",fontSize:9,color:"#3a4050",marginBottom:10,fontStyle:"italic"}}>{mc.description}</div>}
+              {mc.description && <div style={{fontFamily:"monospace",fontSize:9,color:th("#3a4050","#8a7e74"),marginBottom:10,fontStyle:"italic"}}>{mc.description}</div>}
               {[
                 { field:"pullback_enabled", numField:"min_pullback_from_high_pct", numLabel:"Min pullback %", numSuffix:"% from high", label:"1. Pullback from high", desc:mc.pullback_description },
                 { field:"momentum_enabled", numField:"momentum_lookback_mins", numLabel:"Lookback", numSuffix:"mins", label:"2. Deceleration gate", desc:mc.momentum_description, extra:<Toggle field="require_decelerating" label="require decelerating" /> },
                 { field:"gap_enabled", numField:"max_gap_up_pct", numLabel:"Max gap up %", numSuffix:"", label:"3. Gap-up filter", desc:mc.gap_description },
                 { field:"volume_enabled", numField:null, numLabel:null, label:"4. Volume filter (future)", desc:mc.volume_description },
               ].map(({ field, numField, numLabel, numSuffix, label, desc, extra }) => (
-                <div key={field} style={{background:"#0d1117",borderRadius:6,padding:"10px 12px",marginBottom:8}}>
+                <div key={field} style={{background:th("#0d1117","#f5f0e8"),borderRadius:6,padding:"10px 12px",marginBottom:8}}>
                   <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
                     <Toggle field={field} label={label} />
                     {extra}
@@ -1230,19 +1236,19 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
                   {desc && <div style={{fontFamily:"monospace",fontSize:9,color:"#555",marginBottom:6}}>{desc}</div>}
                   {numField && getME(field) && (
                     <div style={{display:"flex",alignItems:"center",gap:6}}>
-                      <span style={{fontFamily:"monospace",fontSize:9,color:"#3a4050"}}>{numLabel}</span>
+                      <span style={{fontFamily:"monospace",fontSize:9,color:th("#3a4050","#8a7e74")}}>{numLabel}</span>
                       <input type="number" step="0.1" value={getME(numField)||""} onChange={e=>setME(numField,+e.target.value)}
-                        style={{width:70,background:"#0a0e14",border:"1px solid #21262d",borderRadius:4,padding:"3px 7px",fontSize:11,fontFamily:"monospace",color:"#ffd166"}} />
+                        style={{width:70,background:th("#0a0e14","#f8f3eb"),border:"1px solid #21262d",borderRadius:4,padding:"3px 7px",fontSize:11,fontFamily:"monospace",color:"#ffd166"}} />
                       {numSuffix && <span style={{fontFamily:"monospace",fontSize:9,color:"#555"}}>{numSuffix}</span>}
                     </div>
                   )}
                 </div>
               ))}
               <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:hasEdits?10:0,flexWrap:"wrap"}}>
-                <span style={{fontFamily:"monospace",fontSize:9,color:"#3a4050"}}>Fire window ET:</span>
-                <input type="time" value={getME("min_time_et")||""} onChange={e=>setME("min_time_et",e.target.value)} style={{background:"#0a0e14",border:"1px solid #21262d",borderRadius:4,padding:"3px 7px",fontSize:11,fontFamily:"monospace",color:"#ffd166"}} />
+                <span style={{fontFamily:"monospace",fontSize:9,color:th("#3a4050","#8a7e74")}}>Fire window ET:</span>
+                <input type="time" value={getME("min_time_et")||""} onChange={e=>setME("min_time_et",e.target.value)} style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #21262d",borderRadius:4,padding:"3px 7px",fontSize:11,fontFamily:"monospace",color:"#ffd166"}} />
                 <span style={{fontFamily:"monospace",fontSize:9,color:"#555"}}>→</span>
-                <input type="time" value={getME("max_time_et")||""} onChange={e=>setME("max_time_et",e.target.value)} style={{background:"#0a0e14",border:"1px solid #21262d",borderRadius:4,padding:"3px 7px",fontSize:11,fontFamily:"monospace",color:"#ffd166"}} />
+                <input type="time" value={getME("max_time_et")||""} onChange={e=>setME("max_time_et",e.target.value)} style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #21262d",borderRadius:4,padding:"3px 7px",fontSize:11,fontFamily:"monospace",color:"#ffd166"}} />
               </div>
               {hasEdits && (
                 <div style={{display:"flex",gap:8,alignItems:"center"}}>
@@ -1263,10 +1269,10 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
         })()}
 
         {/* ── Skynet Intelligence — Claude Analysis ── */}
-        <div style={{background:"#0a0e14",border:"1px solid #58a6ff20",borderRadius:8,padding:14,marginTop:10}}>
+        <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #58a6ff20",borderRadius:8,padding:14,marginTop:10}}>
           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,flexWrap:"wrap"}}>
             <span style={{fontFamily:"monospace",fontSize:10,fontWeight:700,color:"#58a6ff"}}>🧠 SKYNET INTELLIGENCE</span>
-            <span style={{fontFamily:"monospace",fontSize:9,color:"#3a4050"}}>Claude-powered signal analysis</span>
+            <span style={{fontFamily:"monospace",fontSize:9,color:th("#3a4050","#8a7e74")}}>Claude-powered signal analysis</span>
             <button onClick={async () => {
               setAnalyzing(true); setAnalysis(null);
               try {
@@ -1297,7 +1303,7 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
             </button>
           </div>
           {!analysis && !analyzing && (
-            <div style={{fontFamily:"monospace",fontSize:9,color:"#3a4050"}}>
+            <div style={{fontFamily:"monospace",fontSize:9,color:th("#3a4050","#8a7e74")}}>
               Click "run analysis" to have Claude analyze your signal outcomes and suggest weight adjustments. Needs a few weeks of data to be meaningful.
             </div>
           )}
@@ -1305,24 +1311,24 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
           {analysis?.error && <div style={{fontFamily:"monospace",fontSize:9,color:"#ff4560"}}>{analysis.error}</div>}
           {analysis && !analysis.error && (
             <div style={{display:"flex",flexDirection:"column",gap:10}}>
-              <div style={{background:"#0d1117",borderRadius:6,padding:"10px 12px"}}>
-                <div style={{fontFamily:"monospace",fontSize:8,color:"#3a4050",marginBottom:4}}>SUMMARY</div>
-                <div style={{fontFamily:"monospace",fontSize:11,color:"#c9d1d9",lineHeight:1.5}}>{analysis.summary}</div>
+              <div style={{background:th("#0d1117","#f5f0e8"),borderRadius:6,padding:"10px 12px"}}>
+                <div style={{fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74"),marginBottom:4}}>SUMMARY</div>
+                <div style={{fontFamily:"monospace",fontSize:11,color:th("#c9d1d9","#1a1a18"),lineHeight:1.5}}>{analysis.summary}</div>
               </div>
               {analysis.win_rate_analysis && (
-                <div style={{background:"#0d1117",borderRadius:6,padding:"10px 12px"}}>
-                  <div style={{fontFamily:"monospace",fontSize:8,color:"#3a4050",marginBottom:4}}>WIN RATE ANALYSIS</div>
-                  <div style={{fontFamily:"monospace",fontSize:11,color:"#c9d1d9"}}>{analysis.win_rate_analysis}</div>
+                <div style={{background:th("#0d1117","#f5f0e8"),borderRadius:6,padding:"10px 12px"}}>
+                  <div style={{fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74"),marginBottom:4}}>WIN RATE ANALYSIS</div>
+                  <div style={{fontFamily:"monospace",fontSize:11,color:th("#c9d1d9","#1a1a18")}}>{analysis.win_rate_analysis}</div>
                 </div>
               )}
               {analysis.patterns?.length > 0 && (
-                <div style={{background:"#0d1117",borderRadius:6,padding:"10px 12px"}}>
-                  <div style={{fontFamily:"monospace",fontSize:8,color:"#3a4050",marginBottom:8}}>PATTERNS FOUND</div>
+                <div style={{background:th("#0d1117","#f5f0e8"),borderRadius:6,padding:"10px 12px"}}>
+                  <div style={{fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74"),marginBottom:8}}>PATTERNS FOUND</div>
                   {analysis.patterns.map((p, i) => (
                     <div key={i} style={{marginBottom:8,paddingBottom:8,borderBottom:i<analysis.patterns.length-1?"1px solid #1c2128":"none"}}>
                       <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3}}>
-                        <span style={{fontFamily:"monospace",fontSize:9,color:p.confidence==="high"?"#00ff88":p.confidence==="medium"?"#ffd166":"#888",background:p.confidence==="high"?"#00ff8815":p.confidence==="medium"?"#ffd16615":"#1c2128",borderRadius:3,padding:"1px 6px"}}>{p.confidence}</span>
-                        <span style={{fontFamily:"monospace",fontSize:10,color:"#e6edf3"}}>{p.finding}</span>
+                        <span style={{fontFamily:"monospace",fontSize:9,color:p.confidence==="high"?"#00ff88":p.confidence==="medium"?"#ffd166":"#888",background:p.confidence==="high"?"#00ff8815":p.confidence==="medium"?"#ffd16615":th("#1c2128","#b8a898"),borderRadius:3,padding:"1px 6px"}}>{p.confidence}</span>
+                        <span style={{fontFamily:"monospace",fontSize:10,color:th("#e6edf3","#0d0d0b")}}>{p.finding}</span>
                       </div>
                       <div style={{fontFamily:"monospace",fontSize:9,color:"#555",marginLeft:8}}>{p.evidence}</div>
                     </div>
@@ -1330,18 +1336,18 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
                 </div>
               )}
               {analysis.weight_suggestions?.length > 0 && (
-                <div style={{background:"#0d1117",borderRadius:6,padding:"10px 12px"}}>
-                  <div style={{fontFamily:"monospace",fontSize:8,color:"#3a4050",marginBottom:8}}>SUGGESTED WEIGHT CHANGES</div>
+                <div style={{background:th("#0d1117","#f5f0e8"),borderRadius:6,padding:"10px 12px"}}>
+                  <div style={{fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74"),marginBottom:8}}>SUGGESTED WEIGHT CHANGES</div>
                   {analysis.weight_suggestions.map((w, i) => (
                     <div key={i} style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap"}}>
-                      <span style={{fontFamily:"monospace",fontSize:10,color:"#c9d1d9",minWidth:140}}>{w.factor_name}</span>
+                      <span style={{fontFamily:"monospace",fontSize:10,color:th("#c9d1d9","#1a1a18"),minWidth:140}}>{w.factor_name}</span>
                       <span style={{fontFamily:"monospace",fontSize:10,color:"#555"}}>{w.current_weight}</span>
-                      <span style={{fontFamily:"monospace",fontSize:9,color:"#3a4050"}}>→</span>
+                      <span style={{fontFamily:"monospace",fontSize:9,color:th("#3a4050","#8a7e74")}}>→</span>
                       <span style={{fontFamily:"monospace",fontSize:10,color:w.suggested_weight>w.current_weight?"#00ff88":"#ff4560",fontWeight:700}}>{w.suggested_weight}</span>
                       <span style={{fontFamily:"monospace",fontSize:9,color:"#555",flex:1}}>{w.rationale}</span>
                     </div>
                   ))}
-                  <div style={{marginTop:8,fontFamily:"monospace",fontSize:9,color:"#3a4050"}}>Apply changes manually in the weight fields above after reviewing.</div>
+                  <div style={{marginTop:8,fontFamily:"monospace",fontSize:9,color:th("#3a4050","#8a7e74")}}>Apply changes manually in the weight fields above after reviewing.</div>
                 </div>
               )}
               {analysis.overall_recommendation && (
@@ -1355,21 +1361,21 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
 
         {/* ── Skynet Controls ── */}
         {skynetCtrl && (() => {
-          const inp = {fontSize:11,padding:"3px 6px",background:"#0a0e14",border:"1px solid #21262d",borderRadius:3,color:"#ffd166",fontFamily:"monospace",width:90};
+          const inp = {fontSize:11,padding:"3px 6px",background:th("#0a0e14","#f8f3eb"),border:"1px solid #21262d",borderRadius:3,color:"#ffd166",fontFamily:"monospace",width:90};
           const sc = skynetCtrl;
           return (
-            <div style={{background:"#0a0e14",border:"1px solid #ffd16625",borderRadius:8,padding:"12px 14px",marginTop:16}}>
+            <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #ffd16625",borderRadius:8,padding:"12px 14px",marginTop:16}}>
               <div style={{fontFamily:"monospace",fontSize:9,color:"#ffd166",letterSpacing:"0.08em",marginBottom:10}}>🛡 SKYNET CONTROLS</div>
               <div style={{display:"flex",gap:16,flexWrap:"wrap",alignItems:"flex-end"}}>
-                <div><div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",marginBottom:3}}>MAX ORDER VALUE $</div>
+                <div><div style={{fontSize:7,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",marginBottom:3}}>MAX ORDER VALUE $</div>
                   <input defaultValue={sc.max_order_value} onBlur={async e=>{const v=parseFloat(e.target.value);if(!isNaN(v)){await supabase.from("skynet_controls").update({max_order_value:v,updated_at:new Date().toISOString()}).eq("id",sc.id);setSkynetCtrl(p=>({...p,max_order_value:v}));}}} style={inp}/>
                 </div>
-                <div><div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",marginBottom:3}}>MAX BID/ASK DEV %</div>
+                <div><div style={{fontSize:7,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",marginBottom:3}}>MAX BID/ASK DEV %</div>
                   <input defaultValue={sc.max_bid_ask_deviation_pct} onBlur={async e=>{const v=parseFloat(e.target.value);if(!isNaN(v)){await supabase.from("skynet_controls").update({max_bid_ask_deviation_pct:v,updated_at:new Date().toISOString()}).eq("id",sc.id);setSkynetCtrl(p=>({...p,max_bid_ask_deviation_pct:v}));}}} style={inp}/>
                 </div>
                 <div style={{display:"flex",alignItems:"center",gap:6}}>
                   <input type="checkbox" checked={!!sc.block_if_loss} onChange={async e=>{const v=e.target.checked;await supabase.from("skynet_controls").update({block_if_loss:v,updated_at:new Date().toISOString()}).eq("id",sc.id);setSkynetCtrl(p=>({...p,block_if_loss:v}));}} id="sc-bil"/>
-                  <label htmlFor="sc-bil" style={{fontSize:9,color:"#c9d1d9",fontFamily:"monospace",cursor:"pointer"}}>Block if loss</label>
+                  <label htmlFor="sc-bil" style={{fontSize:9,color:th("#c9d1d9","#1a1a18"),fontFamily:"monospace",cursor:"pointer"}}>Block if loss</label>
                 </div>
               </div>
             </div>
@@ -1378,25 +1384,25 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
 
         {/* ── Ticker Risk Config (task #22) ── */}
         {tickerRiskCfg.length > 0 && (
-          <div style={{background:"#0a0e14",border:"1px solid #58a6ff25",borderRadius:8,padding:"12px 14px",marginTop:16}}>
+          <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #58a6ff25",borderRadius:8,padding:"12px 14px",marginTop:16}}>
             <div style={{fontFamily:"monospace",fontSize:9,color:"#58a6ff",letterSpacing:"0.08em",marginBottom:10}}>📊 TICKER RISK CONFIG</div>
             <div style={{overflowX:"auto"}}>
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:10,fontFamily:"monospace"}}>
                 <thead><tr style={{borderBottom:"1px solid #1c2128"}}>
                   {["Symbol","Min OTM%","Max DTE","Min IV%","Max IV%","Action","Notes"].map(h=>(
-                    <th key={h} style={{padding:"3px 8px",textAlign:"left",color:"#3a4050",fontWeight:600,fontSize:9}}>{h}</th>
+                    <th key={h} style={{padding:"3px 8px",textAlign:"left",color:th("#3a4050","#8a7e74"),fontWeight:600,fontSize:9}}>{h}</th>
                   ))}
                 </tr></thead>
                 <tbody>
                   {tickerRiskCfg.map(r => (
                     <tr key={r.symbol} style={{borderBottom:"1px solid #0d1117"}}>
-                      <td style={{padding:"4px 8px",color:"#e6edf3",fontWeight:700}}>{r.symbol}</td>
-                      <td style={{padding:"4px 8px"}}><input type="number" step="0.5" defaultValue={r.min_otm_pct} onBlur={async e=>{const v=parseFloat(e.target.value);if(!isNaN(v)){await supabase.from("ticker_risk_config").update({min_otm_pct:v,updated_at:new Date().toISOString()}).eq("symbol",r.symbol);setTickerRiskCfg(p=>p.map(x=>x.symbol===r.symbol?{...x,min_otm_pct:v}:x));}}} style={{width:55,fontSize:10,padding:"2px 4px",background:"#0d1117",border:"1px solid #21262d",borderRadius:3,color:"#ffd166",fontFamily:"monospace"}}/></td>
-                      <td style={{padding:"4px 8px"}}><input type="number" step="1"   defaultValue={r.max_dte??""} placeholder="—" onBlur={async e=>{const v=e.target.value===""?null:parseInt(e.target.value);await supabase.from("ticker_risk_config").update({max_dte:v,updated_at:new Date().toISOString()}).eq("symbol",r.symbol);}} style={{width:45,fontSize:10,padding:"2px 4px",background:"#0d1117",border:"1px solid #21262d",borderRadius:3,color:"#ffd166",fontFamily:"monospace"}}/></td>
+                      <td style={{padding:"4px 8px",color:th("#e6edf3","#0d0d0b"),fontWeight:700}}>{r.symbol}</td>
+                      <td style={{padding:"4px 8px"}}><input type="number" step="0.5" defaultValue={r.min_otm_pct} onBlur={async e=>{const v=parseFloat(e.target.value);if(!isNaN(v)){await supabase.from("ticker_risk_config").update({min_otm_pct:v,updated_at:new Date().toISOString()}).eq("symbol",r.symbol);setTickerRiskCfg(p=>p.map(x=>x.symbol===r.symbol?{...x,min_otm_pct:v}:x));}}} style={{width:55,fontSize:10,padding:"2px 4px",background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:3,color:"#ffd166",fontFamily:"monospace"}}/></td>
+                      <td style={{padding:"4px 8px"}}><input type="number" step="1"   defaultValue={r.max_dte??""} placeholder="—" onBlur={async e=>{const v=e.target.value===""?null:parseInt(e.target.value);await supabase.from("ticker_risk_config").update({max_dte:v,updated_at:new Date().toISOString()}).eq("symbol",r.symbol);}} style={{width:45,fontSize:10,padding:"2px 4px",background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:3,color:"#ffd166",fontFamily:"monospace"}}/></td>
                       <td style={{padding:"4px 8px",color:"#888"}}>{r.min_iv_pct??'—'}</td>
                       <td style={{padding:"4px 8px",color:"#888"}}>{r.max_iv_pct??'—'}</td>
                       <td style={{padding:"4px 8px"}}>
-                        <select defaultValue={r.action} onChange={async e=>{const v=e.target.value;await supabase.from("ticker_risk_config").update({action:v,updated_at:new Date().toISOString()}).eq("symbol",r.symbol);setTickerRiskCfg(p=>p.map(x=>x.symbol===r.symbol?{...x,action:v}:x));}} style={{fontSize:10,padding:"2px 4px",background:"#0d1117",border:"1px solid #21262d",borderRadius:3,color:r.action==="avoid"?"#ff4560":"#00ff88",fontFamily:"monospace"}}>
+                        <select defaultValue={r.action} onChange={async e=>{const v=e.target.value;await supabase.from("ticker_risk_config").update({action:v,updated_at:new Date().toISOString()}).eq("symbol",r.symbol);setTickerRiskCfg(p=>p.map(x=>x.symbol===r.symbol?{...x,action:v}:x));}} style={{fontSize:10,padding:"2px 4px",background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:3,color:r.action==="avoid"?"#ff4560":"#00ff88",fontFamily:"monospace"}}>
                           <option value="scan">scan</option>
                           <option value="avoid">avoid</option>
                         </select>
@@ -1516,7 +1522,7 @@ function SageAttentionPanel({ onOpenChain }) {
     const signal = finalScore >= 70 ? "bto_strong" : finalScore >= 50 ? "bto_favorable" : finalScore >= 30 ? "bto_watch" : "bto_weak";
     return { score: finalScore, signal, reasons };
   };
-  const scoreColor = (s) => s >= 75 ? "#3fb950" : s >= 65 ? "#d29922" : s >= 45 ? "#8b949e" : "#484f58";
+  const scoreColor = (s) => s >= 75 ? "#3fb950" : s >= 65 ? "#d29922" : s >= 45 ? th("#8b949e","#5a5248") : "#484f58";
 
   const factorMeta = {
     iv_pct:              { label:"IV%",         fmt: v=>`${Number(v).toFixed(1)}%`,                        good: v=>v>80,   bad: v=>v<40  },
@@ -1538,22 +1544,22 @@ function SageAttentionPanel({ onOpenChain }) {
   };
 
   return (
-    <div style={{ background:"#0d1117", border:"1px solid #21262d", borderRadius:8, marginBottom:16, overflow:"hidden" }}>
+    <div style={{ background:th("#0d1117","#f5f0e8"), border:"1px solid #21262d", borderRadius:8, marginBottom:16, overflow:"hidden" }}>
       {/* Header */}
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 14px", borderBottom:"1px solid #21262d", background:"#161b22" }}>
-        <span style={{ color:"#e6edf3", fontWeight:600, fontSize:13, letterSpacing:"0.02em" }}>◈ SAGE Attention Scanner</span>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 14px", borderBottom:"1px solid #21262d", background:th("#161b22","#ede8df") }}>
+        <span style={{ color:th("#e6edf3","#0d0d0b"), fontWeight:600, fontSize:13, letterSpacing:"0.02em" }}>◈ SAGE Attention Scanner</span>
         <div style={{ display:"flex", gap:8, alignItems:"center" }}>
           <input
             value={manualTicker}
             onChange={e => setManualTicker(e.target.value.toUpperCase())}
             onKeyDown={e => e.key === "Enter" && runScan()}
             placeholder="+ ticker (e.g. NVDA)"
-            style={{ background:"#21262d", border:"1px solid #30363d", borderRadius:5, padding:"4px 10px", fontSize:11, color:"#e6edf3", width:140, fontFamily:"monospace" }}
+            style={{ background:th("#21262d","#c8b8a8"), border:"1px solid #30363d", borderRadius:5, padding:"4px 10px", fontSize:11, color:th("#e6edf3","#0d0d0b"), width:140, fontFamily:"monospace" }}
           />
           <button
             onClick={runScan}
             disabled={loading}
-            style={{ background:loading?"#21262d":"#1f6feb", color:"#e6edf3", border:"none", borderRadius:5, padding:"5px 14px", fontSize:12, fontWeight:600, cursor:loading?"not-allowed":"pointer", opacity:loading?0.7:1 }}
+            style={{ background:loading?th("#21262d","#c8b8a8"):"#1f6feb", color:th("#e6edf3","#0d0d0b"), border:"none", borderRadius:5, padding:"5px 14px", fontSize:12, fontWeight:600, cursor:loading?"not-allowed":"pointer", opacity:loading?0.7:1 }}
           >
             {loading ? "Scanning..." : "▶ Scan My Holdings"}
           </button>
@@ -1590,18 +1596,18 @@ function SageAttentionPanel({ onOpenChain }) {
               <div style={{ width:36, height:36, borderRadius:"50%", border:`2px solid ${scoreColor(r.score)}`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, fontWeight:700, color:scoreColor(r.score), flexShrink:0 }}>
                 {r.score}
               </div>
-              <span style={{ fontSize:14, fontWeight:700, color:"#e6edf3", width:60, flexShrink:0 }}>{r.ticker}</span>
+              <span style={{ fontSize:14, fontWeight:700, color:th("#e6edf3","#0d0d0b"), width:60, flexShrink:0 }}>{r.ticker}</span>
               <span style={{ background:recColor(r.recommendation, r.score)+"22", color:recColor(r.recommendation, r.score), border:`1px solid ${recColor(r.recommendation, r.score)}55`, borderRadius:4, padding:"2px 8px", fontSize:11, fontWeight:600, flexShrink:0 }}>
                 {recLabel(r.recommendation, r.score)}
               </span>
               {/* Score bar */}
-              <div style={{ flex:1, height:4, background:"#21262d", borderRadius:2, overflow:"hidden" }}>
+              <div style={{ flex:1, height:4, background:th("#21262d","#c8b8a8"), borderRadius:2, overflow:"hidden" }}>
                 <div style={{ width:`${r.score}%`, height:"100%", background:scoreColor(r.score), borderRadius:2, transition:"width 0.4s ease" }} />
               </div>
               <span style={{ fontSize:11, color:"#6e7681", flexShrink:0 }}>{r.shares} sh</span>
               <button
                 onClick={e => { e.stopPropagation(); onOpenChain?.(r.ticker); }}
-                style={{ background:"#21262d", border:"1px solid #30363d", borderRadius:4, padding:"2px 8px", fontSize:10, color:"#58a6ff", cursor:"pointer", flexShrink:0 }}
+                style={{ background:th("#21262d","#c8b8a8"), border:"1px solid #30363d", borderRadius:4, padding:"2px 8px", fontSize:10, color:"#58a6ff", cursor:"pointer", flexShrink:0 }}
               >⛓ chain</button>
               <span style={{ fontSize:10, color:"#484f58" }}>{isOpen?"▲":"▼"}</span>
             </div>
@@ -1619,7 +1625,7 @@ function SageAttentionPanel({ onOpenChain }) {
                 {Object.entries(factorMeta).map(([key, def]) => {
                   const val = factors[key];
                   if (val === undefined || val === null) return null;
-                  const color = def.good(val) ? "#3fb950" : def.bad(val) ? "#f85149" : "#8b949e";
+                  const color = def.good(val) ? "#3fb950" : def.bad(val) ? "#f85149" : th("#8b949e","#5a5248");
                   return (
                     <span key={key} style={{ background:color+"18", border:`1px solid ${color}44`, borderRadius:4, padding:"2px 8px", fontSize:11, color }}>
                       {def.label}: {def.fmt(val)}
@@ -1681,10 +1687,10 @@ function SageAttentionPanel({ onOpenChain }) {
               if (!lines.length) return null;
               return (
                 <div style={{ padding:"0 14px 10px 74px" }}>
-                  <div style={{ background:"#0d1117", border:"1px solid #21262d", borderRadius:6, padding:"8px 12px" }}>
-                    <div style={{ fontFamily:"monospace", fontSize:9, color:"#3a4050", letterSpacing:"0.08em", marginBottom:6 }}>SAGE INTERPRETATION</div>
+                  <div style={{ background:th("#0d1117","#f5f0e8"), border:"1px solid #21262d", borderRadius:6, padding:"8px 12px" }}>
+                    <div style={{ fontFamily:"monospace", fontSize:9, color:th("#3a4050","#8a7e74"), letterSpacing:"0.08em", marginBottom:6 }}>SAGE INTERPRETATION</div>
                     {lines.map((line, i) => (
-                      <div key={i} style={{ fontSize:12, color:"#8b949e", lineHeight:"1.7", marginBottom: i < lines.length-1 ? 2 : 0 }}>{line}</div>
+                      <div key={i} style={{ fontSize:12, color:th("#8b949e","#5a5248"), lineHeight:"1.7", marginBottom: i < lines.length-1 ? 2 : 0 }}>{line}</div>
                     ))}
                   </div>
                 </div>
@@ -1770,20 +1776,20 @@ function SageBTOPanel({ onOpenChain }) {
   const toggle = (ticker) => setExpanded(prev => ({ ...prev, [ticker]: !prev[ticker] }));
 
   return (
-    <div style={{ background:"#0d1117", border:"1px solid #21262d", borderRadius:8, marginBottom:16, overflow:"hidden" }}>
+    <div style={{ background:th("#0d1117","#f5f0e8"), border:"1px solid #21262d", borderRadius:8, marginBottom:16, overflow:"hidden" }}>
       {/* Header */}
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 14px", borderBottom:"1px solid #21262d", background:"#161b22" }}>
-        <span style={{ color:"#e6edf3", fontWeight:600, fontSize:13, letterSpacing:"0.02em" }}>◈ BTO Opportunity Scanner</span>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 14px", borderBottom:"1px solid #21262d", background:th("#161b22","#ede8df") }}>
+        <span style={{ color:th("#e6edf3","#0d0d0b"), fontWeight:600, fontSize:13, letterSpacing:"0.02em" }}>◈ BTO Opportunity Scanner</span>
         <div style={{ display:"flex", gap:8, alignItems:"center" }}>
           <input
             value={manualTicker}
             onChange={e => setManualTicker(e.target.value.toUpperCase())}
             onKeyDown={e => e.key === "Enter" && manualTicker && runScan(manualTicker)}
             placeholder="+ ticker (e.g. TSLA)"
-            style={{ background:"#21262d", border:"1px solid #30363d", borderRadius:5, padding:"4px 10px", fontSize:11, color:"#e6edf3", width:140, fontFamily:"monospace" }}
+            style={{ background:th("#21262d","#c8b8a8"), border:"1px solid #30363d", borderRadius:5, padding:"4px 10px", fontSize:11, color:th("#e6edf3","#0d0d0b"), width:140, fontFamily:"monospace" }}
           />
           <button onClick={() => runScan(manualTicker || null)} disabled={loading}
-            style={{ background:loading?"#21262d":"#238636", color:"#e6edf3", border:"none", borderRadius:5, padding:"5px 14px", fontSize:12, fontWeight:600, cursor:loading?"not-allowed":"pointer", opacity:loading?0.7:1 }}>
+            style={{ background:loading?th("#21262d","#c8b8a8"):"#238636", color:th("#e6edf3","#0d0d0b"), border:"none", borderRadius:5, padding:"5px 14px", fontSize:12, fontWeight:600, cursor:loading?"not-allowed":"pointer", opacity:loading?0.7:1 }}>
             {loading ? "Scanning..." : "▶ Scan for BTO"}
           </button>
         </div>
@@ -1816,26 +1822,26 @@ function SageBTOPanel({ onOpenChain }) {
               <div style={{ width:36, height:36, borderRadius:"50%", border:`2px solid ${scoreColor(r.btoScore)}`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, fontWeight:700, color:scoreColor(r.btoScore), flexShrink:0 }}>
                 {r.btoScore}
               </div>
-              <span style={{ fontSize:14, fontWeight:700, color:"#e6edf3", width:60, flexShrink:0 }}>{r.ticker}</span>
+              <span style={{ fontSize:14, fontWeight:700, color:th("#e6edf3","#0d0d0b"), width:60, flexShrink:0 }}>{r.ticker}</span>
               <span style={{ background:col+"22", color:col, border:`1px solid ${col}55`, borderRadius:4, padding:"2px 8px", fontSize:11, fontWeight:600, flexShrink:0 }}>
                 {signalLabel(r.btoSignal)}
               </span>
-              <div style={{ flex:1, height:4, background:"#21262d", borderRadius:2, overflow:"hidden" }}>
+              <div style={{ flex:1, height:4, background:th("#21262d","#c8b8a8"), borderRadius:2, overflow:"hidden" }}>
                 <div style={{ width:`${r.btoScore}%`, height:"100%", background:scoreColor(r.btoScore), borderRadius:2, transition:"width 0.4s ease" }} />
               </div>
               <span style={{ fontSize:11, color:"#6e7681", flexShrink:0 }}>{r.shares ? `${r.shares} sh` : "watchlist"}</span>
               <button
                 onClick={e => { e.stopPropagation(); onOpenChain?.(r.ticker); }}
-                style={{ background:"#21262d", border:"1px solid #30363d", borderRadius:4, padding:"2px 8px", fontSize:10, color:"#58a6ff", cursor:"pointer", flexShrink:0 }}
+                style={{ background:th("#21262d","#c8b8a8"), border:"1px solid #30363d", borderRadius:4, padding:"2px 8px", fontSize:10, color:"#58a6ff", cursor:"pointer", flexShrink:0 }}
               >⛓ chain</button>
               <span style={{ fontSize:10, color:"#484f58" }}>{isOpen?"▲":"▼"}</span>
             </div>
             {isOpen && r.btoReasons?.length > 0 && (
               <div style={{ padding:"0 14px 10px 74px" }}>
-                <div style={{ background:"#0d1117", border:"1px solid #21262d", borderRadius:6, padding:"8px 12px" }}>
-                  <div style={{ fontFamily:"monospace", fontSize:9, color:"#3a4050", letterSpacing:"0.08em", marginBottom:6 }}>BTO ANALYSIS</div>
+                <div style={{ background:th("#0d1117","#f5f0e8"), border:"1px solid #21262d", borderRadius:6, padding:"8px 12px" }}>
+                  <div style={{ fontFamily:"monospace", fontSize:9, color:th("#3a4050","#8a7e74"), letterSpacing:"0.08em", marginBottom:6 }}>BTO ANALYSIS</div>
                   {r.btoReasons.map((line, i) => (
-                    <div key={i} style={{ fontSize:12, color:"#8b949e", lineHeight:"1.7", marginBottom: i < r.btoReasons.length-1 ? 2 : 0 }}>{line}</div>
+                    <div key={i} style={{ fontSize:12, color:th("#8b949e","#5a5248"), lineHeight:"1.7", marginBottom: i < r.btoReasons.length-1 ? 2 : 0 }}>{line}</div>
                   ))}
                 </div>
               </div>
@@ -2040,8 +2046,8 @@ function SageTab({ supabase, setTab, setSelectedTicker }) {
     setAiLoading(false);
   };
 
-  const cardStyle = { background: "#0d1117", border: "1px solid #1c2128", borderRadius: 6, padding: "10px 14px", marginBottom: 12 };
-  const labelStyle = { fontFamily: "monospace", fontSize: 9, color: "#3a4050", letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 6 };
+  const cardStyle = { background: th("#0d1117","#f5f0e8"), border: "1px solid #1c2128", borderRadius: 6, padding: "10px 14px", marginBottom: 12 };
+  const labelStyle = { fontFamily: "monospace", fontSize: 9, color: th("#3a4050","#8a7e74"), letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 6 };
   const metricStyle = { fontFamily: "monospace", fontSize: 20, fontWeight: 600, color: "#00ff88" };
   const subStyle = { fontFamily: "monospace", fontSize: 9, color: "#555", marginTop: 2 };
 
@@ -2064,7 +2070,7 @@ function SageTab({ supabase, setTab, setSelectedTicker }) {
           { label: "Avg premium", val: "$" + Math.round(metrics.avgPrem) },
           { label: "Tickers",     val: metrics.tickers },
         ].map(({ label, val }) => (
-          <div key={label} style={{ background: "#0d1117", border: "1px solid #1c2128", borderRadius: 6, padding: "8px 10px" }}>
+          <div key={label} style={{ background: th("#0d1117","#f5f0e8"), border: "1px solid #1c2128", borderRadius: 6, padding: "8px 10px" }}>
             <div style={labelStyle}>{label}</div>
             <div style={metricStyle}>{val}</div>
           </div>
@@ -2108,7 +2114,7 @@ function SageTab({ supabase, setTab, setSelectedTicker }) {
         <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: "monospace", fontSize: 10 }}>
           <thead>
             <tr>{["Ticker","Trades","Win %","Avg profit","Avg prem"].map(h => (
-              <th key={h} style={{ textAlign: "left", color: "#3a4050", fontSize: 9, padding: "3px 6px", borderBottom: "1px solid #1c2128" }}>{h}</th>
+              <th key={h} style={{ textAlign: "left", color: th("#3a4050","#8a7e74"), fontSize: 9, padding: "3px 6px", borderBottom: "1px solid #1c2128" }}>{h}</th>
             ))}</tr>
           </thead>
           <tbody>
@@ -2132,7 +2138,7 @@ function SageTab({ supabase, setTab, setSelectedTicker }) {
           <table style={{ width:"100%", borderCollapse:"collapse", fontFamily:"monospace", fontSize:10 }}>
             <thead>
               <tr>{["Factor","Signals","Avg","Median","Min","Max"].map(h => (
-                <th key={h} style={{ textAlign:"left", color:"#3a4050", fontSize:9, padding:"3px 8px", borderBottom:"1px solid #1c2128" }}>{h}</th>
+                <th key={h} style={{ textAlign:"left", color:th("#3a4050","#8a7e74"), fontSize:9, padding:"3px 8px", borderBottom:"1px solid #1c2128" }}>{h}</th>
               ))}</tr>
             </thead>
             <tbody>
@@ -2150,7 +2156,7 @@ function SageTab({ supabase, setTab, setSelectedTicker }) {
                     <td style={{ padding:"4px 8px", color:"#00ff88" }}>{f.name}</td>
                     <td style={{ padding:"4px 8px" }}>
                       <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-                        <div style={{ width:50, height:4, background:"#1c2128", borderRadius:2, overflow:"hidden" }}>
+                        <div style={{ width:50, height:4, background:th("#1c2128","#b8a898"), borderRadius:2, overflow:"hidden" }}>
                           <div style={{ width:`${barW}%`, height:"100%", background:"#185FA5", borderRadius:2 }} />
                         </div>
                         <span style={{ color:"#aaa" }}>{f.count}</span>
@@ -2165,7 +2171,7 @@ function SageTab({ supabase, setTab, setSelectedTicker }) {
               })}
             </tbody>
           </table>
-          <div style={{ marginTop:6, fontFamily:"monospace", fontSize:9, color:"#3a4050" }}>
+          <div style={{ marginTop:6, fontFamily:"monospace", fontSize:9, color:th("#3a4050","#8a7e74") }}>
             {factorValues.length} total rows · {new Set(factorValues.map(f => f.signal_id)).size} unique signals
           </div>
         </div>
@@ -2176,12 +2182,12 @@ function SageTab({ supabase, setTab, setSelectedTicker }) {
         <button
           onClick={askSage}
           disabled={aiLoading}
-          style={{ fontFamily: "monospace", fontSize: 10, background: "#0d1117", border: "1px solid #00ff88", borderRadius: 4, color: "#00ff88", padding: "6px 14px", cursor: aiLoading ? "default" : "pointer", opacity: aiLoading ? 0.5 : 1 }}
+          style={{ fontFamily: "monospace", fontSize: 10, background: th("#0d1117","#f5f0e8"), border: "1px solid #00ff88", borderRadius: 4, color: "#00ff88", padding: "6px 14px", cursor: aiLoading ? "default" : "pointer", opacity: aiLoading ? 0.5 : 1 }}
         >
           {aiLoading ? "asking sage..." : "◈ recommend factor weights"}
         </button>
         {aiResult && (
-          <div style={{ marginTop: 10, background: "#0d1117", border: "1px solid #1c2128", borderRadius: 6, padding: "10px 14px", fontFamily: "monospace", fontSize: 10, color: "#aaa", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+          <div style={{ marginTop: 10, background: th("#0d1117","#f5f0e8"), border: "1px solid #1c2128", borderRadius: 6, padding: "10px 14px", fontFamily: "monospace", fontSize: 10, color: "#aaa", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
             {aiResult}
           </div>
         )}
@@ -2345,8 +2351,8 @@ function SignalLogTab({ supabase }) {
   };
 
   const filterBtn = (key, label, count) => (
-    <button key={key} onClick={() => setFilter(key)} style={{background: filter===key ? "#1c2128" : "transparent", border:"1px solid " + (filter===key ? "#30363d" : "transparent"), borderRadius:4, padding:"2px 7px", fontSize:8, fontFamily:"monospace", color: filter===key ? "#e6edf3" : "#555", cursor:"pointer"}}>
-      {label}{count != null ? <span style={{marginLeft:4,color:"#3a4050"}}>{count}</span> : null}
+    <button key={key} onClick={() => setFilter(key)} style={{background: filter===key ? th("#1c2128","#b8a898") : "transparent", border:"1px solid " + (filter===key ? th("#30363d","#c0b0a0") : "transparent"), borderRadius:4, padding:"2px 7px", fontSize:8, fontFamily:"monospace", color: filter===key ? th("#e6edf3","#0d0d0b") : "#555", cursor:"pointer"}}>
+      {label}{count != null ? <span style={{marginLeft:4,color:th("#3a4050","#8a7e74")}}>{count}</span> : null}
     </button>
   );
 
@@ -2354,46 +2360,46 @@ function SignalLogTab({ supabase }) {
     <div style={{padding:"0 4px"}}>
       {/* Filter bar */}
       <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:10,flexWrap:"wrap"}}>
-        <span style={{fontFamily:"monospace",fontSize:9,color:"#3a4050",letterSpacing:"0.08em",marginRight:2}}>SIGNAL LOG</span>
+        <span style={{fontFamily:"monospace",fontSize:9,color:th("#3a4050","#8a7e74"),letterSpacing:"0.08em",marginRight:2}}>SIGNAL LOG</span>
         {filterBtn("all",   "ALL",       null)}
         {filterBtn("sto",   "STO",       counts.sto)}
         {filterBtn("committed","COMMITTED",counts.committed)}
         {filterBtn("anomaly",  "ANOMALY",  counts.anomaly)}
-        <span style={{marginLeft:8,fontFamily:"monospace",fontSize:8,color:"#3a4050"}}>|</span>
+        <span style={{marginLeft:8,fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74")}}>|</span>
         {["all","pushed","suppressed"].map(p => (
-          <button key={p} onClick={() => setPushedFilt(p)} style={{background: pushedFilt===p ? "#1c2128" : "transparent", border:"1px solid " + (pushedFilt===p ? "#30363d" : "transparent"), borderRadius:4, padding:"2px 7px", fontSize:8, fontFamily:"monospace", color: pushedFilt===p ? "#e6edf3" : "#555", cursor:"pointer"}}>
+          <button key={p} onClick={() => setPushedFilt(p)} style={{background: pushedFilt===p ? th("#1c2128","#b8a898") : "transparent", border:"1px solid " + (pushedFilt===p ? th("#30363d","#c0b0a0") : "transparent"), borderRadius:4, padding:"2px 7px", fontSize:8, fontFamily:"monospace", color: pushedFilt===p ? th("#e6edf3","#0d0d0b") : "#555", cursor:"pointer"}}>
             {p === "all" ? "ALL PUSH" : p === "pushed" ? "✓ PUSHED" : "✗ SUPPRESSED"}
           </button>
         ))}
-        <span style={{marginLeft:"auto",fontFamily:"monospace",fontSize:8,color:"#3a4050"}}>{filtered.length} rows</span>
+        <span style={{marginLeft:"auto",fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74")}}>{filtered.length} rows</span>
         <button onClick={() => setShowAddReason(p => !p)}
-          style={{background:"transparent",border:"1px solid #1c2128",borderRadius:4,padding:"2px 8px",fontSize:9,fontFamily:"monospace",color:"#3a4050",cursor:"pointer"}}>
+          style={{background:"transparent",border:"1px solid #1c2128",borderRadius:4,padding:"2px 8px",fontSize:9,fontFamily:"monospace",color:th("#3a4050","#8a7e74"),cursor:"pointer"}}>
           {showAddReason ? "cancel" : "+ reason"}
         </button>
       </div>
 
       {/* ── Add Reason form ── */}
       {showAddReason && (
-        <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:6,padding:"12px 14px",marginBottom:10}}>
-          <div style={{fontFamily:"monospace",fontSize:9,color:"#3a4050",letterSpacing:"0.07em",marginBottom:8}}>ADD REASON</div>
+        <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:6,padding:"12px 14px",marginBottom:10}}>
+          <div style={{fontFamily:"monospace",fontSize:9,color:th("#3a4050","#8a7e74"),letterSpacing:"0.07em",marginBottom:8}}>ADD REASON</div>
           <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"flex-end"}}>
             <div style={{flex:"1 1 120px"}}>
-              <div style={{fontFamily:"monospace",fontSize:8,color:"#3a4050",marginBottom:3}}>REASON *</div>
+              <div style={{fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74"),marginBottom:3}}>REASON *</div>
               <input value={newReason.reason} onChange={e=>setNewReason(p=>({...p,reason:e.target.value}))}
                 placeholder="e.g. Too Early"
-                style={{width:"100%",background:"#0d1117",border:"1px solid #21262d",borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"monospace",color:"#c9d1d9",boxSizing:"border-box"}} />
+                style={{width:"100%",background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"monospace",color:th("#c9d1d9","#1a1a18"),boxSizing:"border-box"}} />
             </div>
             <div style={{flex:"2 1 200px"}}>
-              <div style={{fontFamily:"monospace",fontSize:8,color:"#3a4050",marginBottom:3}}>DESCRIPTION</div>
+              <div style={{fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74"),marginBottom:3}}>DESCRIPTION</div>
               <input value={newReason.description} onChange={e=>setNewReason(p=>({...p,description:e.target.value}))}
                 placeholder="e.g. Signal fired before market settled"
-                style={{width:"100%",background:"#0d1117",border:"1px solid #21262d",borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"monospace",color:"#c9d1d9",boxSizing:"border-box"}} />
+                style={{width:"100%",background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"monospace",color:th("#c9d1d9","#1a1a18"),boxSizing:"border-box"}} />
             </div>
             <div style={{flex:"1 1 160px"}}>
-              <div style={{fontFamily:"monospace",fontSize:8,color:"#3a4050",marginBottom:3}}>ACTION</div>
+              <div style={{fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74"),marginBottom:3}}>ACTION</div>
               <input value={newReason.action} onChange={e=>setNewReason(p=>({...p,action:e.target.value}))}
                 placeholder="e.g. Adjust timing"
-                style={{width:"100%",background:"#0d1117",border:"1px solid #21262d",borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"monospace",color:"#c9d1d9",boxSizing:"border-box"}} />
+                style={{width:"100%",background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"monospace",color:th("#c9d1d9","#1a1a18"),boxSizing:"border-box"}} />
             </div>
             <button onClick={addReason}
               style={{background:"#00ff8820",border:"1px solid #00ff8840",borderRadius:4,padding:"5px 14px",fontSize:11,fontFamily:"monospace",color:"#00ff88",cursor:"pointer",whiteSpace:"nowrap"}}>
@@ -2403,7 +2409,7 @@ function SignalLogTab({ supabase }) {
           {reasons.length > 0 && (
             <div style={{marginTop:10,display:"flex",gap:6,flexWrap:"wrap"}}>
               {reasons.map(r => (
-                <span key={r.id} style={{fontFamily:"monospace",fontSize:9,background:"#1c2128",borderRadius:3,padding:"2px 8px",color:"#8b949e"}}
+                <span key={r.id} style={{fontFamily:"monospace",fontSize:9,background:th("#1c2128","#b8a898"),borderRadius:3,padding:"2px 8px",color:th("#8b949e","#5a5248")}}
                   title={[r.description, r.action ? "Action: "+r.action : ""].filter(Boolean).join(" · ")}>
                   {r.reason}
                 </span>
@@ -2414,30 +2420,30 @@ function SignalLogTab({ supabase }) {
       )}
 
       {loading ? (
-        <div style={{color:"#3a4050",fontFamily:"monospace",fontSize:11,padding:20}}>Loading...</div>
+        <div style={{color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:11,padding:20}}>Loading...</div>
       ) : (
-        <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,overflow:"auto"}}>
+        <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8,overflow:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
             <thead><tr style={{borderBottom:"1px solid #1c2128"}}>
               {["Time","Type","Symbol","Account","Price","Chg%","VIX","Strike","Exp","DTE","OTM%","Qty","Est$","Profit%","Pushed",""].map(h => (
-                <th key={h} style={{padding:"7px 10px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,whiteSpace:"nowrap"}}>{h}</th>
+                <th key={h} style={{padding:"7px 10px",textAlign:"left",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:10,whiteSpace:"nowrap"}}>{h}</th>
               ))}
             </tr></thead>
             <tbody>
               {filtered.length === 0 && (
-                <tr><td colSpan={16} style={{padding:20,textAlign:"center",color:"#3a4050",fontFamily:"monospace",fontSize:12}}>No signals yet</td></tr>
+                <tr><td colSpan={16} style={{padding:20,textAlign:"center",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:12}}>No signals yet</td></tr>
               )}
               {filtered.map(s => (
                 <Fragment key={s.id}>
                   <tr style={{borderTop:"1px solid #0d1117", background: expanded===s.id ? "#0d1a0d" : "transparent"}}>
                     <td style={{padding:"7px 10px",fontFamily:"monospace",fontSize:11,color:"#555",whiteSpace:"nowrap"}}>{s.created_at ? new Date(s.created_at).toLocaleString("en-US", { timeZone:"America/New_York", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit", hour12:false }).replace(",","") : "—"}</td>
                     <td style={{padding:"7px 10px"}}><span style={{fontFamily:"monospace",fontSize:11,fontWeight:700,color:typeColor(s.signal_type)}}>{typeLabel(s.signal_type)}</span></td>
-                    <td style={{padding:"7px 10px",fontFamily:"'JetBrains Mono',monospace",fontWeight:700,color:"#e6edf3",fontSize:13}}>{s.symbol}</td>
+                    <td style={{padding:"7px 10px",fontFamily:"'JetBrains Mono',monospace",fontWeight:700,color:th("#e6edf3","#0d0d0b"),fontSize:13}}>{s.symbol}</td>
                     <td style={{padding:"7px 10px",fontFamily:"monospace",fontSize:11,color:"#555"}}>{s.account}</td>
-                    <td style={{padding:"7px 10px",fontFamily:"monospace",fontSize:11,color:"#c9d1d9"}}>{s.stock_price != null ? "$" + (+s.stock_price).toFixed(2) : "—"}</td>
+                    <td style={{padding:"7px 10px",fontFamily:"monospace",fontSize:11,color:th("#c9d1d9","#1a1a18")}}>{s.stock_price != null ? "$" + (+s.stock_price).toFixed(2) : "—"}</td>
                     <td style={{padding:"7px 10px",fontFamily:"monospace",fontSize:11,color: s.change_pct >= 0 ? "#00ff88" : "#ff4560"}}>{s.change_pct != null ? (s.change_pct >= 0 ? "+" : "") + (+s.change_pct).toFixed(2) + "%" : "—"}</td>
                     <td style={{padding:"7px 10px",fontFamily:"monospace",fontSize:11,color:"#888"}}>{s.vix != null ? (+s.vix).toFixed(1) : "—"}</td>
-                    <td style={{padding:"7px 10px",fontFamily:"monospace",fontSize:11,color:"#c9d1d9"}}>{s.strike ? "$" + s.strike : "—"}</td>
+                    <td style={{padding:"7px 10px",fontFamily:"monospace",fontSize:11,color:th("#c9d1d9","#1a1a18")}}>{s.strike ? "$" + s.strike : "—"}</td>
                     <td style={{padding:"7px 10px",fontFamily:"monospace",fontSize:11,color:"#555",whiteSpace:"nowrap"}}>{s.expires || "—"}</td>
                     <td style={{padding:"7px 10px",fontFamily:"monospace",fontSize:11,color:"#888"}}>{s.dte ?? "—"}</td>
                     <td style={{padding:"7px 10px",fontFamily:"monospace",fontSize:11,color:"#888"}}>{fmtPct(s.otm_pct)}</td>
@@ -2454,16 +2460,16 @@ function SignalLogTab({ supabase }) {
                               const q = "good";
                               const { error } = await supabase.from("signal_outcomes").upsert({ signal_id: s.id, signal_quality: q, feedback_at: new Date().toISOString() }, { onConflict: "signal_id" });
                               if (!error) setFeedback(p=>({...p,[String(s.id)]:q}));
-                            }} style={{background: feedback[String(s.id)]==="good" ? "#00ff8825" : "transparent", border:"1px solid "+(feedback[String(s.id)]==="good"?"#00ff8860":"#1c2128"), borderRadius:3, padding:"2px 5px", fontSize:12, cursor:"pointer", lineHeight:1}}>👍</button>
+                            }} style={{background: feedback[String(s.id)]==="good" ? "#00ff8825" : "transparent", border:"1px solid "+(feedback[String(s.id)]==="good"?"#00ff8860":th("#1c2128","#b8a898")), borderRadius:3, padding:"2px 5px", fontSize:12, cursor:"pointer", lineHeight:1}}>👍</button>
                             <button title="Bad signal" onClick={async()=>{
                               const q = "bad";
                               const { error } = await supabase.from("signal_outcomes").upsert({ signal_id: s.id, signal_quality: q, feedback_at: new Date().toISOString() }, { onConflict: "signal_id" });
                               if (!error) setFeedback(p=>({...p,[String(s.id)]:q}));
-                            }} style={{background: feedback[String(s.id)]==="bad" ? "#ff456025" : "transparent", border:"1px solid "+(feedback[String(s.id)]==="bad"?"#ff456060":"#1c2128"), borderRadius:3, padding:"2px 5px", fontSize:12, cursor:"pointer", lineHeight:1}}>👎</button>
+                            }} style={{background: feedback[String(s.id)]==="bad" ? "#ff456025" : "transparent", border:"1px solid "+(feedback[String(s.id)]==="bad"?"#ff456060":th("#1c2128","#b8a898")), borderRadius:3, padding:"2px 5px", fontSize:12, cursor:"pointer", lineHeight:1}}>👎</button>
                           </>
                         )}
                         {saved[String(s.id)] ? (
-                          <span style={{fontFamily:"monospace",fontSize:11,color:"#3a4050"}}>✓ {saved[String(s.id)]}</span>
+                          <span style={{fontFamily:"monospace",fontSize:11,color:th("#3a4050","#8a7e74")}}>✓ {saved[String(s.id)]}</span>
                         ) : (
                           <button onClick={() => {
                             const newExp = expanded === s.id ? null : s.id;
@@ -2471,7 +2477,7 @@ function SignalLogTab({ supabase }) {
                             setDecNotes("");
                             if (newExp && s._source === "signal_log") loadFactors(s.id);
                           }}
-                            style={{background:"transparent",border:"1px solid #1c2128",borderRadius:3,padding:"3px 10px",fontSize:11,fontFamily:"monospace",color:"#3a4050",cursor:"pointer",whiteSpace:"nowrap"}}>
+                            style={{background:"transparent",border:"1px solid #1c2128",borderRadius:3,padding:"3px 10px",fontSize:11,fontFamily:"monospace",color:th("#3a4050","#8a7e74"),cursor:"pointer",whiteSpace:"nowrap"}}>
                             {expanded === s.id ? "cancel" : "log"}
                           </button>
                         )}
@@ -2490,7 +2496,7 @@ function SignalLogTab({ supabase }) {
                           ))}
                           {/* Quick dismiss reason — shown when "passed" is about to be clicked */}
                           <select value={dismissReason} onChange={e => setDismissReason(e.target.value)}
-                            style={{background:"#0a0e14",border:"1px solid #ff456030",borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"monospace",color:dismissReason?"#ff4560":"#555"}}>
+                            style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #ff456030",borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"monospace",color:dismissReason?"#ff4560":"#555"}}>
                             <option value="">dismiss reason (optional)</option>
                             {["Too risky","Wrong timing","Already positioned","Low premium","Other"].map(r=>(
                               <option key={r} value={r}>{r}</option>
@@ -2498,7 +2504,7 @@ function SignalLogTab({ supabase }) {
                           </select>
                           {/* Reason dropdown */}
                           <select value={decReason} onChange={e => { setDecReason(e.target.value); if (e.target.value !== "other") setDecNotes(""); }}
-                            style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"monospace",color: decReason ? "#c9d1d9" : "#555"}}>
+                            style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"monospace",color: decReason ? th("#c9d1d9","#1a1a18") : "#555"}}>
                             <option value="">reason (optional)</option>
                             {reasons.map(r => (
                               <option key={r.id} value={String(r.id)} title={r.action ? "Action: "+r.action : ""}>{r.reason}</option>
@@ -2508,9 +2514,9 @@ function SignalLogTab({ supabase }) {
                           {/* Notes — always shown for "other", optional otherwise */}
                           <input value={decNotes} onChange={e => setDecNotes(e.target.value)}
                             placeholder={decReason === "other" ? "describe reason..." : "notes (optional)..."}
-                            style={{flex:1,minWidth:140,background:"#0a0e14",border:"1px solid " + (decReason==="other" ? "#ffd16660" : "#1c2128"),borderRadius:4,padding:"5px 10px",fontSize:11,fontFamily:"monospace",color:"#c9d1d9"}} />
+                            style={{flex:1,minWidth:140,background:th("#0a0e14","#f8f3eb"),border:"1px solid " + (decReason==="other" ? "#ffd16660" : th("#1c2128","#b8a898")),borderRadius:4,padding:"5px 10px",fontSize:11,fontFamily:"monospace",color:th("#c9d1d9","#1a1a18")}} />
                           {s.signal_type === "sto_suggestion" && contractsForSymbol(s.symbol).length > 0 && (
-                            <select style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"monospace",color:"#c9d1d9"}}>
+                            <select style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"monospace",color:th("#c9d1d9","#1a1a18")}}>
                               <option value="">link contract (optional)</option>
                               {contractsForSymbol(s.symbol).map(c => (
                                 <option key={c.id} value={c.id}>{c.stock} ${c.strike} {c.type} {c.expires} ×{c.qty} ({c.account})</option>
@@ -2522,9 +2528,9 @@ function SignalLogTab({ supabase }) {
                         {s._source === "signal_log" && (() => {
                           const factors = factorMap[s.id];
                           const isLoading = factorLoading[s.id];
-                          if (isLoading) return <div style={{fontFamily:"monospace",fontSize:9,color:"#3a4050",paddingTop:8}}>loading factors...</div>;
+                          if (isLoading) return <div style={{fontFamily:"monospace",fontSize:9,color:th("#3a4050","#8a7e74"),paddingTop:8}}>loading factors...</div>;
                           if (!factors || !Object.keys(factors).length) return (
-                            <div style={{fontFamily:"monospace",fontSize:9,color:"#3a4050",paddingTop:8}}>no factor data for this signal</div>
+                            <div style={{fontFamily:"monospace",fontSize:9,color:th("#3a4050","#8a7e74"),paddingTop:8}}>no factor data for this signal</div>
                           );
                           // Factor display config: label, color fn, format fn
                           const FACTOR_DISPLAY = {
@@ -2549,7 +2555,7 @@ function SignalLogTab({ supabase }) {
                           };
                           return (
                             <div style={{marginTop:10,padding:"8px 10px",background:"#070b0f",border:"1px solid #1c2128",borderRadius:4}}>
-                              <div style={{fontFamily:"monospace",fontSize:8,color:"#3a4050",letterSpacing:"0.08em",marginBottom:6}}>SAGE FACTORS</div>
+                              <div style={{fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74"),letterSpacing:"0.08em",marginBottom:6}}>SAGE FACTORS</div>
                               <div style={{display:"flex",flexWrap:"wrap",gap:"6px 16px"}}>
                                 {Object.entries(factors).map(([key, val]) => {
                                   if (val == null) return null;
@@ -2559,7 +2565,7 @@ function SignalLogTab({ supabase }) {
                                   if (!display) return null;
                                   return (
                                     <div key={key} style={{display:"flex",flexDirection:"column",gap:1}}>
-                                      <span style={{fontFamily:"monospace",fontSize:7,color:"#3a4050",letterSpacing:"0.06em"}}>{cfg.label}</span>
+                                      <span style={{fontFamily:"monospace",fontSize:7,color:th("#3a4050","#8a7e74"),letterSpacing:"0.06em"}}>{cfg.label}</span>
                                       <span style={{fontFamily:"monospace",fontSize:11,color:cfg.color(val)}}>{display}</span>
                                     </div>
                                   );
@@ -2572,7 +2578,7 @@ function SignalLogTab({ supabase }) {
                         {decReason && decReason !== "other" && (() => {
                           const r = reasons.find(r => String(r.id) === decReason);
                           return r?.action ? (
-                            <div style={{fontFamily:"monospace",fontSize:9,color:"#3a4050",paddingTop:6,paddingLeft:2}}>
+                            <div style={{fontFamily:"monospace",fontSize:9,color:th("#3a4050","#8a7e74"),paddingTop:6,paddingLeft:2}}>
                               suggested action: <span style={{color:"#ffd166"}}>{r.action}</span>
                             </div>
                           ) : null;
@@ -2596,7 +2602,7 @@ function SignalLogTab({ supabase }) {
 // ── Theme ─────────────────────────────────────────────────────────────────────
 const T = {
   bg:       "#080b10",
-  surface:  "#0d1117",
+  surface:  th("#0d1117","#f5f0e8"),
   card:     "#111620",
   border:   "#1a2030",
   border2:  "#242e40",
@@ -2906,7 +2912,7 @@ function ChainOrderPanel({ trade, onClose, onOrderPlaced }) {
 
   if (success) {
     return (
-      <div style={{margin:"10px 0",background:"#0a0e14",border:"1px solid #00ff8825",borderRadius:8,padding:13}}>
+      <div style={{margin:"10px 0",background:th("#0a0e14","#f8f3eb"),border:"1px solid #00ff8825",borderRadius:8,padding:13}}>
         <div style={{fontSize:13,color:"#00ff88",fontFamily:"monospace",marginBottom:8}}>{success}</div>
         <button onClick={onClose} style={{background:"transparent",color:"#555",border:"1px solid #21262d",borderRadius:6,padding:"7px 13px",fontSize:11,cursor:"pointer"}}>Done</button>
       </div>
@@ -2914,7 +2920,7 @@ function ChainOrderPanel({ trade, onClose, onOrderPlaced }) {
   }
 
   return (
-    <div style={{margin:"10px 0",background:"#0a0e14",border:"1px solid #00ff8825",borderRadius:8,padding:13,animation:"fadeIn .2s"}}>
+    <div style={{margin:"10px 0",background:th("#0a0e14","#f8f3eb"),border:"1px solid #00ff8825",borderRadius:8,padding:13,animation:"fadeIn .2s"}}>
       {/* Header */}
       <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:10}}>
         <div style={{width:5,height:5,borderRadius:"50%",background:"#00ff88"}}/>
@@ -2927,31 +2933,31 @@ function ChainOrderPanel({ trade, onClose, onOrderPlaced }) {
       {/* Controls — side/qty/order type/duration */}
       <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
         <div>
-          <div style={{fontSize:8,color:"#3a4050",letterSpacing:"0.08em",marginBottom:4}}>SIDE</div>
+          <div style={{fontSize:8,color:th("#3a4050","#8a7e74"),letterSpacing:"0.08em",marginBottom:4}}>SIDE</div>
           <div style={{display:"flex"}}>
             {[["STO","#00ff88"],["BTO","#c084fc"]].map(([t,col],i)=>(
               <button key={t} onClick={()=>setOptType(t)}
-                style={{background:optType===t?col+"22":"transparent",color:optType===t?col:"#555",border:`1px solid ${optType===t?col+"44":"#21262d"}`,borderRadius:i===0?"4px 0 0 4px":"0 4px 4px 0",padding:"4px 12px",fontSize:10,fontFamily:"monospace",cursor:"pointer",fontWeight:600}}>
+                style={{background:optType===t?col+"22":"transparent",color:optType===t?col:"#555",border:`1px solid ${optType===t?col+"44":th("#21262d","#c8b8a8")}`,borderRadius:i===0?"4px 0 0 4px":"0 4px 4px 0",padding:"4px 12px",fontSize:10,fontFamily:"monospace",cursor:"pointer",fontWeight:600}}>
                 {t}
               </button>
             ))}
           </div>
         </div>
         <div>
-          <div style={{fontSize:8,color:"#3a4050",letterSpacing:"0.08em",marginBottom:4}}>QTY</div>
+          <div style={{fontSize:8,color:th("#3a4050","#8a7e74"),letterSpacing:"0.08em",marginBottom:4}}>QTY</div>
           <div style={{display:"flex",alignItems:"center",gap:4}}>
-            <button onClick={()=>setQty(q=>Math.max(1,q-1))} style={{width:22,height:22,background:"#21262d",color:"#e6edf3",border:"none",borderRadius:3,cursor:"pointer",fontSize:14,lineHeight:1}}>−</button>
-            <span style={{fontFamily:"monospace",fontSize:13,color:"#e6edf3",minWidth:20,textAlign:"center"}}>{qty}</span>
-            <button onClick={()=>setQty(q=>Math.min(20,q+1))} style={{width:22,height:22,background:"#21262d",color:"#e6edf3",border:"none",borderRadius:3,cursor:"pointer",fontSize:14,lineHeight:1}}>+</button>
+            <button onClick={()=>setQty(q=>Math.max(1,q-1))} style={{width:22,height:22,background:th("#21262d","#c8b8a8"),color:th("#e6edf3","#0d0d0b"),border:"none",borderRadius:3,cursor:"pointer",fontSize:14,lineHeight:1}}>−</button>
+            <span style={{fontFamily:"monospace",fontSize:13,color:th("#e6edf3","#0d0d0b"),minWidth:20,textAlign:"center"}}>{qty}</span>
+            <button onClick={()=>setQty(q=>Math.min(20,q+1))} style={{width:22,height:22,background:th("#21262d","#c8b8a8"),color:th("#e6edf3","#0d0d0b"),border:"none",borderRadius:3,cursor:"pointer",fontSize:14,lineHeight:1}}>+</button>
           </div>
         </div>
         {[["ORDER TYPE",["LIMIT","MARKET"],"orderType","#ffd166",setOrderType],["DURATION",[["DAY","Day"],["GTC","GTC"]],"duration","#58a6ff",setDuration]].map(([label,opts,key,color,setter])=>(
           <div key={key}>
-            <div style={{fontSize:8,color:"#3a4050",letterSpacing:"0.08em",marginBottom:4}}>{label}</div>
+            <div style={{fontSize:8,color:th("#3a4050","#8a7e74"),letterSpacing:"0.08em",marginBottom:4}}>{label}</div>
             <div style={{display:"flex"}}>
               {opts.map((o,i)=>{const[val,lbl]=Array.isArray(o)?o:[o,o];const cur=key==="orderType"?orderType:duration;return(
                 <button key={val} onClick={()=>setter(val)}
-                  style={{background:cur===val?color+"22":"transparent",color:cur===val?color:"#555",border:`1px solid ${cur===val?color+"44":"#21262d"}`,borderRadius:i===0?"4px 0 0 4px":"0 4px 4px 0",padding:"4px 10px",fontSize:10,fontFamily:"monospace",cursor:"pointer"}}>{lbl}</button>
+                  style={{background:cur===val?color+"22":"transparent",color:cur===val?color:"#555",border:`1px solid ${cur===val?color+"44":th("#21262d","#c8b8a8")}`,borderRadius:i===0?"4px 0 0 4px":"0 4px 4px 0",padding:"4px 10px",fontSize:10,fontFamily:"monospace",cursor:"pointer"}}>{lbl}</button>
               );})}
             </div>
           </div>
@@ -2960,11 +2966,11 @@ function ChainOrderPanel({ trade, onClose, onOrderPlaced }) {
 
       {/* Account */}
       <div style={{marginBottom:10}}>
-        <div style={{fontSize:8,color:"#3a4050",letterSpacing:"0.08em",marginBottom:5}}>ACCOUNT</div>
+        <div style={{fontSize:8,color:th("#3a4050","#8a7e74"),letterSpacing:"0.08em",marginBottom:5}}>ACCOUNT</div>
         <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
           {ACCOUNTS.map(a=>(
             <button key={a} onClick={()=>{setAccount(a);setPreview(null);setError(null);}}
-              style={{background:account===a?"#58a6ff22":"#080c12",color:account===a?"#58a6ff":"#555",border:`1px solid ${account===a?"#58a6ff44":"#21262d"}`,borderRadius:5,padding:"5px 12px",fontSize:10,fontFamily:"monospace",cursor:"pointer",fontWeight:account===a?700:400}}>
+              style={{background:account===a?"#58a6ff22":th("#080c12","#ede8df"),color:account===a?"#58a6ff":"#555",border:`1px solid ${account===a?"#58a6ff44":th("#21262d","#c8b8a8")}`,borderRadius:5,padding:"5px 12px",fontSize:10,fontFamily:"monospace",cursor:"pointer",fontWeight:account===a?700:400}}>
               {a}
             </button>
           ))}
@@ -2973,8 +2979,8 @@ function ChainOrderPanel({ trade, onClose, onOrderPlaced }) {
 
       {/* Limit price — bid/mid/ask click buttons + nudger, mirrors close form */}
       {orderType === "LIMIT" && (
-        <div style={{background:"#080c12",border:"1px solid #21262d",borderRadius:6,padding:"8px 10px",marginBottom:10}}>
-          <div style={{fontSize:8,color:"#3a4050",letterSpacing:"0.08em",marginBottom:6}}>LIMIT PRICE</div>
+        <div style={{background:th("#080c12","#ede8df"),border:"1px solid #21262d",borderRadius:6,padding:"8px 10px",marginBottom:10}}>
+          <div style={{fontSize:8,color:th("#3a4050","#8a7e74"),letterSpacing:"0.08em",marginBottom:6}}>LIMIT PRICE</div>
           <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
             {[["Bid",bid,"#ff4560"],["Mid",mid,"#00ff88"],["Ask",ask,"#58a6ff"]].map(([lbl,val,color])=>
               val!=null && (
@@ -2984,28 +2990,28 @@ function ChainOrderPanel({ trade, onClose, onOrderPlaced }) {
                 </button>
               )
             )}
-            <button onClick={()=>setLimitPrice(p=>Math.max(0.01,Math.round(((p||0)-0.01)*100)/100))} style={{width:22,height:22,background:"#21262d",color:"#e6edf3",border:"none",borderRadius:3,cursor:"pointer",fontSize:13,lineHeight:1}}>−</button>
+            <button onClick={()=>setLimitPrice(p=>Math.max(0.01,Math.round(((p||0)-0.01)*100)/100))} style={{width:22,height:22,background:th("#21262d","#c8b8a8"),color:th("#e6edf3","#0d0d0b"),border:"none",borderRadius:3,cursor:"pointer",fontSize:13,lineHeight:1}}>−</button>
             <span style={{fontFamily:"monospace",fontSize:13,color:"#ffd166",minWidth:40,textAlign:"center"}}>${(limitPrice||0).toFixed(2)}</span>
-            <button onClick={()=>setLimitPrice(p=>Math.round(((p||0)+0.01)*100)/100)} style={{width:22,height:22,background:"#21262d",color:"#e6edf3",border:"none",borderRadius:3,cursor:"pointer",fontSize:13,lineHeight:1}}>+</button>
+            <button onClick={()=>setLimitPrice(p=>Math.round(((p||0)+0.01)*100)/100)} style={{width:22,height:22,background:th("#21262d","#c8b8a8"),color:th("#e6edf3","#0d0d0b"),border:"none",borderRadius:3,cursor:"pointer",fontSize:13,lineHeight:1}}>+</button>
             <input type="number" step="0.01" min="0.01" value={limitPrice??""} onChange={e=>setLimitPrice(e.target.value?+e.target.value:null)}
-              style={{width:64,background:"#161b22",color:"#ffd166",border:"1px solid #30363d",borderRadius:4,padding:"3px 6px",fontFamily:"monospace",fontSize:11}}/>
+              style={{width:64,background:th("#161b22","#ede8df"),color:"#ffd166",border:"1px solid #30363d",borderRadius:4,padding:"3px 6px",fontFamily:"monospace",fontSize:11}}/>
           </div>
         </div>
       )}
 
       {/* Order summary box — always visible */}
-      <div style={{background:"#080c12",border:"1px solid #21262d",borderRadius:6,padding:"8px 10px",marginBottom:10,fontFamily:"monospace",fontSize:11}}>
-        <div style={{fontSize:8,color:"#3a4050",letterSpacing:"0.08em",marginBottom:6}}>ORDER SUMMARY</div>
+      <div style={{background:th("#080c12","#ede8df"),border:"1px solid #21262d",borderRadius:6,padding:"8px 10px",marginBottom:10,fontFamily:"monospace",fontSize:11}}>
+        <div style={{fontSize:8,color:th("#3a4050","#8a7e74"),letterSpacing:"0.08em",marginBottom:6}}>ORDER SUMMARY</div>
         <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
           {[
-            ["Action",    `${optType} ${qty}×`,                  "#e6edf3"],
-            ["Strike",    `$${trade.strike} ${trade.optType}`,   "#e6edf3"],
-            ["Expires",   trade.expiry,                          "#8b949e"],
+            ["Action",    `${optType} ${qty}×`,                  th("#e6edf3","#0d0d0b")],
+            ["Strike",    `$${trade.strike} ${trade.optType}`,   th("#e6edf3","#0d0d0b")],
+            ["Expires",   trade.expiry,                          th("#8b949e","#5a5248")],
             ["Est. Value",estCost!=null?`$${estCost.toFixed(2)}`:"—","#ffd166"],
             ["Live Mid",  preview?.livePrice?.mid!=null?`$${preview.livePrice.mid.toFixed(2)}`:(mid!=null?`$${mid.toFixed(2)}`:"—"),"#00ff88"],
           ].map(([label,val,color])=>(
             <div key={label}>
-              <div style={{fontSize:8,color:"#3a4050",letterSpacing:"0.06em"}}>{label}</div>
+              <div style={{fontSize:8,color:th("#3a4050","#8a7e74"),letterSpacing:"0.06em"}}>{label}</div>
               <div style={{color}}>{val}</div>
             </div>
           ))}
@@ -3016,7 +3022,7 @@ function ChainOrderPanel({ trade, onClose, onOrderPlaced }) {
 
       {!preview ? (
         <button onClick={fetchPreview} disabled={loading||!account}
-          style={{background:account?"#ffd166":"#21262d",color:account?"#010409":"#3a4050",border:"none",borderRadius:6,padding:"7px 18px",fontSize:11,fontWeight:700,fontFamily:"monospace",cursor:account?"pointer":"not-allowed"}}>
+          style={{background:account?"#ffd166":th("#21262d","#c8b8a8"),color:account?th("#010409","#f5f0e8"):th("#3a4050","#8a7e74"),border:"none",borderRadius:6,padding:"7px 18px",fontSize:11,fontWeight:700,fontFamily:"monospace",cursor:account?"pointer":"not-allowed"}}>
           {loading?"Fetching…":"Get Live Price →"}
         </button>
       ) : (
@@ -3036,12 +3042,12 @@ function ChainOrderPanel({ trade, onClose, onOrderPlaced }) {
             <button onClick={()=>{setPreview(null);setError(null);}}
               style={{background:"transparent",color:"#555",border:"1px solid #21262d",borderRadius:6,padding:"7px 13px",fontSize:11,cursor:"pointer"}}>← Back</button>
             <button onClick={()=>setShowRaw(v=>!v)}
-              style={{background:"transparent",color:"#3a4050",border:"1px solid #21262d",borderRadius:6,padding:"7px 13px",fontSize:11,cursor:"pointer",fontFamily:"monospace"}}>
+              style={{background:"transparent",color:th("#3a4050","#8a7e74"),border:"1px solid #21262d",borderRadius:6,padding:"7px 13px",fontSize:11,cursor:"pointer",fontFamily:"monospace"}}>
               {showRaw?"▲ Hide":"{ } JSON"}
             </button>
           </div>
           {showRaw && rawPayload && (
-            <pre style={{marginTop:8,background:"#080c12",border:"1px solid #21262d",borderRadius:5,padding:"8px",fontSize:9,color:"#8b949e",fontFamily:"monospace",overflowX:"auto",whiteSpace:"pre-wrap"}}>
+            <pre style={{marginTop:8,background:th("#080c12","#ede8df"),border:"1px solid #21262d",borderRadius:5,padding:"8px",fontSize:9,color:th("#8b949e","#5a5248"),fontFamily:"monospace",overflowX:"auto",whiteSpace:"pre-wrap"}}>
               {JSON.stringify(rawPayload,null,2)}
             </pre>
           )}
@@ -3130,22 +3136,22 @@ function CatalystPanel({ ticker }) {
   };
 
   return (
-    <div style={{ background:"#0a0e14", border:"1px solid #1c2128", borderRadius:8, padding:13 }}>
+    <div style={{ background:th("#0a0e14","#f8f3eb"), border:"1px solid #1c2128", borderRadius:8, padding:13 }}>
       {/* Header row */}
       <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom: hasCatalysts ? 10 : 4 }}>
-        <span style={{ fontFamily:"monospace", fontSize:7, color:"#2a3040", letterSpacing:"0.08em" }}>CATALYSTS</span>
-        {loading && <span style={{ fontSize:7, color:"#3a4050", fontFamily:"monospace" }}>loading…</span>}
+        <span style={{ fontFamily:"monospace", fontSize:7, color:th("#2a3040","#6b5f55"), letterSpacing:"0.08em" }}>CATALYSTS</span>
+        {loading && <span style={{ fontSize:7, color:th("#3a4050","#8a7e74"), fontFamily:"monospace" }}>loading…</span>}
         {fetchMsg && <span style={{ fontSize:8, color:"#00ff88", fontFamily:"monospace" }}>{fetchMsg}</span>}
         {fetchError && <span style={{ fontSize:8, color:"#ff4560", fontFamily:"monospace" }}>{fetchError}</span>}
         <div style={{ marginLeft:"auto", display:"flex", gap:6, alignItems:"center" }}>
           {hasResearch && (
             <button onClick={() => setShowResearch(s => !s)}
-              style={{ fontSize:8, fontFamily:"monospace", padding:"2px 8px", borderRadius:3, border:"none", cursor:"pointer", background: showResearch ? "#58a6ff20":"#0d1117", color: showResearch ? "#58a6ff":"#3a4050" }}>
+              style={{ fontSize:8, fontFamily:"monospace", padding:"2px 8px", borderRadius:3, border:"none", cursor:"pointer", background: showResearch ? "#58a6ff20":th("#0d1117","#f5f0e8"), color: showResearch ? "#58a6ff":th("#3a4050","#8a7e74") }}>
               {showResearch ? "Hide Research" : `Research (${research.length})`}
             </button>
           )}
           <button onClick={handleFetch} disabled={fetching}
-            style={{ fontSize:8, fontFamily:"monospace", padding:"2px 8px", borderRadius:3, border:"1px solid #58a6ff40", cursor:"pointer", background:"#58a6ff15", color: fetching ? "#3a4050":"#58a6ff" }}>
+            style={{ fontSize:8, fontFamily:"monospace", padding:"2px 8px", borderRadius:3, border:"1px solid #58a6ff40", cursor:"pointer", background:"#58a6ff15", color: fetching ? th("#3a4050","#8a7e74"):"#58a6ff" }}>
             {fetching ? "fetching…" : hasCatalysts ? "↻ Refresh" : `+ Fetch Catalysts`}
           </button>
         </div>
@@ -3154,15 +3160,15 @@ function CatalystPanel({ ticker }) {
       {/* Catalyst rows */}
       {catalysts.map(c => (
         <div key={c.id} onClick={() => setExpanded(expanded === c.id ? null : c.id)}
-          style={{ marginBottom:6, padding:"8px 10px", background:"#0d1117", border:"1px solid #21262d", borderRadius:6, cursor:"pointer" }}>
+          style={{ marginBottom:6, padding:"8px 10px", background:th("#0d1117","#f5f0e8"), border:"1px solid #21262d", borderRadius:6, cursor:"pointer" }}>
           <div style={{ display:"flex", alignItems:"center", gap:7 }}>
             <span style={{ fontSize:13 }}>{CATALYST_TYPE_ICON[c.event_type] ?? "📌"}</span>
-            <span style={{ flex:1, fontFamily:"monospace", fontSize:10, color:"#c9d1d9", fontWeight:500 }}>{c.event_name}</span>
+            <span style={{ flex:1, fontFamily:"monospace", fontSize:10, color:th("#c9d1d9","#1a1a18"), fontWeight:500 }}>{c.event_name}</span>
             <span style={{ fontSize:8, padding:"2px 6px", borderRadius:4, fontFamily:"monospace", ...CATALYST_IMPACT_STYLE[c.impact] }}>{c.impact}</span>
-            <span style={{ color:"#3a4050", fontSize:9, fontFamily:"monospace", minWidth:75, textAlign:"right" }}>{c.event_date}</span>
+            <span style={{ color:th("#3a4050","#8a7e74"), fontSize:9, fontFamily:"monospace", minWidth:75, textAlign:"right" }}>{c.event_date}</span>
           </div>
           {expanded === c.id && c.description && (
-            <div style={{ marginTop:7, paddingTop:7, borderTop:"1px solid #21262d", color:"#8b949e", lineHeight:1.55, fontSize:11 }}>
+            <div style={{ marginTop:7, paddingTop:7, borderTop:"1px solid #21262d", color:th("#8b949e","#5a5248"), lineHeight:1.55, fontSize:11 }}>
               {c.description}
               {c.source && <div style={{ marginTop:4, color:"#388bfd", fontSize:10 }}>Source: {c.source}</div>}
             </div>
@@ -3172,7 +3178,7 @@ function CatalystPanel({ ticker }) {
 
       {/* Empty state */}
       {!hasCatalysts && !loading && (
-        <div style={{ fontSize:9, color:"#3a4050", fontFamily:"monospace" }}>
+        <div style={{ fontSize:9, color:th("#3a4050","#8a7e74"), fontFamily:"monospace" }}>
           No catalysts yet — click "+ Fetch Catalysts" to generate them with AI.
         </div>
       )}
@@ -3180,11 +3186,11 @@ function CatalystPanel({ ticker }) {
       {/* Research docs */}
       {showResearch && hasResearch && (
         <div style={{ marginTop:8, paddingTop:8, borderTop:"1px solid #1c2128" }}>
-          <div style={{ fontFamily:"monospace", fontSize:7, color:"#2a3040", letterSpacing:"0.08em", marginBottom:6 }}>RESEARCH DOCS</div>
+          <div style={{ fontFamily:"monospace", fontSize:7, color:th("#2a3040","#6b5f55"), letterSpacing:"0.08em", marginBottom:6 }}>RESEARCH DOCS</div>
           {research.map(r => (
-            <div key={r.id} style={{ display:"flex", justifyContent:"space-between", padding:"6px 10px", background:"#0d1117", border:"1px solid #21262d", borderRadius:6, marginBottom:5, fontSize:10 }}>
-              <span style={{ color:"#c9d1d9", fontFamily:"monospace" }}>{r.title}</span>
-              <span style={{ color:"#3a4050", fontFamily:"monospace", whiteSpace:"nowrap", marginLeft:10 }}>{r.report_date}</span>
+            <div key={r.id} style={{ display:"flex", justifyContent:"space-between", padding:"6px 10px", background:th("#0d1117","#f5f0e8"), border:"1px solid #21262d", borderRadius:6, marginBottom:5, fontSize:10 }}>
+              <span style={{ color:th("#c9d1d9","#1a1a18"), fontFamily:"monospace" }}>{r.title}</span>
+              <span style={{ color:th("#3a4050","#8a7e74"), fontFamily:"monospace", whiteSpace:"nowrap", marginLeft:10 }}>{r.report_date}</span>
             </div>
           ))}
         </div>
@@ -3217,8 +3223,8 @@ function StocksChainSection({ selectedTicker, loadTradeOrders, pendingOrder, onP
   }, [pendingOrder, selectedTicker]);
 
   return (
-    <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,marginTop:9}}>
-      <div style={{padding:"7px 11px",fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em"}}>OPTION CHAIN — {selectedTicker}</div>
+    <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8,marginTop:9}}>
+      <div style={{padding:"7px 11px",fontFamily:"monospace",fontSize:7,color:th("#2a3040","#6b5f55"),letterSpacing:"0.08em"}}>OPTION CHAIN — {selectedTicker}</div>
       {/* Order panel — appears when a strike is clicked OR preloaded from notification */}
       {stocksChainTrade && stocksChainTrade.ticker === selectedTicker && (
         <div style={{padding:"0 11px 11px"}}>
@@ -3753,17 +3759,17 @@ function OpportunityScannerTab() {
   const btoOpps=opportunities.filter(o=>o.type==="BTO");
   const tierColor=t=>t==="safe"?"#3fb950":t==="watch"?"#ffd166":"#ff4560";
   const riskColor=s=>s<=1?"#3fb950":s<=3?"#ffd166":s<=5?"#ff9500":"#ff4560";
-  const logColor=t=>t==="good"?"#3fb950":t==="bto"?"#58a6ff":t==="caution"?"#ffd166":t==="error"?"#ff4560":t==="system"?"#8b949e":"#e6edf3";
+  const logColor=t=>t==="good"?"#3fb950":t==="bto"?"#58a6ff":t==="caution"?"#ffd166":t==="error"?"#ff4560":t==="system"?th("#8b949e","#5a5248"):th("#e6edf3","#0d0d0b");
   const phaseLabel=phase==="quotes"?"SCANNING QUOTES":phase==="chains"?"FETCHING CHAINS":scanning?"IDLE":"";
 
   const renderChainOptions=(opp)=>{
-    if(!opp.chainFetched)return <div style={{padding:"12px",color:"#8b949e",fontSize:9,textAlign:"center"}}>⟳ Fetching live chain data...</div>;
+    if(!opp.chainFetched)return <div style={{padding:"12px",color:th("#8b949e","#5a5248"),fontSize:9,textAlign:"center"}}>⟳ Fetching live chain data...</div>;
     if(!opp.chainOptions?.length)return <div style={{padding:"12px",color:"#484f58",fontSize:9,textAlign:"center"}}>No liquid options found</div>;
     const btoStat=BTO_STATS[opp.ticker];
     return(
       <div style={{borderTop:"1px solid #21262d"}}>
-        <div style={{padding:"6px 12px",background:"#0d1117",display:"flex",justifyContent:"space-between"}}>
-          <span style={{fontSize:8,color:"#8b949e",letterSpacing:"0.1em",fontWeight:700}}>TOP {opp.chainOptions.length} CALLS · {opp.type==="STO"?"RANKED: PREMIUM ÷ RISK":"RANKED: EV ÷ COST"}</span>
+        <div style={{padding:"6px 12px",background:th("#0d1117","#f5f0e8"),display:"flex",justifyContent:"space-between"}}>
+          <span style={{fontSize:8,color:th("#8b949e","#5a5248"),letterSpacing:"0.1em",fontWeight:700}}>TOP {opp.chainOptions.length} CALLS · {opp.type==="STO"?"RANKED: PREMIUM ÷ RISK":"RANKED: EV ÷ COST"}</span>
           <span style={{fontSize:8,color:"#484f58"}}>Stock: ${opp.price?.toFixed(2)} · {opp.changePct>=0?"+":""}{opp.changePct?.toFixed(2)}%</span>
         </div>
         {opp.chainOptions.map((o,i)=>{
@@ -3773,36 +3779,36 @@ function OpportunityScannerTab() {
           const evRatio=opp.type==="BTO"&&btoStat&&mid>0?(btoStat.wr*btoStat.avgProfit)/mid:null;
           const premPct=opp.price>0?(mid/opp.price*100):0;
           const spreadTight=o.spreadPct<0.15;
-          const rankCol=i===0?"#ffd166":i===1?"#8b949e":"#484f58";
+          const rankCol=i===0?"#ffd166":i===1?th("#8b949e","#5a5248"):"#484f58";
           return(
             <div key={i} style={{padding:"10px 12px",borderBottom:"1px solid #21262d",background:i===0?"#ffffff06":"transparent"}}>
               <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
                 <div style={{width:18,height:18,borderRadius:3,background:rankCol+"22",color:rankCol,fontSize:9,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{i+1}</div>
-                <span style={{fontSize:13,fontWeight:700,color:"#e6edf3"}}>${o.strike} Call</span>
-                <span style={{fontSize:10,color:"#8b949e"}}>{o.expiryDate}</span>
+                <span style={{fontSize:13,fontWeight:700,color:th("#e6edf3","#0d0d0b")}}>${o.strike} Call</span>
+                <span style={{fontSize:10,color:th("#8b949e","#5a5248")}}>{o.expiryDate}</span>
                 <span style={{fontSize:9,background:"#58a6ff22",color:"#58a6ff",border:"1px solid #58a6ff44",borderRadius:3,padding:"1px 6px"}}>{o.dte}d</span>
-                <span style={{fontSize:9,color:"#8b949e"}}>{otmPct.toFixed(1)}% OTM</span>
+                <span style={{fontSize:9,color:th("#8b949e","#5a5248")}}>{otmPct.toFixed(1)}% OTM</span>
                 {i===0&&<span style={{fontSize:8,color:"#ffd166",fontWeight:700,marginLeft:"auto"}}>★ TOP PICK</span>}
               </div>
               <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,marginBottom:6}}>
-                {[{label:"BID",val:`$${o.bid?.toFixed(2)}`,col:"#e6edf3"},{label:"ASK",val:`$${o.ask?.toFixed(2)}`,col:"#e6edf3"},{label:"MID",val:`$${mid?.toFixed(2)}`,col:"#3fb950"},{label:"SPREAD",val:`${(o.spreadPct*100).toFixed(0)}%`,col:spreadTight?"#3fb950":"#ffd166"}].map(({label,val,col})=>(
-                  <div key={label} style={{background:"#21262d",borderRadius:4,padding:"4px 6px",textAlign:"center"}}>
+                {[{label:"BID",val:`$${o.bid?.toFixed(2)}`,col:th("#e6edf3","#0d0d0b")},{label:"ASK",val:`$${o.ask?.toFixed(2)}`,col:th("#e6edf3","#0d0d0b")},{label:"MID",val:`$${mid?.toFixed(2)}`,col:"#3fb950"},{label:"SPREAD",val:`${(o.spreadPct*100).toFixed(0)}%`,col:spreadTight?"#3fb950":"#ffd166"}].map(({label,val,col})=>(
+                  <div key={label} style={{background:th("#21262d","#c8b8a8"),borderRadius:4,padding:"4px 6px",textAlign:"center"}}>
                     <div style={{fontSize:7,color:"#484f58",letterSpacing:"0.06em"}}>{label}</div>
                     <div style={{fontSize:10,fontWeight:700,color:col}}>{val}</div>
                   </div>
                 ))}
               </div>
               <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,marginBottom:6}}>
-                {[{label:"IV",val:o.iv?`${(o.iv*100).toFixed(0)}%`:"—",col:"#ffd166"},{label:"DELTA",val:o.delta?o.delta.toFixed(3):"—",col:"#8b949e"},{label:"OI",val:o.openInterest?o.openInterest.toLocaleString():"—",col:"#8b949e"},{label:"VOL",val:o.volume?o.volume.toLocaleString():"—",col:"#8b949e"}].map(({label,val,col})=>(
-                  <div key={label} style={{background:"#21262d",borderRadius:4,padding:"4px 6px",textAlign:"center"}}>
+                {[{label:"IV",val:o.iv?`${(o.iv*100).toFixed(0)}%`:"—",col:"#ffd166"},{label:"DELTA",val:o.delta?o.delta.toFixed(3):"—",col:th("#8b949e","#5a5248")},{label:"OI",val:o.openInterest?o.openInterest.toLocaleString():"—",col:th("#8b949e","#5a5248")},{label:"VOL",val:o.volume?o.volume.toLocaleString():"—",col:th("#8b949e","#5a5248")}].map(({label,val,col})=>(
+                  <div key={label} style={{background:th("#21262d","#c8b8a8"),borderRadius:4,padding:"4px 6px",textAlign:"center"}}>
                     <div style={{fontSize:7,color:"#484f58",letterSpacing:"0.06em"}}>{label}</div>
                     <div style={{fontSize:10,fontWeight:700,color:col}}>{val}</div>
                   </div>
                 ))}
               </div>
               <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
-                {opp.type==="STO"&&<><span style={{fontSize:8,color:"#58a6ff"}}>Ann yield <b>{annYield.toFixed(1)}%</b></span><span style={{fontSize:8,color:"#8b949e"}}>Prem% <b>{premPct.toFixed(2)}%</b></span><span style={{fontSize:8,color:"#8b949e"}}>Max profit <b>${(mid*100).toFixed(0)}/contract</b></span></>}
-                {opp.type==="BTO"&&evRatio&&<><span style={{fontSize:8,color:"#58a6ff"}}>EV/cost <b>{evRatio.toFixed(1)}x</b></span><span style={{fontSize:8,color:"#8b949e"}}>Hist win rate <b>{(btoStat.wr*100).toFixed(0)}%</b></span></>}
+                {opp.type==="STO"&&<><span style={{fontSize:8,color:"#58a6ff"}}>Ann yield <b>{annYield.toFixed(1)}%</b></span><span style={{fontSize:8,color:th("#8b949e","#5a5248")}}>Prem% <b>{premPct.toFixed(2)}%</b></span><span style={{fontSize:8,color:th("#8b949e","#5a5248")}}>Max profit <b>${(mid*100).toFixed(0)}/contract</b></span></>}
+                {opp.type==="BTO"&&evRatio&&<><span style={{fontSize:8,color:"#58a6ff"}}>EV/cost <b>{evRatio.toFixed(1)}x</b></span><span style={{fontSize:8,color:th("#8b949e","#5a5248")}}>Hist win rate <b>{(btoStat.wr*100).toFixed(0)}%</b></span></>}
                 <span style={{fontSize:8,color:spreadTight?"#3fb950":"#ffd166",marginLeft:"auto"}}>{spreadTight?"✓ Tight spread":"⚠ Wide spread"}</span>
               </div>
             </div>
@@ -3816,19 +3822,19 @@ function OpportunityScannerTab() {
     const isExpanded=expandedOpp===`${o.type}-${o.ticker}`;
     const borderCol=o.type==="BTO"?"#58a6ff":riskColor(o.riskScore);
     return(
-      <div key={`${o.ticker}-${o.type}-${i}`} style={{borderBottom:"1px solid #21262d",background:isExpanded?"#0d1117":"transparent"}}>
+      <div key={`${o.ticker}-${o.type}-${i}`} style={{borderBottom:"1px solid #21262d",background:isExpanded?th("#0d1117","#f5f0e8"):"transparent"}}>
         <div onClick={()=>setExpandedOpp(isExpanded?null:`${o.type}-${o.ticker}`)} style={{padding:"8px 12px",display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
           <div style={{width:32,height:32,borderRadius:"50%",border:`2px solid ${borderCol}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,flexDirection:"column",lineHeight:1.1}}>
             {o.type==="STO"?<span style={{fontSize:11,fontWeight:700,color:borderCol}}>{o.riskScore}</span>:<><span style={{fontSize:7,color:borderCol}}>EV</span><span style={{fontSize:9,fontWeight:700,color:borderCol}}>${o.btoEv?.toFixed(1)}</span></>}
           </div>
           <div style={{flex:1,minWidth:0}}>
             <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-              <span style={{fontSize:12,fontWeight:700,color:"#e6edf3"}}>{o.ticker}</span>
+              <span style={{fontSize:12,fontWeight:700,color:th("#e6edf3","#0d0d0b")}}>{o.ticker}</span>
               <span style={{fontSize:9,background:borderCol+"22",color:borderCol,border:`1px solid ${borderCol}44`,borderRadius:3,padding:"1px 6px",fontWeight:600}}>{o.type}</span>
               <span style={{fontSize:9,background:tierColor(o.tier)+"18",color:tierColor(o.tier),border:`1px solid ${tierColor(o.tier)}33`,borderRadius:3,padding:"1px 5px"}}>{o.tier}</span>
               {o.chainOptions?.length>0&&<span style={{fontSize:8,color:"#3fb950"}}>⛓ {o.chainOptions.length} options</span>}
             </div>
-            <div style={{fontSize:9,color:"#8b949e",marginTop:2}}>
+            <div style={{fontSize:9,color:th("#8b949e","#5a5248"),marginTop:2}}>
               ${o.price?.toFixed(2)} · {o.changePct>=0?"+":""}{o.changePct?.toFixed(2)}%
               {o.vix&&<span style={{marginLeft:8}}>VIX {o.vix?.toFixed(1)}</span>}
               {o.type==="STO"&&o.flags?.filter(f=>f.sev>0).length>0&&<span style={{color:"#ffd166",marginLeft:8}}>{o.flags.filter(f=>f.sev>0).map(f=>f.name).join(" · ")}</span>}
@@ -3842,22 +3848,22 @@ function OpportunityScannerTab() {
   };
 
   return(
-    <div style={{padding:"16px 20px",fontFamily:"monospace",minHeight:"100vh",background:"#0d1117"}}>
+    <div style={{padding:"16px 20px",fontFamily:"monospace",minHeight:"100vh",background:th("#0d1117","#f5f0e8")}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
         <div>
           <div style={{fontSize:13,fontWeight:700,color:"#58a6ff",letterSpacing:"0.1em"}}>⟳ OPPORTUNITY SCANNER</div>
-          <div style={{fontSize:10,color:"#8b949e",marginTop:2}}>{SCAN_TICKERS.length} tickers · 2-pass (quotes → chains) · continuous</div>
+          <div style={{fontSize:10,color:th("#8b949e","#5a5248"),marginTop:2}}>{SCAN_TICKERS.length} tickers · 2-pass (quotes → chains) · continuous</div>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
           <div style={{display:"flex",gap:4,alignItems:"center"}}>
             <input value={customTicker} onChange={e=>setCustomTicker(e.target.value.toUpperCase())} onKeyDown={e=>e.key==="Enter"&&!customScanning&&scanSingleTicker()} placeholder="TICKER" maxLength={6}
-              style={{background:"#21262d",border:"1px solid #30363d",borderRadius:5,color:"#e6edf3",fontSize:11,fontWeight:700,padding:"5px 10px",width:80,letterSpacing:"0.08em",outline:"none",fontFamily:"monospace"}}/>
+              style={{background:th("#21262d","#c8b8a8"),border:"1px solid #30363d",borderRadius:5,color:th("#e6edf3","#0d0d0b"),fontSize:11,fontWeight:700,padding:"5px 10px",width:80,letterSpacing:"0.08em",outline:"none",fontFamily:"monospace"}}/>
             <button onClick={scanSingleTicker} disabled={!customTicker.trim()||customScanning}
-              style={{background:customScanning?"#58a6ff11":"#58a6ff20",color:customScanning?"#484f58":"#58a6ff",border:`1px solid ${customScanning?"#30363d":"#58a6ff50"}`,borderRadius:5,padding:"5px 12px",fontSize:10,fontWeight:700,cursor:customScanning||!customTicker.trim()?"not-allowed":"pointer"}}>
+              style={{background:customScanning?"#58a6ff11":"#58a6ff20",color:customScanning?"#484f58":"#58a6ff",border:`1px solid ${customScanning?th("#30363d","#c0b0a0"):"#58a6ff50"}`,borderRadius:5,padding:"5px 12px",fontSize:10,fontWeight:700,cursor:customScanning||!customTicker.trim()?"not-allowed":"pointer"}}>
               {customScanning?"⟳":"SCAN"}
             </button>
           </div>
-          <div style={{width:"1px",height:20,background:"#30363d"}}/>
+          <div style={{width:"1px",height:20,background:th("#30363d","#c0b0a0")}}/>
           {lastScan&&<span style={{fontSize:9,color:"#484f58"}}>Last: {lastScan.toLocaleTimeString()}</span>}
           {cycleCount>0&&<span style={{fontSize:9,color:"#484f58"}}>Cycle #{cycleCount}</span>}
           <button onClick={scanning?stopScanning:startScanning}
@@ -3868,10 +3874,10 @@ function OpportunityScannerTab() {
       </div>
 
       {scanning&&(
-        <div style={{marginBottom:12,background:"#161b22",borderRadius:6,border:"1px solid #30363d",overflow:"hidden"}}>
+        <div style={{marginBottom:12,background:th("#161b22","#ede8df"),borderRadius:6,border:"1px solid #30363d",overflow:"hidden"}}>
           <div style={{padding:"7px 12px",borderBottom:"1px solid #21262d",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
             <div style={{display:"flex",gap:12,alignItems:"center"}}>
-              <span style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:phase==="quotes"?"#58a6ff":phase==="chains"?"#ffd166":"#8b949e"}}>{phaseLabel}</span>
+              <span style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:phase==="quotes"?"#58a6ff":phase==="chains"?"#ffd166":th("#8b949e","#5a5248")}}>{phaseLabel}</span>
               <span style={{fontSize:8,color:"#484f58"}}>{phase==="quotes"?`${Math.min(scanIndex+1,scanTotal)} / ${scanTotal} tickers`:phase==="chains"?`${Math.min(scanIndex+1,scanTotal)} / ${scanTotal} candidates`:""}</span>
             </div>
             <div style={{display:"flex",gap:10}}>
@@ -3879,7 +3885,7 @@ function OpportunityScannerTab() {
               <span style={{fontSize:8,color:phase==="chains"?"#ffd166":"#484f58"}}>⬤ Pass 2: Chains</span>
             </div>
           </div>
-          <div style={{height:2,background:"#21262d"}}><div style={{width:`${pct}%`,height:"100%",transition:"width 0.3s ease",background:phase==="chains"?"#ffd166":"#58a6ff"}}/></div>
+          <div style={{height:2,background:th("#21262d","#c8b8a8")}}><div style={{width:`${pct}%`,height:"100%",transition:"width 0.3s ease",background:phase==="chains"?"#ffd166":"#58a6ff"}}/></div>
           <div style={{padding:"6px 12px",borderBottom:"1px solid #21262d"}}>
             <div ref={tickerStripRef} style={{display:"flex",gap:4,overflowX:"auto",scrollbarWidth:"none",paddingBottom:2}}>
               {SCAN_TICKERS.map(t=>{
@@ -3894,7 +3900,7 @@ function OpportunityScannerTab() {
               {Object.entries(chainStatus).map(([key,status])=>{
                 const [ticker,type]=key.split("-");
                 const isActive=ticker===currentTicker;
-                const col=status==="found"?"#3fb950":status==="empty"?"#484f58":isActive?"#ffd166":"#8b949e";
+                const col=status==="found"?"#3fb950":status==="empty"?"#484f58":isActive?"#ffd166":th("#8b949e","#5a5248");
                 return(<span key={key} style={{fontSize:9,fontWeight:isActive?700:400,color:col,background:isActive?col+"22":"transparent",border:`1px solid ${isActive?col+"66":"transparent"}`,borderRadius:3,padding:"1px 6px",transition:"all 0.2s ease"}}>{status==="fetching"?`⟳ ${ticker}`:status==="found"?`✓ ${ticker}`:`— ${ticker}`}<span style={{fontSize:7,color:"#484f58",marginLeft:3}}>{type}</span></span>);
               })}
             </div></div>
@@ -3903,7 +3909,7 @@ function OpportunityScannerTab() {
       )}
 
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
-        <div style={{background:"#161b22",border:"1px solid #30363d",borderRadius:8,overflow:"hidden"}}>
+        <div style={{background:th("#161b22","#ede8df"),border:"1px solid #30363d",borderRadius:8,overflow:"hidden"}}>
           <div style={{padding:"7px 12px",borderBottom:"1px solid #30363d",display:"flex",justifyContent:"space-between"}}>
             <span style={{fontSize:9,fontWeight:700,color:"#3fb950",letterSpacing:"0.1em"}}>STO OPPORTUNITIES</span>
             <span style={{fontSize:9,color:"#484f58"}}>{stoOpps.length} found</span>
@@ -3912,7 +3918,7 @@ function OpportunityScannerTab() {
             {stoOpps.length===0?<div style={{padding:"24px 12px",textAlign:"center",color:"#484f58",fontSize:10}}>{scanning?"Scanning...":"Start scanner to find opportunities"}</div>:stoOpps.map(renderOppCard)}
           </div>
         </div>
-        <div style={{background:"#161b22",border:"1px solid #30363d",borderRadius:8,overflow:"hidden"}}>
+        <div style={{background:th("#161b22","#ede8df"),border:"1px solid #30363d",borderRadius:8,overflow:"hidden"}}>
           <div style={{padding:"7px 12px",borderBottom:"1px solid #30363d",display:"flex",justifyContent:"space-between"}}>
             <span style={{fontSize:9,fontWeight:700,color:"#58a6ff",letterSpacing:"0.1em"}}>BTO OPPORTUNITIES</span>
             <span style={{fontSize:9,color:"#484f58"}}>{btoOpps.length} found</span>
@@ -3923,9 +3929,9 @@ function OpportunityScannerTab() {
         </div>
       </div>
 
-      <div style={{background:"#161b22",border:"1px solid #30363d",borderRadius:8,overflow:"hidden"}}>
+      <div style={{background:th("#161b22","#ede8df"),border:"1px solid #30363d",borderRadius:8,overflow:"hidden"}}>
         <div style={{padding:"6px 12px",borderBottom:"1px solid #30363d",display:"flex",justifyContent:"space-between"}}>
-          <span style={{fontSize:9,fontWeight:700,color:"#8b949e",letterSpacing:"0.1em"}}>SCAN LOG</span>
+          <span style={{fontSize:9,fontWeight:700,color:th("#8b949e","#5a5248"),letterSpacing:"0.1em"}}>SCAN LOG</span>
           <span style={{fontSize:9,color:"#484f58"}}>{scanLog.length} events</span>
         </div>
         <div ref={logRef} style={{maxHeight:130,overflowY:"auto",padding:"2px 0"}}>
@@ -3935,12 +3941,12 @@ function OpportunityScannerTab() {
       </div>
 
       {opportunities.length>0&&(
-        <div style={{display:"flex",gap:16,marginTop:10,padding:"7px 12px",background:"#161b22",borderRadius:6,border:"1px solid #30363d",flexWrap:"wrap"}}>
-          <span style={{fontSize:9,color:"#8b949e"}}><span style={{color:"#3fb950",fontWeight:700}}>{stoOpps.filter(o=>o.riskScore<=1).length}</span> clean STO</span>
-          <span style={{fontSize:9,color:"#8b949e"}}><span style={{color:"#ffd166",fontWeight:700}}>{stoOpps.filter(o=>o.riskScore>1&&o.riskScore<=3).length}</span> caution STO</span>
-          <span style={{fontSize:9,color:"#8b949e"}}><span style={{color:"#58a6ff",fontWeight:700}}>{btoOpps.length}</span> BTO signals</span>
-          <span style={{fontSize:9,color:"#8b949e"}}><span style={{color:"#e6edf3",fontWeight:700}}>{SCAN_TICKERS.length}</span> tickers watched</span>
-          <span style={{fontSize:9,color:"#8b949e"}}><span style={{color:"#e6edf3",fontWeight:700}}>{opportunities.filter(o=>o.chainFetched&&o.chainOptions?.length>0).length}</span> with chain data</span>
+        <div style={{display:"flex",gap:16,marginTop:10,padding:"7px 12px",background:th("#161b22","#ede8df"),borderRadius:6,border:"1px solid #30363d",flexWrap:"wrap"}}>
+          <span style={{fontSize:9,color:th("#8b949e","#5a5248")}}><span style={{color:"#3fb950",fontWeight:700}}>{stoOpps.filter(o=>o.riskScore<=1).length}</span> clean STO</span>
+          <span style={{fontSize:9,color:th("#8b949e","#5a5248")}}><span style={{color:"#ffd166",fontWeight:700}}>{stoOpps.filter(o=>o.riskScore>1&&o.riskScore<=3).length}</span> caution STO</span>
+          <span style={{fontSize:9,color:th("#8b949e","#5a5248")}}><span style={{color:"#58a6ff",fontWeight:700}}>{btoOpps.length}</span> BTO signals</span>
+          <span style={{fontSize:9,color:th("#8b949e","#5a5248")}}><span style={{color:th("#e6edf3","#0d0d0b"),fontWeight:700}}>{SCAN_TICKERS.length}</span> tickers watched</span>
+          <span style={{fontSize:9,color:th("#8b949e","#5a5248")}}><span style={{color:th("#e6edf3","#0d0d0b"),fontWeight:700}}>{opportunities.filter(o=>o.chainFetched&&o.chainOptions?.length>0).length}</span> with chain data</span>
         </div>
       )}
     </div>
@@ -3974,33 +3980,33 @@ function MonthlyReport({ originals }) {
   const best  = wins.reduce((a,c)  => (c.profit||0) > (a?.profit||0) ? c : a, wins[0]  || null);
   const worst = losses.reduce((a,c) => (c.profit||0) < (a?.profit||0) ? c : a, losses[0] || null);
   return (
-    <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:"12px 14px"}}>
+    <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8,padding:"12px 14px"}}>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,flexWrap:"wrap"}}>
-        <span style={{fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em",fontWeight:700}}>MONTHLY REPORT</span>
+        <span style={{fontFamily:"monospace",fontSize:7,color:th("#2a3040","#6b5f55"),letterSpacing:"0.08em",fontWeight:700}}>MONTHLY REPORT</span>
         <select value={reportMonth} onChange={e=>setReportMonth(e.target.value)}
-          style={{fontSize:11,padding:"3px 6px",background:"#080c12",border:"1px solid #21262d",borderRadius:4,color:"#e6edf3",fontFamily:"monospace"}}>
+          style={{fontSize:11,padding:"3px 6px",background:th("#080c12","#ede8df"),border:"1px solid #21262d",borderRadius:4,color:th("#e6edf3","#0d0d0b"),fontFamily:"monospace"}}>
           {allMonths.map(m => <option key={m} value={m}>{m}</option>)}
         </select>
         <button onClick={()=>{
           const rows = [["Stock","OptType","Type","Strike","Expires","Premium","Cost","Profit","Profit%","OpenDate","CloseDate","Strategy","Account"],...monthContracts.map(c=>[c.stock,c.optType,c.type,c.strike,c.expires,c.premium,c.costToClose,c.profit,c.profitPct!=null?(+c.profitPct*100).toFixed(1):"",c.dateExec,c.closeDate,c.strategy||"",c.account])];
           const csv = rows.map(r=>r.join(",")).join("\n");
           const a=document.createElement("a"); a.href="data:text/csv;charset=utf-8,"+encodeURIComponent(csv); a.download=`options-report-${reportMonth}.csv`; a.click();
-        }} style={{background:"transparent",border:"1px solid #21262d",color:"#3a4050",borderRadius:4,padding:"2px 8px",fontSize:9,fontFamily:"monospace",cursor:"pointer",marginLeft:"auto"}}>↓ CSV</button>
+        }} style={{background:"transparent",border:"1px solid #21262d",color:th("#3a4050","#8a7e74"),borderRadius:4,padding:"2px 8px",fontSize:9,fontFamily:"monospace",cursor:"pointer",marginLeft:"auto"}}>↓ CSV</button>
       </div>
       {monthContracts.length === 0 && openInMonth.length === 0 ? (
-        <div style={{fontSize:10,color:"#3a4050",fontFamily:"monospace",textAlign:"center",padding:"16px 0"}}>No contracts for {reportMonth}</div>
+        <div style={{fontSize:10,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",textAlign:"center",padding:"16px 0"}}>No contracts for {reportMonth}</div>
       ) : (<>
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(90px,1fr))",gap:8,marginBottom:12}}>
           {[
             {label:"Net P&L",   val:"$"+totalProfit.toFixed(2),  color:totalProfit>=0?"#00ff88":"#ff4560"},
-            {label:"Premiums",  val:"$"+totalPremium.toFixed(2), color:"#c9d1d9"},
-            {label:"Contracts", val:monthContracts.length,        color:"#c9d1d9"},
+            {label:"Premiums",  val:"$"+totalPremium.toFixed(2), color:th("#c9d1d9","#1a1a18")},
+            {label:"Contracts", val:monthContracts.length,        color:th("#c9d1d9","#1a1a18")},
             {label:"Win Rate",  val:winRate!=null?winRate+"%":"—",color:winRate>=70?"#00ff88":winRate>=50?"#ffd166":"#ff4560"},
             {label:"Avg P&L",   val:"$"+avgProfit.toFixed(2),     color:avgProfit>=0?"#00ff88":"#ff4560"},
             {label:"Open Now",  val:openInMonth.length,            color:"#58a6ff"},
           ].map(({label,val,color})=>(
-            <div key={label} style={{background:"#080c12",border:"1px solid #1c2128",borderRadius:6,padding:"8px 10px",textAlign:"center"}}>
-              <div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",letterSpacing:"0.07em",marginBottom:3}}>{label}</div>
+            <div key={label} style={{background:th("#080c12","#ede8df"),border:"1px solid #1c2128",borderRadius:6,padding:"8px 10px",textAlign:"center"}}>
+              <div style={{fontSize:7,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",letterSpacing:"0.07em",marginBottom:3}}>{label}</div>
               <div style={{fontSize:14,fontFamily:"monospace",fontWeight:700,color}}>{val}</div>
             </div>
           ))}
@@ -4009,31 +4015,31 @@ function MonthlyReport({ originals }) {
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
             {best && <div style={{background:"#00ff8808",border:"1px solid #00ff8820",borderRadius:6,padding:"8px 10px"}}>
               <div style={{fontSize:7,color:"#00ff8880",fontFamily:"monospace",letterSpacing:"0.07em",marginBottom:3}}>🏆 BEST TRADE</div>
-              <div style={{fontFamily:"monospace",fontSize:11,color:"#e6edf3",fontWeight:600}}>{best.stock} ${best.strike} {best.type}</div>
+              <div style={{fontFamily:"monospace",fontSize:11,color:th("#e6edf3","#0d0d0b"),fontWeight:600}}>{best.stock} ${best.strike} {best.type}</div>
               <div style={{fontFamily:"monospace",fontSize:10,color:"#00ff88"}}>+${(best.profit||0).toFixed(2)}{best.profitPct!=null?" ("+((+best.profitPct)*100).toFixed(0)+"%)":""}</div>
             </div>}
             {worst && <div style={{background:"#ff456008",border:"1px solid #ff456020",borderRadius:6,padding:"8px 10px"}}>
               <div style={{fontSize:7,color:"#ff456080",fontFamily:"monospace",letterSpacing:"0.07em",marginBottom:3}}>📉 WORST TRADE</div>
-              <div style={{fontFamily:"monospace",fontSize:11,color:"#e6edf3",fontWeight:600}}>{worst.stock} ${worst.strike} {worst.type}</div>
+              <div style={{fontFamily:"monospace",fontSize:11,color:th("#e6edf3","#0d0d0b"),fontWeight:600}}>{worst.stock} ${worst.strike} {worst.type}</div>
               <div style={{fontFamily:"monospace",fontSize:10,color:"#ff4560"}}>${(worst.profit||0).toFixed(2)}{worst.profitPct!=null?" ("+((+worst.profitPct)*100).toFixed(0)+"%)":""}</div>
             </div>}
           </div>
         )}
         {sorted.length > 0 && (
           <div style={{marginBottom:12}}>
-            <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:6}}>BY TICKER</div>
+            <div style={{fontSize:7,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:6}}>BY TICKER</div>
             <div style={{display:"flex",flexDirection:"column",gap:4}}>
               {sorted.map(([sym,d])=>{
                 const maxAbs = Math.max(...sorted.map(([,x])=>Math.abs(x.profit)),1);
                 const barPct = Math.min(Math.abs(d.profit)/maxAbs*100,100);
                 return (
                   <div key={sym} style={{display:"grid",gridTemplateColumns:"50px 1fr 70px 45px 45px",alignItems:"center",gap:8,fontSize:10,fontFamily:"monospace"}}>
-                    <span style={{color:"#e6edf3",fontWeight:600}}>{sym}</span>
-                    <div style={{height:6,background:"#1c2128",borderRadius:3,overflow:"hidden"}}>
+                    <span style={{color:th("#e6edf3","#0d0d0b"),fontWeight:600}}>{sym}</span>
+                    <div style={{height:6,background:th("#1c2128","#b8a898"),borderRadius:3,overflow:"hidden"}}>
                       <div style={{height:"100%",width:barPct+"%",background:d.profit>=0?"#00ff88":"#ff4560",borderRadius:3}}/>
                     </div>
                     <span style={{color:(d.profit??0)>=0?"#00ff88":"#ff4560",textAlign:"right",fontWeight:700}}>{(d.profit??0)>=0?"+":""}{(d.profit??0).toFixed(2)}</span>
-                    <span style={{color:"#3a4050",textAlign:"right"}}>{d.count} ct</span>
+                    <span style={{color:th("#3a4050","#8a7e74"),textAlign:"right"}}>{d.count} ct</span>
                     <span style={{color:"#555",textAlign:"right"}}>{Math.round(d.wins/d.count*100)}% W</span>
                   </div>
                 );
@@ -4041,32 +4047,32 @@ function MonthlyReport({ originals }) {
             </div>
           </div>
         )}
-        <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:5}}>CLOSED CONTRACTS</div>
+        <div style={{fontSize:7,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:5}}>CLOSED CONTRACTS</div>
         <div style={{overflowX:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:9,fontFamily:"monospace"}}>
             <thead>
               <tr style={{borderBottom:"1px solid #1c2128"}}>
                 {["Stock","Strike","Type","OT","Expires","Premium","Cost","Profit","P%","Days","Strategy"].map(h=>(
-                  <th key={h} style={{padding:"3px 7px",textAlign:["Profit","P%","Premium","Cost"].includes(h)?"right":"left",color:"#3a4050",fontWeight:400,fontSize:7,letterSpacing:"0.06em"}}>{h}</th>
+                  <th key={h} style={{padding:"3px 7px",textAlign:["Profit","P%","Premium","Cost"].includes(h)?"right":"left",color:th("#3a4050","#8a7e74"),fontWeight:400,fontSize:7,letterSpacing:"0.06em"}}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {monthContracts.sort((a,b)=>(b.profit||0)-(a.profit||0)).map(c=>{
                 const pp = c.profitPct!=null?(+c.profitPct*100).toFixed(0)+"%":"—";
-                const pc = c.profit!=null?(c.profit>=0?"#00ff88":"#ff4560"):"#3a4050";
+                const pc = c.profit!=null?(c.profit>=0?"#00ff88":"#ff4560"):th("#3a4050","#8a7e74");
                 return (
                   <tr key={c.id} style={{borderBottom:"1px solid #0d1117"}}>
-                    <td style={{padding:"4px 7px",color:"#e6edf3",fontWeight:600}}>{c.stock}</td>
-                    <td style={{padding:"4px 7px",color:"#c9d1d9"}}>${c.strike}</td>
+                    <td style={{padding:"4px 7px",color:th("#e6edf3","#0d0d0b"),fontWeight:600}}>{c.stock}</td>
+                    <td style={{padding:"4px 7px",color:th("#c9d1d9","#1a1a18")}}>${c.strike}</td>
                     <td style={{padding:"4px 7px",color:c.type==="Call"?"#58a6ff":"#c084fc"}}>{c.type}</td>
                     <td style={{padding:"4px 7px",color:c.optType==="STO"?"#00ff88":"#ffd166"}}>{c.optType}</td>
                     <td style={{padding:"4px 7px",color:"#555"}}>{c.expires}</td>
-                    <td style={{padding:"4px 7px",color:"#c9d1d9",textAlign:"right"}}>${(c.premium||0).toFixed(2)}</td>
-                    <td style={{padding:"4px 7px",color:"#8b949e",textAlign:"right"}}>{c.costToClose!=null?"$"+c.costToClose.toFixed(2):"—"}</td>
+                    <td style={{padding:"4px 7px",color:th("#c9d1d9","#1a1a18"),textAlign:"right"}}>${(c.premium||0).toFixed(2)}</td>
+                    <td style={{padding:"4px 7px",color:th("#8b949e","#5a5248"),textAlign:"right"}}>{c.costToClose!=null?"$"+c.costToClose.toFixed(2):"—"}</td>
                     <td style={{padding:"4px 7px",color:pc,fontWeight:700,textAlign:"right"}}>{c.profit!=null?(c.profit>=0?"+":"")+c.profit.toFixed(2):"—"}</td>
                     <td style={{padding:"4px 7px",color:pc,textAlign:"right"}}>{pp}</td>
-                    <td style={{padding:"4px 7px",color:"#3a4050",textAlign:"right"}}>{c.daysHeld||"—"}</td>
+                    <td style={{padding:"4px 7px",color:th("#3a4050","#8a7e74"),textAlign:"right"}}>{c.daysHeld||"—"}</td>
                     <td style={{padding:"4px 7px",color:"#555",fontSize:8}}>{c.strategy||"—"}</td>
                   </tr>
                 );
@@ -4105,7 +4111,7 @@ function AllTransactionsTab({ supabase }) {
   }, [supabase, fType, fAcct, fSym, fFrom, fTo]);
 
   const accounts = [...new Set(rows.map(r => r.account).filter(Boolean))].sort();
-  const inp = { fontSize: 11, padding: "3px 6px", background: "#0a0e14", border: "1px solid #21262d", borderRadius: 4, color: "#c9d1d9" };
+  const inp = { fontSize: 11, padding: "3px 6px", background: th("#0a0e14","#f8f3eb"), border: "1px solid #21262d", borderRadius: 4, color: th("#c9d1d9","#1a1a18") };
 
   return (
     <div style={{ padding: "12px 12px 0", maxWidth: 1000 }}>
@@ -4162,15 +4168,15 @@ function AllTransactionsTab({ supabase }) {
                 const dateStr = r.trade_date ? r.trade_date.slice(0, 10) : "—";
                 return (
                   <tr key={r.id ?? i} style={{ borderBottom: "1px solid #161b22" }}>
-                    <td style={{ padding: "5px 8px", color: "#8b949e" }}>{dateStr}</td>
-                    <td style={{ padding: "5px 8px", color: "#c9d1d9", fontWeight: 600 }}>{r.symbol}</td>
+                    <td style={{ padding: "5px 8px", color: th("#8b949e","#5a5248") }}>{dateStr}</td>
+                    <td style={{ padding: "5px 8px", color: th("#c9d1d9","#1a1a18"), fontWeight: 600 }}>{r.symbol}</td>
                     <td style={{ padding: "5px 8px" }}>
                       <span style={{ color: isBuy ? "#00ff88" : "#ff4560", background: isBuy ? "#00ff8818" : "#ff456018", border: `1px solid ${isBuy ? "#00ff8830" : "#ff456030"}`, borderRadius: 3, padding: "1px 5px", fontSize: 9 }}>{r.transaction_type}</span>
                     </td>
-                    <td style={{ padding: "5px 8px", textAlign: "right", color: "#c9d1d9" }}>{r.quantity != null ? (+r.quantity).toLocaleString() : "—"}</td>
-                    <td style={{ padding: "5px 8px", textAlign: "right", color: "#c9d1d9" }}>{r.price != null ? `$${(+r.price).toFixed(2)}` : "—"}</td>
+                    <td style={{ padding: "5px 8px", textAlign: "right", color: th("#c9d1d9","#1a1a18") }}>{r.quantity != null ? (+r.quantity).toLocaleString() : "—"}</td>
+                    <td style={{ padding: "5px 8px", textAlign: "right", color: th("#c9d1d9","#1a1a18") }}>{r.price != null ? `$${(+r.price).toFixed(2)}` : "—"}</td>
                     <td style={{ padding: "5px 8px", textAlign: "right", color: r.net_amount >= 0 ? "#00ff88" : "#ff4560" }}>{r.net_amount != null ? `${r.net_amount >= 0 ? "+" : ""}$${Math.abs(+r.net_amount).toFixed(2)}` : "—"}</td>
-                    <td style={{ padding: "5px 8px", color: "#8b949e" }}>{r.account}</td>
+                    <td style={{ padding: "5px 8px", color: th("#8b949e","#5a5248") }}>{r.account}</td>
                     <td style={{ padding: "3px 8px" }}>
                       {isBuy && (
                         <input
@@ -4182,7 +4188,7 @@ function AllTransactionsTab({ supabase }) {
                             if (v === (r.rationale || "")) return;
                             await supabase.from("stock_transactions").update({ rationale: v || null }).eq("id", r.id);
                           }}
-                          style={{ width: 150, fontSize: 9, padding: "2px 5px", background: "#0a0e14", border: "1px solid #21262d", borderRadius: 3, color: "#c9d1d9", fontFamily: "monospace" }}
+                          style={{ width: 150, fontSize: 9, padding: "2px 5px", background: th("#0a0e14","#f8f3eb"), border: "1px solid #21262d", borderRadius: 3, color: th("#c9d1d9","#1a1a18"), fontFamily: "monospace" }}
                         />
                       )}
                     </td>
@@ -4219,7 +4225,7 @@ function ImportDailyTab({ contracts, supabase }) {
 
   const fSign = v => v == null ? "—" : ((+v >= 0 ? "+" : "-") + "$" + Math.abs(+v).toFixed(2));
   const rowStyle = {display:"grid", gridTemplateColumns:"60px 40px 55px 65px 40px 55px 80px 90px 70px", gap:4, padding:"6px 12px", borderBottom:"1px solid #1c2128", alignItems:"center", fontSize:11, fontFamily:"monospace"};
-  const hdrStyle = {...rowStyle, fontSize:9, color:"#3a4050", fontWeight:700, letterSpacing:"0.06em", borderBottom:"1px solid #30363d", paddingTop:4, paddingBottom:4};
+  const hdrStyle = {...rowStyle, fontSize:9, color:th("#3a4050","#8a7e74"), fontWeight:700, letterSpacing:"0.06em", borderBottom:"1px solid #30363d", paddingTop:4, paddingBottom:4};
 
   // Gamify: P&L is stored on the PARENT (STO) contract when closed, not the BTC row.
   // Look for any STO/BTO that was closed today (close_date = TODAY) with profit set.
@@ -4229,41 +4235,41 @@ function ImportDailyTab({ contracts, supabase }) {
   const todayLosses  = todayCloses.filter(c => (+c.profit||0) < 0).length;
 
   return (
-    <div style={{padding:"16px 20px", fontFamily:"monospace", background:"#0d1117", minHeight:"100vh"}}>
+    <div style={{padding:"16px 20px", fontFamily:"monospace", background:th("#0d1117","#f5f0e8"), minHeight:"100vh"}}>
       <div style={{fontSize:13, fontWeight:700, color:"#58a6ff", letterSpacing:"0.08em", marginBottom:4}}>⬇ IMPORT</div>
-      <div style={{fontSize:10, color:"#3a4050", marginBottom:12}}>{TODAY} · auto-committed via Schwab/ETrade import</div>
+      <div style={{fontSize:10, color:th("#3a4050","#8a7e74"), marginBottom:12}}>{TODAY} · auto-committed via Schwab/ETrade import</div>
 
       {/* ── Gamified P&L Banner ── */}
       {todayCloses.length > 0 && (
         <div style={{
-          background: todayProfit > 0 ? "linear-gradient(135deg,#00ff8812,#00ff8805)" : todayProfit < 0 ? "linear-gradient(135deg,#ff456012,#ff456005)" : "#1c2128",
-          border: `1px solid ${todayProfit > 0 ? "#00ff8830" : todayProfit < 0 ? "#ff456030" : "#21262d"}`,
+          background: todayProfit > 0 ? "linear-gradient(135deg,#00ff8812,#00ff8805)" : todayProfit < 0 ? "linear-gradient(135deg,#ff456012,#ff456005)" : th("#1c2128","#b8a898"),
+          border: `1px solid ${todayProfit > 0 ? "#00ff8830" : todayProfit < 0 ? "#ff456030" : th("#21262d","#c8b8a8")}`,
           borderRadius:10, padding:"14px 16px", marginBottom:16,
           display:"flex", alignItems:"center", gap:16, flexWrap:"wrap",
           animation:"fadeIn .3s",
         }}>
           <div style={{fontSize:28}}>{todayProfit > 0 ? "🎰" : todayProfit < 0 ? "📉" : "➖"}</div>
           <div>
-            <div style={{fontSize:9,color:"#3a4050",letterSpacing:"0.08em",marginBottom:2}}>TODAY&apos;S CLOSED P&amp;L</div>
-            <div style={{fontSize:22,fontWeight:700,color:todayProfit>0?"#00ff88":todayProfit<0?"#ff4560":"#c9d1d9",lineHeight:1}}>
+            <div style={{fontSize:9,color:th("#3a4050","#8a7e74"),letterSpacing:"0.08em",marginBottom:2}}>TODAY&apos;S CLOSED P&amp;L</div>
+            <div style={{fontSize:22,fontWeight:700,color:todayProfit>0?"#00ff88":todayProfit<0?"#ff4560":th("#c9d1d9","#1a1a18"),lineHeight:1}}>
               {todayProfit>=0?"+":""}{todayProfit.toFixed(2)}
             </div>
           </div>
           <div style={{display:"flex",gap:12,marginLeft:"auto",flexWrap:"wrap"}}>
             <div style={{textAlign:"center"}}>
-              <div style={{fontSize:9,color:"#3a4050",letterSpacing:"0.06em"}}>CLOSES</div>
-              <div style={{fontSize:16,fontWeight:700,color:"#e6edf3"}}>{todayCloses.length}</div>
+              <div style={{fontSize:9,color:th("#3a4050","#8a7e74"),letterSpacing:"0.06em"}}>CLOSES</div>
+              <div style={{fontSize:16,fontWeight:700,color:th("#e6edf3","#0d0d0b")}}>{todayCloses.length}</div>
             </div>
             {todayWins > 0 && <div style={{textAlign:"center"}}>
-              <div style={{fontSize:9,color:"#3a4050",letterSpacing:"0.06em"}}>WINS</div>
+              <div style={{fontSize:9,color:th("#3a4050","#8a7e74"),letterSpacing:"0.06em"}}>WINS</div>
               <div style={{fontSize:16,fontWeight:700,color:"#00ff88"}}>{todayWins}</div>
             </div>}
             {todayLosses > 0 && <div style={{textAlign:"center"}}>
-              <div style={{fontSize:9,color:"#3a4050",letterSpacing:"0.06em"}}>LOSSES</div>
+              <div style={{fontSize:9,color:th("#3a4050","#8a7e74"),letterSpacing:"0.06em"}}>LOSSES</div>
               <div style={{fontSize:16,fontWeight:700,color:"#ff4560"}}>{todayLosses}</div>
             </div>}
             <div style={{textAlign:"center"}}>
-              <div style={{fontSize:9,color:"#3a4050",letterSpacing:"0.06em"}}>WIN RATE</div>
+              <div style={{fontSize:9,color:th("#3a4050","#8a7e74"),letterSpacing:"0.06em"}}>WIN RATE</div>
               <div style={{fontSize:16,fontWeight:700,color:todayWins/todayCloses.length>=0.7?"#00ff88":"#ffd166"}}>{Math.round(todayWins/todayCloses.length*100)}%</div>
             </div>
           </div>
@@ -4271,7 +4277,7 @@ function ImportDailyTab({ contracts, supabase }) {
       )}
 
       {/* Auto-committed today */}
-      <div style={{background:"#161b22", border:"1px solid #30363d", borderRadius:8, marginBottom:16, overflow:"hidden"}}>
+      <div style={{background:th("#161b22","#ede8df"), border:"1px solid #30363d", borderRadius:8, marginBottom:16, overflow:"hidden"}}>
         <div style={{padding:"8px 12px", borderBottom:"1px solid #30363d", display:"flex", justifyContent:"space-between", alignItems:"center"}}>
           <span style={{fontSize:9, fontWeight:700, color:"#3fb950", letterSpacing:"0.1em"}}>AUTO COMMITTED TODAY</span>
           <span style={{fontSize:9, color:"#484f58"}}>{todayContracts.length} contracts</span>
@@ -4284,21 +4290,21 @@ function ImportDailyTab({ contracts, supabase }) {
               </div>
               {todayContracts.map(c => (
                 <div key={c.id} style={rowStyle}>
-                  <span style={{color:"#e6edf3", fontWeight:700}}>{c.stock}</span>
-                  <span style={{color:"#8b949e"}}>{c.type}</span>
+                  <span style={{color:th("#e6edf3","#0d0d0b"), fontWeight:700}}>{c.stock}</span>
+                  <span style={{color:th("#8b949e","#5a5248")}}>{c.type}</span>
                   <span style={{color:["STO","STC"].includes(c.optType)?"#3fb950":"#58a6ff", fontWeight:600}}>{c.optType}</span>
-                  <span style={{color:"#e6edf3"}}>${c.strike}</span>
-                  <span style={{color:"#8b949e"}}>{c.qty}</span>
-                  <span style={{color:c.status==="Open"?"#3fb950":"#8b949e", fontSize:9, fontWeight:600}}>{c.status==="Open"?"Open":"Close"}</span>
+                  <span style={{color:th("#e6edf3","#0d0d0b")}}>${c.strike}</span>
+                  <span style={{color:th("#8b949e","#5a5248")}}>{c.qty}</span>
+                  <span style={{color:c.status==="Open"?"#3fb950":th("#8b949e","#5a5248"), fontSize:9, fontWeight:600}}>{c.status==="Open"?"Open":"Close"}</span>
                   <span style={{color:+c.premium>=0?"#3fb950":"#ff4560", fontWeight:600}}>{fSign(c.premium)}</span>
                   <span style={{color:"#484f58", fontSize:9}}>{c.account}</span>
-                  <span style={{color:"#3a4050", fontSize:9}}>{c.createdAt ? new Date(c.createdAt).toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit",hour12:true,timeZone:"America/New_York"}) : "—"}</span>
+                  <span style={{color:th("#3a4050","#8a7e74"), fontSize:9}}>{c.createdAt ? new Date(c.createdAt).toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit",hour12:true,timeZone:"America/New_York"}) : "—"}</span>
                 </div>
               ))}
               <div style={{padding:"6px 12px", borderTop:"1px solid #21262d", display:"flex", gap:16, flexWrap:"wrap"}}>
-                <span style={{fontSize:9, color:"#8b949e"}}>Total premium: <b style={{color:"#3fb950"}}>{fSign(todayContracts.reduce((s,c)=>s+(+c.premium||0),0))}</b></span>
-                <span style={{fontSize:9, color:"#8b949e"}}>Contracts: <b style={{color:"#e6edf3"}}>{todayContracts.reduce((s,c)=>s+(+c.qty||0),0)}</b></span>
-                {todayCloses.length > 0 && <span style={{fontSize:9, color:"#8b949e"}}>P&amp;L: <b style={{color:todayProfit>=0?"#3fb950":"#ff4560"}}>{todayProfit>=0?"+":""}{todayProfit.toFixed(2)}</b></span>}
+                <span style={{fontSize:9, color:th("#8b949e","#5a5248")}}>Total premium: <b style={{color:"#3fb950"}}>{fSign(todayContracts.reduce((s,c)=>s+(+c.premium||0),0))}</b></span>
+                <span style={{fontSize:9, color:th("#8b949e","#5a5248")}}>Contracts: <b style={{color:th("#e6edf3","#0d0d0b")}}>{todayContracts.reduce((s,c)=>s+(+c.qty||0),0)}</b></span>
+                {todayCloses.length > 0 && <span style={{fontSize:9, color:th("#8b949e","#5a5248")}}>P&amp;L: <b style={{color:todayProfit>=0?"#3fb950":"#ff4560"}}>{todayProfit>=0?"+":""}{todayProfit.toFixed(2)}</b></span>}
               </div>
             </>
         }
@@ -4306,7 +4312,7 @@ function ImportDailyTab({ contracts, supabase }) {
 
       {/* Anomalies */}
       {todayAnomalies.length > 0 && (
-        <div style={{background:"#161b22", border:"1px solid #ff456033", borderRadius:8, marginBottom:16, overflow:"hidden"}}>
+        <div style={{background:th("#161b22","#ede8df"), border:"1px solid #ff456033", borderRadius:8, marginBottom:16, overflow:"hidden"}}>
           <div style={{padding:"8px 12px", borderBottom:"1px solid #ff456033", display:"flex", justifyContent:"space-between"}}>
             <span style={{fontSize:9, fontWeight:700, color:"#ff4560", letterSpacing:"0.1em"}}>⚠ ANOMALIES — NEEDS ATTENTION</span>
             <span style={{fontSize:9, color:"#484f58"}}>{todayAnomalies.length}</span>
@@ -4314,7 +4320,7 @@ function ImportDailyTab({ contracts, supabase }) {
           {todayAnomalies.map((a,i) => (
             <div key={a.id||i} style={{padding:"8px 12px", borderBottom:"1px solid #1c2128"}}>
               <div style={{display:"flex", gap:8, alignItems:"center", marginBottom:3}}>
-                <span style={{fontSize:11, fontWeight:700, color:"#e6edf3"}}>{a.stock||a.symbol||"?"}</span>
+                <span style={{fontSize:11, fontWeight:700, color:th("#e6edf3","#0d0d0b")}}>{a.stock||a.symbol||"?"}</span>
                 <span style={{fontSize:9, color:"#ff4560", background:"#ff456015", border:"1px solid #ff456033", borderRadius:3, padding:"1px 6px"}}>{a.anomaly_type||a.opt_type||"anomaly"}</span>
                 <span style={{fontSize:9, color:"#484f58"}}>{a.strike ? "$"+a.strike : ""} {a.expires||""}</span>
                 <button
@@ -4326,7 +4332,7 @@ function ImportDailyTab({ contracts, supabase }) {
                   style={{marginLeft:"auto", fontSize:9, color:"#484f58", background:"none", border:"1px solid #30363d", borderRadius:3, padding:"1px 8px", cursor:"pointer", fontFamily:"monospace"}}
                 >dismiss</button>
               </div>
-              <div style={{fontSize:9, color:"#8b949e"}}>{a.notes||a.note||"No details"}</div>
+              <div style={{fontSize:9, color:th("#8b949e","#5a5248")}}>{a.notes||a.note||"No details"}</div>
             </div>
           ))}
         </div>
@@ -4334,22 +4340,22 @@ function ImportDailyTab({ contracts, supabase }) {
 
       {/* Manual entries today */}
       {manualToday.length > 0 && (
-        <div style={{background:"#161b22", border:"1px solid #30363d", borderRadius:8, overflow:"hidden"}}>
+        <div style={{background:th("#161b22","#ede8df"), border:"1px solid #30363d", borderRadius:8, overflow:"hidden"}}>
           <div style={{padding:"8px 12px", borderBottom:"1px solid #30363d", display:"flex", justifyContent:"space-between"}}>
             <span style={{fontSize:9, fontWeight:700, color:"#ffd166", letterSpacing:"0.1em"}}>MANUAL ENTRIES TODAY</span>
             <span style={{fontSize:9, color:"#484f58"}}>{manualToday.length}</span>
           </div>
           {manualToday.map(c => (
             <div key={c.id} style={rowStyle}>
-              <span style={{color:"#e6edf3", fontWeight:700}}>{c.stock}</span>
-              <span style={{color:"#8b949e"}}>{c.type}</span>
+              <span style={{color:th("#e6edf3","#0d0d0b"), fontWeight:700}}>{c.stock}</span>
+              <span style={{color:th("#8b949e","#5a5248")}}>{c.type}</span>
               <span style={{color:["STO","STC"].includes(c.optType)?"#3fb950":"#58a6ff", fontWeight:600}}>{c.optType}</span>
-              <span style={{color:"#e6edf3"}}>${c.strike}</span>
-              <span style={{color:"#8b949e"}}>{c.qty}</span>
-              <span style={{color:c.status==="Open"?"#3fb950":"#8b949e", fontSize:9, fontWeight:600}}>{c.status==="Open"?"Open":"Close"}</span>
+              <span style={{color:th("#e6edf3","#0d0d0b")}}>${c.strike}</span>
+              <span style={{color:th("#8b949e","#5a5248")}}>{c.qty}</span>
+              <span style={{color:c.status==="Open"?"#3fb950":th("#8b949e","#5a5248"), fontSize:9, fontWeight:600}}>{c.status==="Open"?"Open":"Close"}</span>
               <span style={{color:+c.premium>=0?"#3fb950":"#ff4560", fontWeight:600}}>{fSign(c.premium)}</span>
               <span style={{color:"#484f58", fontSize:9}}>{c.account}</span>
-              <span style={{color:"#3a4050", fontSize:9}}>{c.createdAt ? new Date(c.createdAt).toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit",hour12:true,timeZone:"America/New_York"}) : "—"}</span>
+              <span style={{color:th("#3a4050","#8a7e74"), fontSize:9}}>{c.createdAt ? new Date(c.createdAt).toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit",hour12:true,timeZone:"America/New_York"}) : "—"}</span>
             </div>
           ))}
         </div>
@@ -4378,6 +4384,9 @@ export default function App() {
   // App core
   const [tab,setTab]             = useState("dashboard");
   const [uiScale,setUiScale]     = useState(()=>{ try{ return +localStorage.getItem("pri_ui_scale")||1; }catch{ return 1; } });
+  const [lightMode,setLightMode] = useState(()=>{ try{ return localStorage.getItem("pri_light_mode")==="on"; }catch{ return false; } });
+  // Sync module-level _lightMode so th() works in all module-level components
+  _lightMode = lightMode;
 
   const [contracts,setContracts] = useState([]);
   const [dbReady,setDbReady]     = useState(false);
@@ -4822,9 +4831,9 @@ export default function App() {
     const otmPct = c.type==="Put"
       ? ((refPrice - c.strike) / refPrice) * 100
       : ((c.strike - refPrice) / refPrice) * 100;
-    // Try matrix first
+    // Try matrix first — but only use it if tgtPct is non-zero
     const mx = getMatrixTarget(c);
-    if (mx) {
+    if (mx && mx.tgtPct) {
       const bandLabel = otmPct>=5?"Far OTM":otmPct>=3?"Mid OTM":otmPct>=1.5?"Near OTM":"Near/ATM";
       return { otmPct, bandLabel, bandColor:mx.bandColor, tgtPct:mx.tgtPct, targetPerShare:mx.targetPerShare, targetClose:mx.targetClose };
     }
@@ -4981,12 +4990,23 @@ export default function App() {
   const nowMonthKey = new Date().toISOString().slice(0,7);
   const [schwabAccountValue, setSchwabAccountValue] = useState(0);
   // Seed from portfolio_snapshots on cold load — most recent daily snapshot has correct account values
-  const latestSnapshot = portfolioSnapshots[0] ?? null;
+  // portfolioSnapshots is ordered ascending by date, so the latest is the LAST entry, not [0]
+  const latestSnapshot = portfolioSnapshots[portfolioSnapshots.length - 1] ?? null;
   const snapSchwab = latestSnapshot?.schwab_value > 0 ? +latestSnapshot.schwab_value : null;
   const snapEtrade = latestSnapshot?.etrade_value > 0 ? +latestSnapshot.etrade_value : null;
   // liveEtradeInline: most reliable current ETrade value — snapshot → cachData → null
   const liveEtradeInline = snapEtrade ?? (cashData?.etrade ? +cashData.etrade : null);
   const liveSchwabInline = schwabAccountValue > 0 ? schwabAccountValue : snapSchwab ?? (cashData?.schwab ? +cashData.schwab : null);
+  // getMonthTotal: total only counts when BOTH Schwab and ETrade have a value for that month —
+  // summing with (x||0) when one side is untracked yet silently inflates gains once the missing
+  // account starts being tracked (looks like a huge MoM/YTD jump that isn't a real gain).
+  const getMonthTotal = (key) => {
+    const b = balHistoryInline?.[key] || {};
+    const schwab = b.schwab ?? (key===nowMonthKey && liveSchwabInline ? liveSchwabInline : null);
+    const etrade = b.etrade ?? (key===nowMonthKey && liveEtradeInline ? liveEtradeInline : null);
+    const total  = (schwab!=null && etrade!=null) ? (+schwab||0)+(+etrade||0) : null;
+    return { schwab, etrade, total };
+  };
   useEffect(()=>{
     supabase.from("col_prefs").select("cols").eq("id","balance_history").maybeSingle()
       .then(({data})=>{ if(data?.cols) setBalHistoryInline(data.cols); });
@@ -5536,6 +5556,18 @@ export default function App() {
   };
   const [analyticsView,setAnalyticsView] = useState("monthly");
   const [showBalCols,setShowBalCols]     = useState(true);   // hide/show Schwab/ETrade/Total/MoM/YTD cols
+  useEffect(() => {
+    supabase.from("col_prefs").select("cols").eq("id","balance_cols_visible").maybeSingle()
+      .then(({data})=>{ if(data?.cols?.showBalCols!=null) setShowBalCols(data.cols.showBalCols); });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const toggleBalCols = () => {
+    setShowBalCols(v => {
+      const next = !v;
+      supabase.from("col_prefs").upsert({id:"balance_cols_visible", cols:{showBalCols:next}, updated_at:new Date().toISOString()}, {onConflict:"id"}).then(()=>{});
+      return next;
+    });
+  };
 
   const [profitDateMode,setProfitDateMode] = useState("close"); // "exec" | "close"
   const [chainTradeOrder, setChainTradeOrder] = useState(null);
@@ -5613,6 +5645,12 @@ export default function App() {
     : closedC.filter(c=>profitDateField(c)?.startsWith(todayKey)).reduce((s,c)=>s+(c.profit||0),0);
   const premToday   = allF.filter(c=>c.dateExec?.startsWith(todayKey)).reduce((s,c)=>s+(c.premium||0),0);
   const periodData = mkPeriodData(allF, analyticsView, profitDateMode);
+  // Realized P/L — accounting mode uses cash-basis (premium received vs cost to close paid),
+  // same formula as Profit MTD/YTD. Open/Close date mode show the same all-time total either way,
+  // since a closed position's profit doesn't change based on which date field you attribute it to.
+  const realizedPL = profitDateMode === "accounting"
+    ? accountingByPeriod(allF, "") // empty prefix matches every date — all-time cash basis
+    : totalProfit;
 
   // Filtered contracts for table
   const sortedFiltered = contracts.filter(c => {
@@ -5973,49 +6011,49 @@ ${JSON.stringify(summary, null, 1)}`;
 
   // ── LOGIN SCREEN ──────────────────────────────────────────────────────────
   if (!dbReady) return (
-    <div style={{minHeight:"100vh",background:"#010409",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:12}}>
+    <div style={{minHeight:"100vh",background:th("#010409","#f5f0e8"),display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:12}}>
       <div style={{width:12,height:12,border:"2px solid #1c2128",borderTopColor:"#00ff88",borderRadius:"50%",animation:"spin .7s linear infinite"}}/>
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>
   );
 
   if (!authUser) return (
-    <div style={{minHeight:"100vh",background:"#010409",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Inter',sans-serif",padding:16}}>
+    <div style={{minHeight:"100vh",background:th("#010409","#f5f0e8"),display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Inter',sans-serif",padding:16}}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600&display=swap');*{box-sizing:border-box;margin:0;padding:0}@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}`}</style>
       <div style={{width:"100%",maxWidth:340,animation:"fadeIn .3s ease"}}>
         <div style={{textAlign:"center",marginBottom:28}}>
           <div style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:52,height:52,borderRadius:14,background:"linear-gradient(135deg,#0d1f12,#0a1a1f)",border:"1px solid #00ff8830",boxShadow:"0 0 24px #00ff8818",marginBottom:10}}>
             <span style={{fontFamily:"'JetBrains Mono',monospace",fontWeight:700,fontSize:17,color:"#00ff88"}}>PRI</span>
           </div>
-          <div style={{fontFamily:"monospace",fontSize:10,color:"#3a4050",letterSpacing:"0.08em"}}>PREMIUM RECURRING INCOME</div>
-          <div style={{fontFamily:"monospace",fontSize:8,color:"#2a3040",letterSpacing:"0.06em",marginTop:2}}>TRADING OPTIONS DASHBOARD</div>
+          <div style={{fontFamily:"monospace",fontSize:10,color:th("#3a4050","#8a7e74"),letterSpacing:"0.08em"}}>PREMIUM RECURRING INCOME</div>
+          <div style={{fontFamily:"monospace",fontSize:8,color:th("#2a3040","#6b5f55"),letterSpacing:"0.06em",marginTop:2}}>TRADING OPTIONS DASHBOARD</div>
         </div>
         {loginStep==="pick" ? (
           <div>
-            <div style={{fontSize:10,color:"#3a4050",fontFamily:"monospace",textAlign:"center",marginBottom:14,letterSpacing:"0.06em"}}>SELECT USER</div>
+            <div style={{fontSize:10,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",textAlign:"center",marginBottom:14,letterSpacing:"0.06em"}}>SELECT USER</div>
             {users.map(u => (
-              <button key={u.id} onClick={()=>selUser(u)} style={{background:"#0a0e14",border:`1px solid ${u.color}25`,borderRadius:10,padding:"13px 16px",cursor:"pointer",display:"flex",alignItems:"center",gap:12,width:"100%",marginBottom:8}}>
+              <button key={u.id} onClick={()=>selUser(u)} style={{background:th("#0a0e14","#f8f3eb"),border:`1px solid ${u.color}25`,borderRadius:10,padding:"13px 16px",cursor:"pointer",display:"flex",alignItems:"center",gap:12,width:"100%",marginBottom:8}}>
                 <div style={{width:36,height:36,borderRadius:"50%",background:`${u.color}20`,border:`2px solid ${u.color}50`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"monospace",fontWeight:700,color:u.color,fontSize:11,flexShrink:0}}>{u.initials}</div>
-                <div style={{textAlign:"left"}}><div style={{color:"#e6edf3",fontSize:13,fontWeight:600}}>{u.name}</div><div style={{color:"#3a4050",fontSize:9,fontFamily:"monospace",marginTop:1}}>Enter PIN to continue</div></div>
+                <div style={{textAlign:"left"}}><div style={{color:th("#e6edf3","#0d0d0b"),fontSize:13,fontWeight:600}}>{u.name}</div><div style={{color:th("#3a4050","#8a7e74"),fontSize:9,fontFamily:"monospace",marginTop:1}}>Enter PIN to continue</div></div>
               </button>
             ))}
           </div>
         ) : (
           <div style={{animation:"fadeIn .2s ease"}}>
-            <button onClick={()=>setLoginStep("pick")} style={{background:"transparent",border:"none",color:"#3a4050",fontSize:10,fontFamily:"monospace",cursor:"pointer",marginBottom:14,display:"flex",alignItems:"center",gap:6}}>← Back</button>
-            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:18,padding:"10px 14px",background:"#0a0e14",borderRadius:8,border:`1px solid ${loginTarget.color}20`}}>
+            <button onClick={()=>setLoginStep("pick")} style={{background:"transparent",border:"none",color:th("#3a4050","#8a7e74"),fontSize:10,fontFamily:"monospace",cursor:"pointer",marginBottom:14,display:"flex",alignItems:"center",gap:6}}>← Back</button>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:18,padding:"10px 14px",background:th("#0a0e14","#f8f3eb"),borderRadius:8,border:`1px solid ${loginTarget.color}20`}}>
               <div style={{width:32,height:32,borderRadius:"50%",background:`${loginTarget.color}20`,border:`2px solid ${loginTarget.color}50`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"monospace",fontWeight:700,color:loginTarget.color,fontSize:11}}>{loginTarget.initials}</div>
-              <div><div style={{color:"#e6edf3",fontSize:12,fontWeight:600}}>{loginTarget.name}</div><div style={{color:"#2a3040",fontSize:9,fontFamily:"monospace"}}>Enter 4-digit PIN or use keyboard</div></div>
+              <div><div style={{color:th("#e6edf3","#0d0d0b"),fontSize:12,fontWeight:600}}>{loginTarget.name}</div><div style={{color:th("#2a3040","#6b5f55"),fontSize:9,fontFamily:"monospace"}}>Enter 4-digit PIN or use keyboard</div></div>
             </div>
             <div style={{display:"flex",justifyContent:"center",gap:12,marginBottom:18}}>
-              {[0,1,2,3].map(i=><div key={i} style={{width:13,height:13,borderRadius:"50%",background:i<pinInput.length?loginTarget.color:"transparent",border:`2px solid ${i<pinInput.length?loginTarget.color:"#2a3040"}`,transition:"all .15s"}}/>)}
+              {[0,1,2,3].map(i=><div key={i} style={{width:13,height:13,borderRadius:"50%",background:i<pinInput.length?loginTarget.color:"transparent",border:`2px solid ${i<pinInput.length?loginTarget.color:th("#2a3040","#6b5f55")}`,transition:"all .15s"}}/>)}
             </div>
             {pinError && <div style={{textAlign:"center",color:"#ff4560",fontSize:11,fontFamily:"monospace",marginBottom:10}}>{pinError}</div>}
             <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
               {[1,2,3,4,5,6,7,8,9,"",0,"⌫"].map((d,i)=>(
                 <button key={i} onClick={()=>d==="⌫"?setPinInput(p=>p.slice(0,-1)):d!==""?pinDigit(String(d)):null}
                   disabled={d===""}
-                  style={{background:d===""?"transparent":"#0a0e14",border:d===""?"none":"1px solid #1c2128",borderRadius:8,padding:"13px 0",fontSize:d==="⌫"?16:18,fontFamily:"monospace",color:d===""?"transparent":"#e6edf3",cursor:d===""?"default":"pointer",fontWeight:500}}>
+                  style={{background:d===""?"transparent":th("#0a0e14","#f8f3eb"),border:d===""?"none":"1px solid #1c2128",borderRadius:8,padding:"13px 0",fontSize:d==="⌫"?16:18,fontFamily:"monospace",color:d===""?"transparent":th("#e6edf3","#0d0d0b"),cursor:d===""?"default":"pointer",fontWeight:500}}>
                   {d}
                 </button>
               ))}
@@ -6029,7 +6067,7 @@ ${JSON.stringify(summary, null, 1)}`;
   // ── MAIN APP ──────────────────────────────────────────────────────────────
   return (
     <>
-    <div style={{minHeight:"100vh",background:"#010409",color:"#e6edf3",fontFamily:"'Inter',sans-serif",fontSize:`${uiScale*100}%`}}>
+    <div style={{minHeight:"100vh",background:th("#010409","#f5f0e8"),color:th("#e6edf3","#0d0d0b"),fontFamily:"'Inter',sans-serif",fontSize:`${uiScale*100}%`}}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600&display=swap');
         *{box-sizing:border-box;margin:0;padding:0}
@@ -6063,7 +6101,7 @@ ${JSON.stringify(summary, null, 1)}`;
       {/* Delete confirm */}
       {deleteConfirm && (
         <div style={{position:"fixed",inset:0,background:"#000c",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
-          <div style={{background:"#0d1117",border:"1px solid #ff456040",borderRadius:10,padding:22,width:"100%",maxWidth:280,animation:"fadeIn .15s"}}>
+          <div style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #ff456040",borderRadius:10,padding:22,width:"100%",maxWidth:280,animation:"fadeIn .15s"}}>
             <div style={{fontFamily:"monospace",color:"#ff4560",fontSize:12,marginBottom:8}}>DELETE CONTRACT?</div>
             <div style={{color:"#888",fontSize:13,marginBottom:18}}>{contracts.find(c=>c.id===deleteConfirm)?.stock||"?"} — cannot be undone.</div>
             <div style={{display:"flex",gap:8}}>
@@ -6081,10 +6119,10 @@ ${JSON.stringify(summary, null, 1)}`;
         const itmStatus = getITMStatus(c);
         return (
           <div style={{position:"fixed",inset:0,background:"#000c",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={()=>setViewC(null)}>
-            <div style={{background:"#0d1117",border:"1px solid #21262d",borderRadius:12,padding:18,width:"100%",maxWidth:500,animation:"fadeIn .15s",maxHeight:"85vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+            <div style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:12,padding:18,width:"100%",maxWidth:500,animation:"fadeIn .15s",maxHeight:"85vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
                 <div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>
-                  <span style={{fontFamily:"monospace",fontWeight:700,fontSize:13,color:"#e6edf3"}}>{fTitle(c)}</span>
+                  <span style={{fontFamily:"monospace",fontWeight:700,fontSize:13,color:th("#e6edf3","#0d0d0b")}}>{fTitle(c)}</span>
                   <Tag color={c.type==="Put"?"amber":"blue"}>{c.type}</Tag>
                   <Tag color={c.optType==="STO"?"green":c.optType==="BTC"?"amber":c.optType==="STC"?"blue":c.optType==="BTO"?"purple":"gray"}>{c.optType}</Tag>
                   <Tag color={c.status==="Open"?"green":"gray"}>{c.status}</Tag>
@@ -6092,20 +6130,20 @@ ${JSON.stringify(summary, null, 1)}`;
                 </div>
                 <button onClick={()=>setViewC(null)} style={{background:"transparent",border:"none",color:"#555",fontSize:18,lineHeight:1,flexShrink:0}}>✕</button>
               </div>
-              <div style={{background:"#080c12",borderRadius:8,padding:12,marginBottom:10,border:"1px solid #00ff8820"}}>
+              <div style={{background:th("#080c12","#ede8df"),borderRadius:8,padding:12,marginBottom:10,border:"1px solid #00ff8820"}}>
                 <div style={{fontFamily:"monospace",fontSize:8,color:"#00ff88",letterSpacing:"0.07em",marginBottom:8}}>OPEN — {c.optType}</div>
                 <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
                   {[["Strike","$"+c.strike],["Qty",c.qty],["Account",c.account||"—"],["Exec",c.dateExec||"—"],["Expires",c.expires||"—"],["Premium",f$(c.premium)],["Price@Exec",c.priceAtExecution?f$(c.priceAtExecution):"—"],["Strategy",c.strategy||"—"],["Created Via",c.createdVia||"—"],["Opened Via",c.openMethod||"manual"],["By",c.createdBy?users.find(u=>u.id===c.createdBy)?.initials||c.createdBy:"—"]].map(([l,v])=>(
-                    <div key={l}><div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",marginBottom:2}}>{l}</div><div style={{fontSize:11,color:l==="Opened Via"?(v==="auto"?"#00ff88":v==="app"?"#58a6ff":"#888"):"#c9d1d9",fontFamily:"monospace"}}>{v}</div></div>
+                    <div key={l}><div style={{fontSize:7,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",marginBottom:2}}>{l}</div><div style={{fontSize:11,color:l==="Opened Via"?(v==="auto"?"#00ff88":v==="app"?"#58a6ff":"#888"):th("#c9d1d9","#1a1a18"),fontFamily:"monospace"}}>{v}</div></div>
                   ))}
                 </div>
                 {c.status==="Open" && (
                   <div style={{marginTop:10,display:"flex",alignItems:"center",gap:8}}>
-                    <div style={{fontSize:8,color:"#3a4050",fontFamily:"monospace"}}>CURRENT PRICE $</div>
+                    <div style={{fontSize:8,color:th("#3a4050","#8a7e74"),fontFamily:"monospace"}}>CURRENT PRICE $</div>
                     <input type="number" defaultValue={c.currentPrice||""} placeholder="Live via Schwab API"
                       onBlur={e=>updatePrice(c.id,e.target.value)}
-                      style={{width:140,padding:"3px 6px",fontSize:11,border:`1px solid ${itmStatus==="ITM"?"#ff456040":itmStatus==="OTM"?"#00ff8840":"#21262d"}`}}/>
-                    <span style={{fontSize:9,color:"#2a3040",fontFamily:"monospace"}}>🔗 Schwab API (coming)</span>
+                      style={{width:140,padding:"3px 6px",fontSize:11,border:`1px solid ${itmStatus==="ITM"?"#ff456040":itmStatus==="OTM"?"#00ff8840":th("#21262d","#c8b8a8")}`}}/>
+                    <span style={{fontSize:9,color:th("#2a3040","#6b5f55"),fontFamily:"monospace"}}>🔗 Schwab API (coming)</span>
                   </div>
                 )}
                 {/* Target close display */}
@@ -6115,15 +6153,15 @@ ${JSON.stringify(summary, null, 1)}`;
                   return (
                     <div style={{marginTop:8,display:"flex",gap:14,flexWrap:"wrap"}}>
                       <div>
-                        <div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",marginBottom:1}}>TGT CLOSE $</div>
+                        <div style={{fontSize:7,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",marginBottom:1}}>TGT CLOSE $</div>
                         <div style={{fontFamily:"monospace",fontSize:12,color:"#00ff88",fontWeight:700}}>{bd2.targetClose!=null?f$(bd2.targetClose):"—"}</div>
                       </div>
                       <div>
-                        <div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",marginBottom:1}}>$/SHARE</div>
+                        <div style={{fontSize:7,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",marginBottom:1}}>$/SHARE</div>
                         <div style={{fontFamily:"monospace",fontSize:12,color:"#00ff88",fontWeight:700}}>{bd2.targetPerShare!=null?"$"+bd2.targetPerShare.toFixed(2):"—"}</div>
                       </div>
                       {bd2.tgtPct && <div>
-                        <div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",marginBottom:1}}>TARGET%</div>
+                        <div style={{fontSize:7,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",marginBottom:1}}>TARGET%</div>
                         <div style={{fontFamily:"monospace",fontSize:12,color:bd2.bandColor||"#ffd166"}}>{bd2.tgtPct}%</div>
                       </div>}
                     </div>
@@ -6136,33 +6174,33 @@ ${JSON.stringify(summary, null, 1)}`;
                     <div style={{fontSize:7,color:"#ffd166",fontFamily:"monospace",letterSpacing:"0.07em",marginBottom:6}}>EXIT PLAN</div>
                     <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"center"}}>
                       <div>
-                        <div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",marginBottom:2}}>STOP LOSS</div>
+                        <div style={{fontSize:7,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",marginBottom:2}}>STOP LOSS</div>
                         <input type="number" step="0.1" defaultValue={c.stopLossMultiplier ?? 2.0} onBlur={async e=>{
                           const v = parseFloat(e.target.value); if (isNaN(v)) return;
                           const { error } = await supabase.from("contracts").update({stop_loss_multiplier:v}).eq("id",c.id);
                           if (!error) { setContracts(cs=>cs.map(x=>x.id===c.id?{...x,stopLossMultiplier:v}:x)); setViewC(vc=>vc?.id===c.id?{...vc,stopLossMultiplier:v}:vc); }
                           else console.error("[exit plan] stop_loss_multiplier save failed:", error.message);
-                        }} style={{width:60,fontSize:11,padding:"2px 5px",background:"#0d1117",border:"1px solid #21262d",borderRadius:3,color:"#ffd166",fontFamily:"monospace"}}/>
-                        <span style={{fontSize:8,color:"#3a4050",fontFamily:"monospace",marginLeft:3}}>× premium</span>
+                        }} style={{width:60,fontSize:11,padding:"2px 5px",background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:3,color:"#ffd166",fontFamily:"monospace"}}/>
+                        <span style={{fontSize:8,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",marginLeft:3}}>× premium</span>
                       </div>
                       <div>
-                        <div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",marginBottom:2}}>TIME STOP DTE</div>
+                        <div style={{fontSize:7,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",marginBottom:2}}>TIME STOP DTE</div>
                         <input type="number" step="1" defaultValue={c.timeStopDte ?? ""} placeholder="—" onBlur={async e=>{
                           const v = e.target.value === "" ? null : parseInt(e.target.value);
                           const { error } = await supabase.from("contracts").update({time_stop_dte:v}).eq("id",c.id);
                           if (!error) { setContracts(cs=>cs.map(x=>x.id===c.id?{...x,timeStopDte:v}:x)); setViewC(vc=>vc?.id===c.id?{...vc,timeStopDte:v}:vc); }
                           else console.error("[exit plan] time_stop_dte save failed:", error.message);
-                        }} style={{width:55,fontSize:11,padding:"2px 5px",background:"#0d1117",border:"1px solid #21262d",borderRadius:3,color:"#ffd166",fontFamily:"monospace"}}/>
-                        <span style={{fontSize:8,color:"#3a4050",fontFamily:"monospace",marginLeft:3}}>days</span>
+                        }} style={{width:55,fontSize:11,padding:"2px 5px",background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:3,color:"#ffd166",fontFamily:"monospace"}}/>
+                        <span style={{fontSize:8,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",marginLeft:3}}>days</span>
                       </div>
                       <div>
-                        <div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",marginBottom:2}}>DELTA STOP</div>
+                        <div style={{fontSize:7,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",marginBottom:2}}>DELTA STOP</div>
                         <input type="number" step="0.01" defaultValue={c.deltaStop ?? 0.30} onBlur={async e=>{
                           const v = parseFloat(e.target.value); if (isNaN(v)) return;
                           const { error } = await supabase.from("contracts").update({delta_stop:v}).eq("id",c.id);
                           if (!error) { setContracts(cs=>cs.map(x=>x.id===c.id?{...x,deltaStop:v}:x)); setViewC(vc=>vc?.id===c.id?{...vc,deltaStop:v}:vc); }
                           else console.error("[exit plan] delta_stop save failed:", error.message);
-                        }} style={{width:60,fontSize:11,padding:"2px 5px",background:"#0d1117",border:"1px solid #21262d",borderRadius:3,color:"#ffd166",fontFamily:"monospace"}}/>
+                        }} style={{width:60,fontSize:11,padding:"2px 5px",background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:3,color:"#ffd166",fontFamily:"monospace"}}/>
                       </div>
                     </div>
                   </div>
@@ -6177,14 +6215,14 @@ ${JSON.stringify(summary, null, 1)}`;
                   : null;
                 const closeRule = closeSig ? tradeRules?.find?.(r => r.id === closeSig.rule_id) : null;
                 return (
-                  <div style={{background:"#080c12",borderRadius:8,padding:12,border:"1px solid #ffd16620"}}>
+                  <div style={{background:th("#080c12","#ede8df"),borderRadius:8,padding:12,border:"1px solid #ffd16620"}}>
                     <div style={{fontFamily:"monospace",fontSize:8,color:"#ffd166",letterSpacing:"0.07em",marginBottom:8}}>
                       CLOSE — {c.optType==="BTO"?"STC":c.optType==="STO"?"BTC":"CLOSED"}
                     </div>
                     <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
                       {[["Close Date",c.closeDate||"—"],["Cost",c.costToClose!=null?f$(c.costToClose):"—"],["Profit",c.profit!=null?fSign(c.profit):"—"],["Return",c.profitPct!=null?fPct(c.profitPct):"—"],["Days",c.daysHeld??"—"],["Closed Via",c.closeMethod||"manual"],["Exercised",c.exercised||"—"],["Rolled",c.rolledOver||"—"]].map(([l,v])=>(
-                        <div key={l}><div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",marginBottom:2}}>{l}</div>
-                          <div style={{fontSize:11,color:l==="Profit"?(c.profit>=0?"#00ff88":"#ff4560"):l==="Closed Via"?(v==="auto"?"#00ff88":v==="app"?"#58a6ff":"#888"):"#c9d1d9",fontFamily:"monospace",fontWeight:l==="Profit"?700:400}}>{v}</div>
+                        <div key={l}><div style={{fontSize:7,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",marginBottom:2}}>{l}</div>
+                          <div style={{fontSize:11,color:l==="Profit"?(c.profit>=0?"#00ff88":"#ff4560"):l==="Closed Via"?(v==="auto"?"#00ff88":v==="app"?"#58a6ff":"#888"):th("#c9d1d9","#1a1a18"),fontFamily:"monospace",fontWeight:l==="Profit"?700:400}}>{v}</div>
                         </div>
                       ))}
                     </div>
@@ -6196,7 +6234,7 @@ ${JSON.stringify(summary, null, 1)}`;
                   </div>
                 );
               })()}
-              {lkOpen && <div style={{marginTop:8,padding:"6px 10px",background:"#0a0e14",borderRadius:6,border:"1px solid #58a6ff20",fontSize:9,color:"#58a6ff",fontFamily:"monospace"}}>↑ Close record — linked to open #{lkOpen.id} ({fTitle(lkOpen)})</div>}
+              {lkOpen && <div style={{marginTop:8,padding:"6px 10px",background:th("#0a0e14","#f8f3eb"),borderRadius:6,border:"1px solid #58a6ff20",fontSize:9,color:"#58a6ff",fontFamily:"monospace"}}>↑ Close record — linked to open #{lkOpen.id} ({fTitle(lkOpen)})</div>}
 
               {/* ── Strategy Group Section ── */}
               {(() => {
@@ -6241,9 +6279,9 @@ ${JSON.stringify(summary, null, 1)}`;
                 };
 
                 return (
-                  <div style={{marginTop:10, background:"#080c12", borderRadius:8, padding:12, border:"1px solid #30363d"}}>
+                  <div style={{marginTop:10, background:th("#080c12","#ede8df"), borderRadius:8, padding:12, border:"1px solid #30363d"}}>
                     <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8}}>
-                      <span style={{fontSize:8, color:"#3a4050", fontFamily:"monospace", letterSpacing:"0.07em"}}>STRATEGY GROUP</span>
+                      <span style={{fontSize:8, color:th("#3a4050","#8a7e74"), fontFamily:"monospace", letterSpacing:"0.07em"}}>STRATEGY GROUP</span>
                       {!isEditing && (
                         <button onClick={() => setLinkEditor({contractId: c.id, strategyType: c.strategyType || null, selectedIds: groupLegs.map(x=>x.id), showClosed: false})}
                           style={{background:"transparent", color:"#58a6ff", border:"none", fontSize:9, fontFamily:"monospace", cursor:"pointer", padding:0}}>
@@ -6265,22 +6303,22 @@ ${JSON.stringify(summary, null, 1)}`;
                           <span style={{background:"#58a6ff20", color:"#58a6ff", border:"1px solid #58a6ff40", borderRadius:4, padding:"2px 8px", fontSize:10, fontWeight:600, fontFamily:"monospace"}}>
                             {c.strategyType || "Strategy"}
                           </span>
-                          <span style={{fontSize:9, color:"#3a4050", fontFamily:"monospace"}}>{groupLegs.length + 1} leg{groupLegs.length !== 0 ? "s" : ""}</span>
+                          <span style={{fontSize:9, color:th("#3a4050","#8a7e74"), fontFamily:"monospace"}}>{groupLegs.length + 1} leg{groupLegs.length !== 0 ? "s" : ""}</span>
                         </div>
                         {/* This contract */}
                         <div style={{display:"flex", alignItems:"center", gap:8, padding:"5px 8px", background:"#58a6ff12", border:"1px solid #58a6ff25", borderRadius:5, marginBottom:4}}>
                           <span style={{fontSize:9, color:"#58a6ff", fontFamily:"monospace", width:8}}>●</span>
                           <span style={{fontSize:10, color:"#58a6ff", fontFamily:"monospace", flex:1}}>{fTitle(c)} · {c.optType} · {c.qty} ct</span>
-                          <span style={{fontSize:9, color:"#3a4050", fontFamily:"monospace"}}>this contract</span>
+                          <span style={{fontSize:9, color:th("#3a4050","#8a7e74"), fontFamily:"monospace"}}>this contract</span>
                         </div>
                         {/* Linked legs */}
                         {groupLegs.map(leg => {
                           const legPnl = leg.profit != null ? leg.profit : null;
                           return (
-                            <div key={leg.id} style={{display:"flex", alignItems:"center", gap:8, padding:"5px 8px", background:"#0d1117", borderRadius:5, marginBottom:4, cursor:"pointer"}}
+                            <div key={leg.id} style={{display:"flex", alignItems:"center", gap:8, padding:"5px 8px", background:th("#0d1117","#f5f0e8"), borderRadius:5, marginBottom:4, cursor:"pointer"}}
                               onClick={() => { setViewC(leg); setLinkEditor(null); }}>
-                              <span style={{fontSize:9, color:"#3a4050", fontFamily:"monospace", width:8}}>→</span>
-                              <span style={{fontSize:10, color:"#c9d1d9", fontFamily:"monospace", flex:1}}>{fTitle(leg)} · {leg.optType} · {leg.qty} ct</span>
+                              <span style={{fontSize:9, color:th("#3a4050","#8a7e74"), fontFamily:"monospace", width:8}}>→</span>
+                              <span style={{fontSize:10, color:th("#c9d1d9","#1a1a18"), fontFamily:"monospace", flex:1}}>{fTitle(leg)} · {leg.optType} · {leg.qty} ct</span>
                               <span style={{fontSize:9, color:leg.status==="Open"?"#00ff88":"#555", fontFamily:"monospace"}}>{leg.status}</span>
                               {legPnl != null && <span style={{fontSize:9, color:legPnl>=0?"#00ff88":"#ff4560", fontFamily:"monospace"}}>{fSign(legPnl)}</span>}
                             </div>
@@ -6294,12 +6332,12 @@ ${JSON.stringify(summary, null, 1)}`;
                           const combined = withPnl.reduce((s, x) => s + x.profit, 0);
                           const totalCost = allLegs.reduce((s, x) => s + (x.premium || 0) * (x.qty || 1) * 100, 0);
                           return (
-                            <div style={{display:"flex", gap:12, marginTop:8, padding:"6px 8px", background:"#0a0e14", borderRadius:5, border:"1px solid #21262d"}}>
-                              <div><span style={{fontSize:7, color:"#3a4050", fontFamily:"monospace", display:"block"}}>COMBINED P&L</span>
+                            <div style={{display:"flex", gap:12, marginTop:8, padding:"6px 8px", background:th("#0a0e14","#f8f3eb"), borderRadius:5, border:"1px solid #21262d"}}>
+                              <div><span style={{fontSize:7, color:th("#3a4050","#8a7e74"), fontFamily:"monospace", display:"block"}}>COMBINED P&L</span>
                                 <span style={{fontSize:11, fontFamily:"monospace", fontWeight:700, color:combined>=0?"#00ff88":"#ff4560"}}>{fSign(combined)}</span></div>
-                              <div><span style={{fontSize:7, color:"#3a4050", fontFamily:"monospace", display:"block"}}>TOTAL COST</span>
-                                <span style={{fontSize:11, fontFamily:"monospace", color:"#c9d1d9"}}>{f$(totalCost)}</span></div>
-                              <div><span style={{fontSize:7, color:"#3a4050", fontFamily:"monospace", display:"block"}}>COMBINED %</span>
+                              <div><span style={{fontSize:7, color:th("#3a4050","#8a7e74"), fontFamily:"monospace", display:"block"}}>TOTAL COST</span>
+                                <span style={{fontSize:11, fontFamily:"monospace", color:th("#c9d1d9","#1a1a18")}}>{f$(totalCost)}</span></div>
+                              <div><span style={{fontSize:7, color:th("#3a4050","#8a7e74"), fontFamily:"monospace", display:"block"}}>COMBINED %</span>
                                 <span style={{fontSize:11, fontFamily:"monospace", color:combined>=0?"#00ff88":"#ff4560"}}>{totalCost>0?fPct(combined/totalCost*100):"—"}</span></div>
                             </div>
                           );
@@ -6313,7 +6351,7 @@ ${JSON.stringify(summary, null, 1)}`;
 
                     {/* View mode — no group */}
                     {!isEditing && !groupId && (
-                      <div style={{fontSize:10, color:"#3a4050", fontFamily:"monospace"}}>
+                      <div style={{fontSize:10, color:th("#3a4050","#8a7e74"), fontFamily:"monospace"}}>
                         No strategy linked · <span style={{color:"#58a6ff", cursor:"pointer"}}
                           onClick={() => setLinkEditor({contractId: c.id, strategyType: null, selectedIds: [], showClosed: false})}>
                           link one
@@ -6326,7 +6364,7 @@ ${JSON.stringify(summary, null, 1)}`;
                       <div>
                         {/* Strategy type pills */}
                         <div style={{marginBottom:10}}>
-                          <div style={{fontSize:8, color:"#3a4050", fontFamily:"monospace", marginBottom:6}}>STRATEGY TYPE</div>
+                          <div style={{fontSize:8, color:th("#3a4050","#8a7e74"), fontFamily:"monospace", marginBottom:6}}>STRATEGY TYPE</div>
                           <div style={{display:"flex", gap:5, flexWrap:"wrap"}}>
                             {STRATEGY_TYPES.map(st => (
                               <button key={st} onClick={() => setLinkEditor(p => ({...p, strategyType: st}))}
@@ -6334,7 +6372,7 @@ ${JSON.stringify(summary, null, 1)}`;
                                   fontSize:9, padding:"3px 9px", borderRadius:20, fontFamily:"monospace", cursor:"pointer",
                                   background: linkEditor.strategyType === st ? "#58a6ff30" : "transparent",
                                   color:      linkEditor.strategyType === st ? "#58a6ff" : "#555",
-                                  border:     `1px solid ${linkEditor.strategyType === st ? "#58a6ff50" : "#21262d"}`,
+                                  border:     `1px solid ${linkEditor.strategyType === st ? "#58a6ff50" : th("#21262d","#c8b8a8")}`,
                                 }}>
                                 {st}
                               </button>
@@ -6345,14 +6383,14 @@ ${JSON.stringify(summary, null, 1)}`;
                         {/* Contract list — same ticker */}
                         <div style={{marginBottom:10}}>
                           <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:6}}>
-                            <span style={{fontSize:8, color:"#3a4050", fontFamily:"monospace"}}>LINK CONTRACTS ({c.stock})</span>
+                            <span style={{fontSize:8, color:th("#3a4050","#8a7e74"), fontFamily:"monospace"}}>LINK CONTRACTS ({c.stock})</span>
                             <button onClick={() => setShowClosedLocal(!showClosed)}
                               style={{fontSize:8, color:"#555", background:"transparent", border:"none", cursor:"pointer", fontFamily:"monospace", padding:0}}>
                               {showClosed ? "Show open only" : `Show closed (${closedLegs.length})`}
                             </button>
                           </div>
                           {displayLegs.length === 0 && (
-                            <div style={{fontSize:9, color:"#3a4050", fontFamily:"monospace"}}>
+                            <div style={{fontSize:9, color:th("#3a4050","#8a7e74"), fontFamily:"monospace"}}>
                               No other {showClosed ? "" : "open "}contracts for {c.stock}
                               {!showClosed && closedLegs.length > 0 && <span style={{color:"#555"}}> · <span style={{cursor:"pointer", color:"#58a6ff"}} onClick={() => setShowClosedLocal(true)}>show {closedLegs.length} closed</span></span>}
                             </div>
@@ -6362,13 +6400,13 @@ ${JSON.stringify(summary, null, 1)}`;
                             return (
                               <div key={leg.id} onClick={() => setLinkEditor(p => ({...p, selectedIds: isSelected ? p.selectedIds.filter(id => id !== leg.id) : [...(p.selectedIds||[]), leg.id]}))}
                                 style={{display:"flex", alignItems:"center", gap:8, padding:"5px 8px", marginBottom:4, borderRadius:5, cursor:"pointer",
-                                  background: isSelected ? "#58a6ff15" : "#0d1117",
-                                  border: `1px solid ${isSelected ? "#58a6ff35" : "#1c2128"}`}}>
-                                <div style={{width:12, height:12, borderRadius:2, border:`1px solid ${isSelected ? "#58a6ff" : "#3a4050"}`, background: isSelected ? "#58a6ff" : "transparent", flexShrink:0, display:"flex", alignItems:"center", justifyContent:"center"}}>
+                                  background: isSelected ? "#58a6ff15" : th("#0d1117","#f5f0e8"),
+                                  border: `1px solid ${isSelected ? "#58a6ff35" : th("#1c2128","#b8a898")}`}}>
+                                <div style={{width:12, height:12, borderRadius:2, border:`1px solid ${isSelected ? "#58a6ff" : th("#3a4050","#8a7e74")}`, background: isSelected ? "#58a6ff" : "transparent", flexShrink:0, display:"flex", alignItems:"center", justifyContent:"center"}}>
                                   {isSelected && <span style={{color:"#000", fontSize:8, fontWeight:700, lineHeight:1}}>✓</span>}
                                 </div>
-                                <span style={{fontSize:10, color: isSelected ? "#c9d1d9" : "#555", fontFamily:"monospace", flex:1}}>{fTitle(leg)} · {leg.optType} · {leg.qty} ct</span>
-                                <span style={{fontSize:9, color:leg.status==="Open"?"#00ff88":"#3a4050", fontFamily:"monospace"}}>{leg.status}</span>
+                                <span style={{fontSize:10, color: isSelected ? th("#c9d1d9","#1a1a18") : "#555", fontFamily:"monospace", flex:1}}>{fTitle(leg)} · {leg.optType} · {leg.qty} ct</span>
+                                <span style={{fontSize:9, color:leg.status==="Open"?"#00ff88":th("#3a4050","#8a7e74"), fontFamily:"monospace"}}>{leg.status}</span>
                                 {leg.profit != null && <span style={{fontSize:9, color:leg.profit>=0?"#00ff88":"#ff4560", fontFamily:"monospace"}}>{fSign(leg.profit)}</span>}
                               </div>
                             );
@@ -6380,9 +6418,9 @@ ${JSON.stringify(summary, null, 1)}`;
                           disabled={!linkEditor.strategyType || linkEditor.saving}
                           style={{
                             width:"100%", padding:"7px", borderRadius:5, fontSize:10, fontFamily:"monospace", fontWeight:600, cursor: linkEditor.strategyType ? "pointer" : "not-allowed",
-                            background: linkEditor.strategyType ? "#58a6ff20" : "#1c2128",
-                            color:      linkEditor.strategyType ? "#58a6ff" : "#3a4050",
-                            border:     `1px solid ${linkEditor.strategyType ? "#58a6ff40" : "#1c2128"}`,
+                            background: linkEditor.strategyType ? "#58a6ff20" : th("#1c2128","#b8a898"),
+                            color:      linkEditor.strategyType ? "#58a6ff" : th("#3a4050","#8a7e74"),
+                            border:     `1px solid ${linkEditor.strategyType ? "#58a6ff40" : th("#1c2128","#b8a898")}`,
                           }}>
                           {linkEditor.saving ? "Saving..." : linkEditor.selectedIds?.length > 0 ? `Link ${linkEditor.selectedIds.length + 1} contracts as ${linkEditor.strategyType || "strategy"}` : `Set strategy type${linkEditor.strategyType ? " — " + linkEditor.strategyType : ""}`}
                         </button>
@@ -6412,21 +6450,21 @@ ${JSON.stringify(summary, null, 1)}`;
       {/* Profile modal */}
       {showProfile && (
         <div style={{position:"fixed",inset:0,background:"#000c",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={()=>setShowProfile(false)}>
-          <div style={{background:"#0d1117",border:"1px solid #21262d",borderRadius:12,padding:22,width:"100%",maxWidth:320,animation:"fadeIn .15s"}} onClick={e=>e.stopPropagation()}>
+          <div style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:12,padding:22,width:"100%",maxWidth:320,animation:"fadeIn .15s"}} onClick={e=>e.stopPropagation()}>
             <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:18}}>
               <div style={{width:42,height:42,borderRadius:"50%",background:`${authUser.color}20`,border:`2px solid ${authUser.color}50`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"monospace",fontWeight:700,color:authUser.color,fontSize:14}}>{authUser.initials}</div>
-              <div><div style={{color:"#e6edf3",fontSize:14,fontWeight:600}}>{authUser.name}</div><div style={{color:"#3a4050",fontSize:9,fontFamily:"monospace",marginTop:1}}>OPTIONS DESK USER</div></div>
+              <div><div style={{color:th("#e6edf3","#0d0d0b"),fontSize:14,fontWeight:600}}>{authUser.name}</div><div style={{color:th("#3a4050","#8a7e74"),fontSize:9,fontFamily:"monospace",marginTop:1}}>OPTIONS DESK USER</div></div>
             </div>
             <div style={{borderTop:"1px solid #1c2128",paddingTop:14,marginBottom:14}}>
-              <div style={{fontFamily:"monospace",fontSize:9,color:"#3a4050",letterSpacing:"0.07em",marginBottom:10}}>CHANGE PIN</div>
+              <div style={{fontFamily:"monospace",fontSize:9,color:th("#3a4050","#8a7e74"),letterSpacing:"0.07em",marginBottom:10}}>CHANGE PIN</div>
               <div style={{display:"flex",flexDirection:"column",gap:8}}>
                 {pinStep>=1 && <div><FL>Current PIN</FL><input type="password" maxLength={4} value={pinCur} onChange={e=>setPinCur(e.target.value.replace(/\D/g,"").slice(0,4))} placeholder="••••" disabled={pinStep>1}/></div>}
                 {pinStep>=2 && <div><FL>New PIN (4 digits)</FL><input type="password" maxLength={4} value={pinNew} onChange={e=>setPinNew(e.target.value.replace(/\D/g,"").slice(0,4))} placeholder="••••" autoFocus/></div>}
                 {pinStep>=3 && <div><FL>Confirm New PIN</FL><input type="password" maxLength={4} value={pinCon} onChange={e=>setPinCon(e.target.value.replace(/\D/g,"").slice(0,4))} placeholder="••••" autoFocus/></div>}
               </div>
               {pinMsg && <div style={{marginTop:8,fontSize:11,fontFamily:"monospace",color:pinMsg.includes("✓")?"#00ff88":"#ff4560"}}>{pinMsg}</div>}
-              <button onClick={doPINChange} style={{background:"#00ff88",color:"#010409",border:"none",borderRadius:6,padding:"8px 0",fontSize:12,fontWeight:700,width:"100%",marginTop:10}}>{pinStep===3?"Save PIN":"Next →"}</button>
-              <div style={{marginTop:6,fontSize:9,color:"#2a3040",fontFamily:"monospace",textAlign:"center"}}>2FA planned for future release</div>
+              <button onClick={doPINChange} style={{background:"#00ff88",color:th("#010409","#f5f0e8"),border:"none",borderRadius:6,padding:"8px 0",fontSize:12,fontWeight:700,width:"100%",marginTop:10}}>{pinStep===3?"Save PIN":"Next →"}</button>
+              <div style={{marginTop:6,fontSize:9,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",textAlign:"center"}}>2FA planned for future release</div>
             </div>
             <button onClick={()=>{setAuthUser(null);setShowProfile(false);}} style={{background:"#ff456010",color:"#ff4560",border:"1px solid #ff456030",borderRadius:6,padding:"8px",width:"100%",fontSize:12,marginBottom:8}}>Sign Out</button>
             <button onClick={()=>{setShowProfile(false);setPinStep(1);setPinCur("");setPinNew("");setPinCon("");setPinMsg("");}} style={{background:"transparent",color:"#555",border:"1px solid #21262d",borderRadius:6,padding:"8px",width:"100%",fontSize:12}}>Close</button>
@@ -6437,20 +6475,20 @@ ${JSON.stringify(summary, null, 1)}`;
       {/* Team modal */}
       {showTeam && (
         <div style={{position:"fixed",inset:0,background:"#000c",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={()=>setShowTeam(false)}>
-          <div style={{background:"#0d1117",border:"1px solid #21262d",borderRadius:12,padding:22,width:"100%",maxWidth:340,animation:"fadeIn .15s"}} onClick={e=>e.stopPropagation()}>
+          <div style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:12,padding:22,width:"100%",maxWidth:340,animation:"fadeIn .15s"}} onClick={e=>e.stopPropagation()}>
             <div style={{fontFamily:"monospace",fontSize:10,color:"#00ff88",letterSpacing:"0.07em",marginBottom:14}}>TEAM</div>
             {users.map(u => {
               const uc = originals.filter(c=>c.createdBy===u.id);
               const up = originals.filter(c=>c.createdBy===u.id&&c.status==="Closed").reduce((s,c)=>s+(c.profit||0),0);
               return (
-                <div key={u.id} style={{background:"#0a0e14",border:`1px solid ${u.color}20`,borderRadius:8,padding:12,marginBottom:8}}>
+                <div key={u.id} style={{background:th("#0a0e14","#f8f3eb"),border:`1px solid ${u.color}20`,borderRadius:8,padding:12,marginBottom:8}}>
                   <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:8}}>
                     <div style={{width:30,height:30,borderRadius:"50%",background:`${u.color}20`,border:`2px solid ${u.color}50`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"monospace",fontWeight:700,color:u.color,fontSize:10}}>{u.initials}</div>
-                    <div><div style={{color:"#e6edf3",fontSize:12,fontWeight:600}}>{u.name}</div>{u.id===authUser.id&&<div style={{color:u.color,fontSize:8,fontFamily:"monospace"}}>● ACTIVE</div>}</div>
+                    <div><div style={{color:th("#e6edf3","#0d0d0b"),fontSize:12,fontWeight:600}}>{u.name}</div>{u.id===authUser.id&&<div style={{color:u.color,fontSize:8,fontFamily:"monospace"}}>● ACTIVE</div>}</div>
                   </div>
                   <div style={{display:"flex",gap:14}}>
-                    <div><div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace"}}>CONTRACTS</div><div style={{fontSize:14,fontFamily:"monospace",color:"#e6edf3",fontWeight:700}}>{uc.length}</div></div>
-                    <div><div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace"}}>REALIZED P/L</div><div style={{fontSize:14,fontFamily:"monospace",color:up>=0?"#00ff88":"#ff4560",fontWeight:700}}>{fSign(up)}</div></div>
+                    <div><div style={{fontSize:7,color:th("#3a4050","#8a7e74"),fontFamily:"monospace"}}>CONTRACTS</div><div style={{fontSize:14,fontFamily:"monospace",color:th("#e6edf3","#0d0d0b"),fontWeight:700}}>{uc.length}</div></div>
+                    <div><div style={{fontSize:7,color:th("#3a4050","#8a7e74"),fontFamily:"monospace"}}>REALIZED P/L</div><div style={{fontSize:14,fontFamily:"monospace",color:up>=0?"#00ff88":"#ff4560",fontWeight:700}}>{fSign(up)}</div></div>
                   </div>
                 </div>
               );
@@ -6465,21 +6503,21 @@ ${JSON.stringify(summary, null, 1)}`;
       {/* Column picker modal */}
       {showColPicker && (
         <div style={{position:"fixed",inset:0,background:"#000c",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={()=>setShowColPicker(false)}>
-          <div style={{background:"#0d1117",border:"1px solid #21262d",borderRadius:12,padding:20,width:"100%",maxWidth:300,animation:"fadeIn .15s",maxHeight:"85vh",display:"flex",flexDirection:"column"}} onClick={e=>e.stopPropagation()}>
+          <div style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:12,padding:20,width:"100%",maxWidth:300,animation:"fadeIn .15s",maxHeight:"85vh",display:"flex",flexDirection:"column"}} onClick={e=>e.stopPropagation()}>
             <div style={{fontFamily:"monospace",fontSize:10,color:"#00ff88",marginBottom:4}}>COLUMNS</div>
-            <div style={{fontFamily:"monospace",fontSize:8,color:"#2a3040",marginBottom:12}}>Toggle visible · use arrows to reorder</div>
+            <div style={{fontFamily:"monospace",fontSize:8,color:th("#2a3040","#6b5f55"),marginBottom:12}}>Toggle visible · use arrows to reorder</div>
             <div style={{overflowY:"auto",flex:1,marginBottom:10}}>
             {cols.map((col, idx) => (
-              <div key={col.key} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 10px",background:"#0a0e14",border:"1px solid #1c2128",borderRadius:6,marginBottom:5}}>
+              <div key={col.key} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 10px",background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:6,marginBottom:5}}>
                 <label style={{display:"flex",alignItems:"center",gap:8,flex:1,cursor:"pointer"}}>
                   <input type="checkbox" checked={col.show} onChange={()=>{const nc=cols.map(c=>c.key===col.key?{...c,show:!c.show}:c);persistCols(nc);}} style={{width:14,height:14,accentColor:"#00ff88"}}/>
-                  <span style={{fontSize:12,color:"#c9d1d9",fontFamily:"monospace"}}>{col.label}</span>
+                  <span style={{fontSize:12,color:th("#c9d1d9","#1a1a18"),fontFamily:"monospace"}}>{col.label}</span>
                 </label>
                 <div style={{display:"flex",flexDirection:"column",gap:2}}>
                   <button onClick={()=>moveCol(col.key,"up")} disabled={idx===0}
-                    style={{background:"transparent",border:"1px solid #21262d",borderRadius:3,padding:"1px 5px",fontSize:10,color:idx===0?"#1c2128":"#555",lineHeight:1,cursor:idx===0?"default":"pointer"}}>↑</button>
+                    style={{background:"transparent",border:"1px solid #21262d",borderRadius:3,padding:"1px 5px",fontSize:10,color:idx===0?th("#1c2128","#b8a898"):"#555",lineHeight:1,cursor:idx===0?"default":"pointer"}}>↑</button>
                   <button onClick={()=>moveCol(col.key,"down")} disabled={idx===cols.length-1}
-                    style={{background:"transparent",border:"1px solid #21262d",borderRadius:3,padding:"1px 5px",fontSize:10,color:idx===cols.length-1?"#1c2128":"#555",lineHeight:1,cursor:idx===cols.length-1?"default":"pointer"}}>↓</button>
+                    style={{background:"transparent",border:"1px solid #21262d",borderRadius:3,padding:"1px 5px",fontSize:10,color:idx===cols.length-1?th("#1c2128","#b8a898"):"#555",lineHeight:1,cursor:idx===cols.length-1?"default":"pointer"}}>↓</button>
                 </div>
               </div>
             ))}
@@ -6492,14 +6530,14 @@ ${JSON.stringify(summary, null, 1)}`;
       {/* ── STRATEGIES MODAL ── */}
       {showStrategies && (
         <div style={{position:"fixed",inset:0,background:"#000c",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={()=>setShowStrategies(false)}>
-          <div style={{background:"#0d1117",border:"1px solid #21262d",borderRadius:12,padding:20,width:"100%",maxWidth:480,maxHeight:"85vh",overflowY:"auto",animation:"fadeIn .15s"}} onClick={e=>e.stopPropagation()}>
+          <div style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:12,padding:20,width:"100%",maxWidth:480,maxHeight:"85vh",overflowY:"auto",animation:"fadeIn .15s"}} onClick={e=>e.stopPropagation()}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
               <div style={{fontFamily:"monospace",fontSize:11,color:"#ffd166",letterSpacing:"0.07em"}}>♟ STRATEGIES</div>
               <button onClick={()=>setShowStrategies(false)} style={{background:"transparent",border:"none",color:"#555",fontSize:18,cursor:"pointer"}}>✕</button>
             </div>
             {/* Add strategy form */}
             {stratForm ? (
-              <div style={{background:"#0a0e14",border:"1px solid #ffd16625",borderRadius:8,padding:12,marginBottom:12}}>
+              <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #ffd16625",borderRadius:8,padding:12,marginBottom:12}}>
                 <div style={{fontFamily:"monospace",fontSize:9,color:"#ffd166",marginBottom:8}}>{stratForm.id?"EDIT":"NEW"} STRATEGY</div>
                 <div style={{display:"flex",flexDirection:"column",gap:7}}>
                   <div><FL req>Name</FL><input type="text" value={stratForm.name} onChange={e=>setStratForm(p=>({...p,name:e.target.value}))} placeholder="e.g. Wheel Strategy"/></div>
@@ -6524,7 +6562,7 @@ ${JSON.stringify(summary, null, 1)}`;
                     } catch(e) {
                       alert("Save failed: " + e.message + "\n\nMake sure you've run this SQL in Supabase:\n\ncreate table if not exists strategies (\n  id bigint generated always as identity primary key,\n  name text not null,\n  description text,\n  rules text,\n  created_at timestamptz default now()\n);");
                     }
-                  }} style={{background:"#ffd166",color:"#010409",border:"none",borderRadius:6,padding:"7px 16px",fontSize:11,fontWeight:700,fontFamily:"monospace"}}>SAVE</button>
+                  }} style={{background:"#ffd166",color:th("#010409","#f5f0e8"),border:"none",borderRadius:6,padding:"7px 16px",fontSize:11,fontWeight:700,fontFamily:"monospace"}}>SAVE</button>
                   <button onClick={()=>setStratForm(null)} style={{background:"transparent",color:"#555",border:"1px solid #21262d",borderRadius:6,padding:"7px 12px",fontSize:11}}>Cancel</button>
                 </div>
               </div>
@@ -6532,9 +6570,9 @@ ${JSON.stringify(summary, null, 1)}`;
               <button onClick={()=>setStratForm({name:"",description:"",rules:""})} style={{background:"#ffd16614",color:"#ffd166",border:"1px solid #ffd16630",borderRadius:6,padding:"7px 14px",fontSize:11,fontFamily:"monospace",marginBottom:12}}>+ New Strategy</button>
             )}
             {/* Strategy list */}
-            {strategies.length===0 && !stratForm && <div style={{color:"#3a4050",fontSize:11,fontFamily:"monospace",padding:"12px 0"}}>No strategies yet — add one above</div>}
+            {strategies.length===0 && !stratForm && <div style={{color:th("#3a4050","#8a7e74"),fontSize:11,fontFamily:"monospace",padding:"12px 0"}}>No strategies yet — add one above</div>}
             {strategies.map(s=>(
-              <div key={s.id} style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:12,marginBottom:8}}>
+              <div key={s.id} style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8,padding:12,marginBottom:8}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
                   <div style={{fontFamily:"monospace",fontWeight:700,color:"#ffd166",fontSize:12}}>{s.name}</div>
                   <div style={{display:"flex",gap:5}}>
@@ -6542,7 +6580,7 @@ ${JSON.stringify(summary, null, 1)}`;
                     <button onClick={async()=>{await supabase.from("strategies").delete().eq("id",s.id);setStrategies(p=>p.filter(x=>x.id!==s.id));}} style={{background:"transparent",color:"#ff4560",border:"1px solid #ff456030",borderRadius:4,padding:"2px 8px",fontSize:9,fontFamily:"monospace",cursor:"pointer"}}>Del</button>
                   </div>
                 </div>
-                {s.description && <div style={{fontSize:11,color:"#8b949e",marginBottom:4}}>{s.description}</div>}
+                {s.description && <div style={{fontSize:11,color:th("#8b949e","#5a5248"),marginBottom:4}}>{s.description}</div>}
                 {s.rules && <div style={{fontSize:10,color:"#555",fontFamily:"monospace",whiteSpace:"pre-wrap",borderTop:"1px solid #1c2128",paddingTop:6,marginTop:4}}>{s.rules}</div>}
               </div>
             ))}
@@ -6553,7 +6591,7 @@ ${JSON.stringify(summary, null, 1)}`;
       {/* ── GOALS MODAL ── */}
       {showGoals && (
         <div style={{position:"fixed",inset:0,background:"#000c",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={()=>setShowGoals(false)}>
-          <div style={{background:"#0d1117",border:"1px solid #21262d",borderRadius:12,padding:20,width:"100%",maxWidth:400,animation:"fadeIn .15s"}} onClick={e=>e.stopPropagation()}>
+          <div style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:12,padding:20,width:"100%",maxWidth:400,animation:"fadeIn .15s"}} onClick={e=>e.stopPropagation()}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
               <div style={{fontFamily:"monospace",fontSize:11,color:"#00ff88",letterSpacing:"0.07em"}}>🎯 GOALS</div>
               <button onClick={()=>setShowGoals(false)} style={{background:"transparent",border:"none",color:"#555",fontSize:18,cursor:"pointer"}}>✕</button>
@@ -6576,7 +6614,7 @@ ${JSON.stringify(summary, null, 1)}`;
             <button onClick={async()=>{
               await supabase.from("col_prefs").upsert({id:"goals",cols:goals,updated_at:new Date().toISOString()});
               setShowGoals(false);
-            }} style={{background:"#00ff88",color:"#010409",border:"none",borderRadius:6,padding:"8px 0",fontSize:12,fontWeight:700,width:"100%",marginTop:6}}>Save Goals</button>
+            }} style={{background:"#00ff88",color:th("#010409","#f5f0e8"),border:"none",borderRadius:6,padding:"8px 0",fontSize:12,fontWeight:700,width:"100%",marginTop:6}}>Save Goals</button>
           </div>
         </div>
       )}
@@ -6584,35 +6622,35 @@ ${JSON.stringify(summary, null, 1)}`;
       {/* ── CHASE MODAL ── */}
       {chaseModal && (
         <div style={{position:"fixed",inset:0,background:"#000c",zIndex:1100,display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={()=>setChaseModal(null)}>
-          <div style={{background:"#0d1117",border:"1px solid #ffd16640",borderRadius:12,padding:20,width:"100%",maxWidth:400,animation:"fadeIn .15s"}} onClick={e=>e.stopPropagation()}>
+          <div style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #ffd16640",borderRadius:12,padding:20,width:"100%",maxWidth:400,animation:"fadeIn .15s"}} onClick={e=>e.stopPropagation()}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
               <div style={{fontFamily:"monospace",fontWeight:700,color:"#ffd166",fontSize:13}}>🎯 Chase Order</div>
               <button onClick={()=>setChaseModal(null)} style={{background:"transparent",color:"#555",border:"none",fontSize:16,cursor:"pointer"}}>✕</button>
             </div>
-            <div style={{fontFamily:"monospace",fontSize:11,color:"#8b949e",marginBottom:12}}>
+            <div style={{fontFamily:"monospace",fontSize:11,color:th("#8b949e","#5a5248"),marginBottom:12}}>
               {chaseModal.order.opt_type} {chaseModal.order.ticker} ${chaseModal.order.strike} {chaseModal.order.type} {chaseModal.order.expires}
               <span style={{marginLeft:8,color:"#ffd166"}}>Current limit: ${Number(chaseModal.order.limit_price||0).toFixed(2)}</span>
             </div>
-            <div style={{fontSize:10,color:"#8b949e",fontFamily:"monospace",marginBottom:12,padding:"8px 10px",background:"#080c12",borderRadius:6,border:"1px solid #21262d"}}>
+            <div style={{fontSize:10,color:th("#8b949e","#5a5248"),fontFamily:"monospace",marginBottom:12,padding:"8px 10px",background:th("#080c12","#ede8df"),borderRadius:6,border:"1px solid #21262d"}}>
               {["STO","STC"].includes(chaseModal.order.opt_type)
                 ? "Will step limit price down just below the ask each refresh cycle until floor is hit or order fills."
                 : "Will step limit price up just above the bid each refresh cycle until floor is hit or order fills."}
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
               <div>
-                <div style={{fontSize:9,color:"#3a4050",fontFamily:"monospace",marginBottom:4,letterSpacing:"0.06em"}}>FLOOR PRICE $</div>
+                <div style={{fontSize:9,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",marginBottom:4,letterSpacing:"0.06em"}}>FLOOR PRICE $</div>
                 <input type="number" step="0.01" min="0.01"
                   value={chaseModal.floor}
                   onChange={e=>setChaseModal(p=>({...p,floor:e.target.value}))}
-                  style={{width:"100%",background:"#080c12",border:"1px solid #21262d",borderRadius:4,padding:"6px 8px",fontSize:12,fontFamily:"monospace",color:"#e6edf3",boxSizing:"border-box"}}
+                  style={{width:"100%",background:th("#080c12","#ede8df"),border:"1px solid #21262d",borderRadius:4,padding:"6px 8px",fontSize:12,fontFamily:"monospace",color:th("#e6edf3","#0d0d0b"),boxSizing:"border-box"}}
                   placeholder="e.g. 0.10" />
               </div>
               <div>
-                <div style={{fontSize:9,color:"#3a4050",fontFamily:"monospace",marginBottom:4,letterSpacing:"0.06em"}}>STEP SIZE $</div>
+                <div style={{fontSize:9,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",marginBottom:4,letterSpacing:"0.06em"}}>STEP SIZE $</div>
                 <input type="number" step="0.01" min="0.01"
                   value={chaseModal.step}
                   onChange={e=>setChaseModal(p=>({...p,step:e.target.value}))}
-                  style={{width:"100%",background:"#080c12",border:"1px solid #21262d",borderRadius:4,padding:"6px 8px",fontSize:12,fontFamily:"monospace",color:"#e6edf3",boxSizing:"border-box"}} />
+                  style={{width:"100%",background:th("#080c12","#ede8df"),border:"1px solid #21262d",borderRadius:4,padding:"6px 8px",fontSize:12,fontFamily:"monospace",color:th("#e6edf3","#0d0d0b"),boxSizing:"border-box"}} />
               </div>
             </div>
             <div style={{display:"flex",gap:8}}>
@@ -6656,15 +6694,15 @@ ${JSON.stringify(summary, null, 1)}`;
       {/* ── PROFIT BANDS MODAL ── */}
       {showBands && (
         <div style={{position:"fixed",inset:0,background:"#000c",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={()=>setShowBands(false)}>
-          <div style={{background:"#0d1117",border:"1px solid #21262d",borderRadius:12,padding:20,width:"100%",maxWidth:560,maxHeight:"88vh",overflowY:"auto",animation:"fadeIn .15s"}} onClick={e=>e.stopPropagation()}>
+          <div style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:12,padding:20,width:"100%",maxWidth:560,maxHeight:"88vh",overflowY:"auto",animation:"fadeIn .15s"}} onClick={e=>e.stopPropagation()}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
               <div style={{fontFamily:"monospace",fontSize:11,color:"#00ff88",letterSpacing:"0.07em"}}>🎯 PROFIT BANDS</div>
               <button onClick={()=>setShowBands(false)} style={{background:"transparent",border:"none",color:"#555",fontSize:18,cursor:"pointer"}}>✕</button>
             </div>
-            <div style={{fontSize:10,color:"#3a4050",fontFamily:"monospace",marginBottom:12}}>Rules apply top-down. Per-type thresholds/targets override global. Leave blank to inherit global.</div>
+            <div style={{fontSize:10,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",marginBottom:12}}>Rules apply top-down. Per-type thresholds/targets override global. Leave blank to inherit global.</div>
 
             {/* Global thresholds */}
-            <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:12,marginBottom:10}}>
+            <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8,padding:12,marginBottom:10}}>
               <div style={{fontFamily:"monospace",fontSize:8,color:"#00ff88",letterSpacing:"0.07em",marginBottom:10}}>GLOBAL OTM THRESHOLDS</div>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr 1fr",gap:8,alignItems:"end"}}>
                 {[
@@ -6680,7 +6718,7 @@ ${JSON.stringify(summary, null, 1)}`;
                   </div>
                 ))}
               </div>
-              <div style={{marginTop:8,display:"flex",gap:8,fontSize:10,color:"#3a4050",fontFamily:"monospace",flexWrap:"wrap"}}>
+              <div style={{marginTop:8,display:"flex",gap:8,fontSize:10,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",flexWrap:"wrap"}}>
                 <span style={{color:"#00ff88"}}>Band 1 (Far OTM)</span>: ≥{bands.band1OTM||3}% → {bands.globalTgt1||70}% target
                 <span style={{color:"#ffd166",marginLeft:8}}>Band 2 (Mid OTM)</span>: ≥{bands.band2OTM||1.5}% → {bands.globalTgt2||60}%
                 <span style={{color:"#ff4560",marginLeft:8}}>Band 3 (Near/ATM)</span>: &lt;{bands.band2OTM||1.5}% → {bands.globalTgt3||50}%
@@ -6694,7 +6732,7 @@ ${JSON.stringify(summary, null, 1)}`;
               {label:"BTO Calls", pfx:"btoCall", optType:"BTO", type:"Call", color:"#58a6ff"},
               {label:"BTO Puts",  pfx:"btoPut",  optType:"BTO", type:"Put",  color:"#c084fc"},
             ].map(({label,pfx,color})=>(
-              <div key={pfx} style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:12,marginBottom:8}}>
+              <div key={pfx} style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8,padding:12,marginBottom:8}}>
                 <div style={{fontFamily:"monospace",fontSize:8,color,letterSpacing:"0.07em",marginBottom:8}}>{label.toUpperCase()} OVERRIDES</div>
                 <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:7}}>
                   <div><FL>OTM Band 1 %</FL><input type="number" value={bands[pfx+"OTM1"]||""} onChange={e=>setBands(p=>({...p,[pfx+"OTM1"]:e.target.value}))} placeholder="global" step="0.1"/></div>
@@ -6708,7 +6746,7 @@ ${JSON.stringify(summary, null, 1)}`;
 
             <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:12}}>
               <button onClick={()=>setShowBands(false)} style={{background:"transparent",color:"#555",border:"1px solid #21262d",borderRadius:6,padding:"8px 14px",fontSize:12}}>Cancel</button>
-              <button onClick={async()=>{await persistBands(bands);setShowBands(false);}} style={{background:"#00ff88",color:"#010409",border:"none",borderRadius:6,padding:"8px 18px",fontSize:12,fontWeight:700}}>Save Bands</button>
+              <button onClick={async()=>{await persistBands(bands);setShowBands(false);}} style={{background:"#00ff88",color:th("#010409","#f5f0e8"),border:"none",borderRadius:6,padding:"8px 18px",fontSize:12,fontWeight:700}}>Save Bands</button>
             </div>
           </div>
         </div>
@@ -6717,7 +6755,7 @@ ${JSON.stringify(summary, null, 1)}`;
       {/* ── OTM/DTE MATRIX MODAL ── */}
       {showMatrix && (
         <div style={{position:"fixed",inset:0,background:"#000c",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={()=>setShowMatrix(false)}>
-          <div style={{background:"#0d1117",border:"1px solid #21262d",borderRadius:12,padding:20,width:"100%",maxWidth:720,maxHeight:"90vh",overflowY:"auto",animation:"fadeIn .15s"}} onClick={e=>e.stopPropagation()}>
+          <div style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:12,padding:20,width:"100%",maxWidth:720,maxHeight:"90vh",overflowY:"auto",animation:"fadeIn .15s"}} onClick={e=>e.stopPropagation()}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
               <div style={{fontFamily:"monospace",fontSize:11,color:"#00ff88",letterSpacing:"0.07em"}}>📐 OTM + DTE PROFIT TARGET MATRIX</div>
               <button onClick={()=>setShowMatrix(false)} style={{background:"transparent",border:"none",color:"#555",fontSize:18,cursor:"pointer"}}>✕</button>
@@ -6726,13 +6764,13 @@ ${JSON.stringify(summary, null, 1)}`;
             <div style={{display:"flex",gap:5,marginBottom:14}}>
               {["Call","Put"].map(t=>(
                 <button key={t} onClick={()=>setMatrixTab(t)}
-                  style={{background:matrixTab===t?(t==="Call"?"#58a6ff14":"#ffd16614"):"transparent",color:matrixTab===t?(t==="Call"?"#58a6ff":"#ffd166"):"#555",border:`1px solid ${matrixTab===t?(t==="Call"?"#58a6ff30":"#ffd16630"):"#1c2128"}`,borderRadius:5,padding:"4px 14px",fontSize:11,fontFamily:"monospace"}}>{t}s</button>
+                  style={{background:matrixTab===t?(t==="Call"?"#58a6ff14":"#ffd16614"):"transparent",color:matrixTab===t?(t==="Call"?"#58a6ff":"#ffd166"):"#555",border:`1px solid ${matrixTab===t?(t==="Call"?"#58a6ff30":"#ffd16630"):th("#1c2128","#b8a898")}`,borderRadius:5,padding:"4px 14px",fontSize:11,fontFamily:"monospace"}}>{t}s</button>
               ))}
-              <span style={{fontSize:9,color:"#3a4050",fontFamily:"monospace",marginLeft:8,alignSelf:"center"}}>Separate targets for Calls vs Puts</span>
+              <span style={{fontSize:9,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",marginLeft:8,alignSelf:"center"}}>Separate targets for Calls vs Puts</span>
             </div>
             {/* DTE col thresholds */}
-            <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:10,marginBottom:10}}>
-              <div style={{fontFamily:"monospace",fontSize:8,color:"#3a4050",marginBottom:8}}>DTE COLUMN BOUNDARIES (max days)</div>
+            <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8,padding:10,marginBottom:10}}>
+              <div style={{fontFamily:"monospace",fontSize:8,color:th("#3a4050","#8a7e74"),marginBottom:8}}>DTE COLUMN BOUNDARIES (max days)</div>
               <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
                 {matrixDTECols.map((col,ci)=>(
                   <div key={ci}>
@@ -6747,9 +6785,9 @@ ${JSON.stringify(summary, null, 1)}`;
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
                 <thead>
                   <tr>
-                    <th style={{padding:"6px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>OTM % \ DTE</th>
+                    <th style={{padding:"6px 8px",textAlign:"left",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>OTM % \ DTE</th>
                     {matrixDTECols.map((col,ci)=>(
-                      <th key={ci} style={{padding:"6px 8px",textAlign:"center",color:"#3a4050",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>{col.label}</th>
+                      <th key={ci} style={{padding:"6px 8px",textAlign:"center",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>{col.label}</th>
                     ))}
                   </tr>
                 </thead>
@@ -6759,14 +6797,14 @@ ${JSON.stringify(summary, null, 1)}`;
                     const setMatrix = matrixTab==="Call" ? setMatrixCall : setMatrixPut;
                     return (
                       <tr key={ri}>
-                        <td style={{padding:"6px 10px",fontFamily:"monospace",fontSize:10,color:"#c9d1d9",background:"#0a0e14",borderBottom:"1px solid #1c2128",whiteSpace:"nowrap"}}>
+                        <td style={{padding:"6px 10px",fontFamily:"monospace",fontSize:10,color:th("#c9d1d9","#1a1a18"),background:th("#0a0e14","#f8f3eb"),borderBottom:"1px solid #1c2128",whiteSpace:"nowrap"}}>
                           <input type="number" value={row.min} step="0.5" style={{width:50,marginRight:4}} onChange={e=>{const nr=[...matrixOTMRows];nr[ri]={...nr[ri],min:+e.target.value};setMatrixOTMRows(nr);}}/>
                           <span style={{color:"#555"}}>%+</span>
                         </td>
                         {matrixDTECols.map((col,ci)=>{
                           const v = matrix[ri]?.[ci]??0;
-                          const bg = v===0?"#1c2128":v>=65?"#00ff8820":v>=55?"#ffd16618":"#ff456018";
-                          const color = v===0?"#3a4050":v>=65?"#00ff88":v>=55?"#ffd166":"#ff4560";
+                          const bg = v===0?th("#1c2128","#b8a898"):v>=65?"#00ff8820":v>=55?"#ffd16618":"#ff456018";
+                          const color = v===0?th("#3a4050","#8a7e74"):v>=65?"#00ff88":v>=55?"#ffd166":"#ff4560";
                           return (
                             <td key={ci} style={{padding:4,borderBottom:"1px solid #0d1117",textAlign:"center"}}>
                               <div style={{background:bg,borderRadius:5,padding:"4px 2px",display:"flex",flexDirection:"column",alignItems:"center",gap:1}}>
@@ -6782,10 +6820,10 @@ ${JSON.stringify(summary, null, 1)}`;
                 </tbody>
               </table>
             </div>
-            <div style={{fontSize:9,color:"#3a4050",fontFamily:"monospace",marginTop:8}}>Value = target profit %. 0 = avoid writing this contract. "buy@X%" = buy back when contract is worth X% of original premium.</div>
+            <div style={{fontSize:9,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",marginTop:8}}>Value = target profit %. 0 = avoid writing this contract. "buy@X%" = buy back when contract is worth X% of original premium.</div>
             <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:12}}>
               <button onClick={()=>setShowMatrix(false)} style={{background:"transparent",color:"#555",border:"1px solid #21262d",borderRadius:6,padding:"7px 14px",fontSize:12}}>Cancel</button>
-              <button onClick={async()=>{await persistMatrix(matrixOTMRows,matrixDTECols,matrixCall,matrixPut);setShowMatrix(false);}} style={{background:"#00ff88",color:"#010409",border:"none",borderRadius:6,padding:"7px 18px",fontSize:12,fontWeight:700}}>Save Matrix</button>
+              <button onClick={async()=>{await persistMatrix(matrixOTMRows,matrixDTECols,matrixCall,matrixPut);setShowMatrix(false);}} style={{background:"#00ff88",color:th("#010409","#f5f0e8"),border:"none",borderRadius:6,padding:"7px 18px",fontSize:12,fontWeight:700}}>Save Matrix</button>
             </div>
           </div>
         </div>
@@ -6795,16 +6833,16 @@ ${JSON.stringify(summary, null, 1)}`;
       {showSignalRules && null /* signal rules is now a tab */}
       {showTradeRules && (
         <div style={{position:"fixed",inset:0,background:"#000c",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={()=>setShowTradeRules(false)}>
-          <div style={{background:"#0d1117",border:"1px solid #21262d",borderRadius:12,padding:20,width:"100%",maxWidth:600,maxHeight:"90vh",overflowY:"auto",animation:"fadeIn .15s"}} onClick={e=>e.stopPropagation()}>
+          <div style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:12,padding:20,width:"100%",maxWidth:600,maxHeight:"90vh",overflowY:"auto",animation:"fadeIn .15s"}} onClick={e=>e.stopPropagation()}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
               <div style={{fontFamily:"monospace",fontSize:11,color:"#ffd166",letterSpacing:"0.07em"}}>⚙ TRADE RULES</div>
               <button onClick={()=>setShowTradeRules(false)} style={{background:"transparent",border:"none",color:"#555",fontSize:18,cursor:"pointer"}}>✕</button>
             </div>
-            <div style={{fontSize:10,color:"#3a4050",fontFamily:"monospace",marginBottom:12}}>Define criteria for valid trades. Rules are informational — matching contracts will be flagged on the plan tab.</div>
+            <div style={{fontSize:10,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",marginBottom:12}}>Define criteria for valid trades. Rules are informational — matching contracts will be flagged on the plan tab.</div>
             {!tradeRuleForm ? (
               <button onClick={()=>setTradeRuleForm({...EMPTY_RULE})} style={{background:"#ffd16614",color:"#ffd166",border:"1px solid #ffd16630",borderRadius:6,padding:"6px 14px",fontSize:11,fontFamily:"monospace",marginBottom:12}}>+ New Rule</button>
             ) : (
-              <div style={{background:"#0a0e14",border:"1px solid #ffd16625",borderRadius:8,padding:12,marginBottom:12,animation:"fadeIn .2s"}}>
+              <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #ffd16625",borderRadius:8,padding:12,marginBottom:12,animation:"fadeIn .2s"}}>
                 <div style={{fontFamily:"monospace",fontSize:9,color:"#ffd166",marginBottom:10}}>{tradeRuleForm.id?"EDIT":"NEW"} RULE</div>
                 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:7}}>
                   <div><FL req>Rule Name</FL><input type="text" value={tradeRuleForm.name} onChange={e=>setTradeRuleForm(p=>({...p,name:e.target.value}))} placeholder="e.g. High OTM STO"/></div>
@@ -6823,7 +6861,7 @@ ${JSON.stringify(summary, null, 1)}`;
                   <div><FL>Stock Up % Min</FL><input type="number" value={tradeRuleForm.stockUpPct||""} onChange={e=>setTradeRuleForm(p=>({...p,stockUpPct:e.target.value}))} placeholder="e.g. 1.5"/></div>
                   <div style={{display:"flex",alignItems:"center",gap:7,paddingTop:16}}>
                     <input type="checkbox" id="ruleEnabled" checked={tradeRuleForm.enabled!==false} onChange={e=>setTradeRuleForm(p=>({...p,enabled:e.target.checked}))}/>
-                    <label htmlFor="ruleEnabled" style={{fontSize:11,color:"#8b949e",fontFamily:"monospace",cursor:"pointer"}}>Enabled</label>
+                    <label htmlFor="ruleEnabled" style={{fontSize:11,color:th("#8b949e","#5a5248"),fontFamily:"monospace",cursor:"pointer"}}>Enabled</label>
                   </div>
                 </div>
                 <div style={{marginTop:8}}><FL>Tickers (comma-separated)</FL><input type="text" value={tradeRuleForm.tickers||""} onChange={e=>setTradeRuleForm(p=>({...p,tickers:e.target.value}))} placeholder="e.g. AAPL, NVDA, AMZN, WDC"/></div>
@@ -6835,14 +6873,14 @@ ${JSON.stringify(summary, null, 1)}`;
                     const updated = tradeRuleForm.id ? tradeRules.map(r=>r.id===rule.id?rule:r) : [...tradeRules, rule];
                     await persistTradeRules(updated);
                     setTradeRuleForm(null);
-                  }} style={{background:"#ffd166",color:"#010409",border:"none",borderRadius:6,padding:"7px 16px",fontSize:11,fontWeight:700,fontFamily:"monospace"}}>SAVE RULE</button>
+                  }} style={{background:"#ffd166",color:th("#010409","#f5f0e8"),border:"none",borderRadius:6,padding:"7px 16px",fontSize:11,fontWeight:700,fontFamily:"monospace"}}>SAVE RULE</button>
                   <button onClick={()=>setTradeRuleForm(null)} style={{background:"transparent",color:"#555",border:"1px solid #21262d",borderRadius:6,padding:"7px 12px",fontSize:11}}>Cancel</button>
                 </div>
               </div>
             )}
-            {tradeRules.length===0 && !tradeRuleForm && <div style={{color:"#3a4050",fontSize:11,fontFamily:"monospace",padding:"12px 0"}}>No rules yet — add one above</div>}
+            {tradeRules.length===0 && !tradeRuleForm && <div style={{color:th("#3a4050","#8a7e74"),fontSize:11,fontFamily:"monospace",padding:"12px 0"}}>No rules yet — add one above</div>}
             {tradeRules.map(r=>(
-              <div key={r.id} style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:12,marginBottom:8}}>
+              <div key={r.id} style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8,padding:12,marginBottom:8}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
                   <div style={{fontFamily:"monospace",fontWeight:700,color:"#ffd166",fontSize:12}}>{r.name}</div>
                   <div style={{display:"flex",gap:5}}>
@@ -6852,7 +6890,7 @@ ${JSON.stringify(summary, null, 1)}`;
                 </div>
                 <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
                   {[["Dir",r.direction],["Type",r.optType],["Call/Put",r.type],["OTM",r.minOTM&&r.maxOTM?r.minOTM+"–"+r.maxOTM+"%":r.minOTM?">"+r.minOTM+"%":r.maxOTM?"<"+r.maxOTM+"%":"Any"],["DTE",r.minDTE&&r.maxDTE?r.minDTE+"–"+r.maxDTE+"d":r.minDTE?">"+r.minDTE+"d":r.maxDTE?"<"+r.maxDTE+"d":"Any"],["Stock",r.stockPerf],["Acct",r.account],["Qty",r.qty],["Min $",r.minPremium?`$${r.minPremium}`:null],["VIX>",r.minVIX],["Up%",r.stockUpPct?`${r.stockUpPct}%`:null]].map(([l,v])=>(
-                    v&&v!=="Any"&&<span key={l} style={{background:"#1c2128",borderRadius:4,padding:"2px 7px",fontSize:9,fontFamily:"monospace",color:"#888"}}>{l}: <span style={{color:"#c9d1d9"}}>{v}</span></span>
+                    v&&v!=="Any"&&<span key={l} style={{background:th("#1c2128","#b8a898"),borderRadius:4,padding:"2px 7px",fontSize:9,fontFamily:"monospace",color:"#888"}}>{l}: <span style={{color:th("#c9d1d9","#1a1a18")}}>{v}</span></span>
                   ))}
                   {r.enabled===false && <span style={{background:"#ff456014",borderRadius:4,padding:"2px 7px",fontSize:9,fontFamily:"monospace",color:"#ff4560"}}>DISABLED</span>}
                 </div>
@@ -6865,25 +6903,31 @@ ${JSON.stringify(summary, null, 1)}`;
       )}
 
       {/* ── TOPBAR ── */}
-      <div style={{background:"#0a0e14",borderBottom:"1px solid #1c2128",padding:"0 10px",display:"flex",alignItems:"center",gap:8,height:50,position:"sticky",top:0,zIndex:100,minWidth:0}}>
+      <div style={{background:th("#0a0e14","#f8f3eb"),borderBottom:"1px solid #1c2128",padding:"0 10px",display:"flex",alignItems:"center",gap:8,height:50,position:"sticky",top:0,zIndex:100,minWidth:0}}>
         <div style={{display:"flex",alignItems:"center",gap:7,flexShrink:0}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"center",width:30,height:30,borderRadius:7,background:"linear-gradient(135deg,#0d1f12,#0a1a1f)",border:"1px solid #00ff8830",boxShadow:"0 0 12px #00ff8812"}}>
             <span style={{fontFamily:"monospace",fontWeight:700,fontSize:10,color:"#00ff88"}}>PRI</span>
           </div>
           <div className="hm" style={{overflow:"hidden",minWidth:0,flexShrink:1}}>
             <div style={{fontSize:10,fontWeight:700,fontFamily:"monospace",letterSpacing:"0.03em",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
-              <span style={{color:"#00ff88"}}>P</span><span style={{color:"#c9d1d9"}}>remium </span><span style={{color:"#00ff88"}}>R</span><span style={{color:"#c9d1d9"}}>ecurring </span><span style={{color:"#00ff88"}}>I</span><span style={{color:"#c9d1d9"}}>ncome</span>
+              <span style={{color:"#00ff88"}}>P</span><span style={{color:th("#c9d1d9","#1a1a18")}}>remium </span><span style={{color:"#00ff88"}}>R</span><span style={{color:th("#c9d1d9","#1a1a18")}}>ecurring </span><span style={{color:"#00ff88"}}>I</span><span style={{color:th("#c9d1d9","#1a1a18")}}>ncome</span>
             </div>
-            <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.05em",marginTop:1}}>
+            <div style={{fontSize:7,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",letterSpacing:"0.05em",marginTop:1}}>
               <span style={{color:"#00ff8860"}}>T</span>rading <span style={{color:"#00ff8860"}}>O</span>ptions <span style={{color:"#00ff8660"}}>D</span>ashboard · <span style={{color:"#00ff8840"}}>{storageMsg}</span>
             </div>
           </div>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:5,flexShrink:0,marginLeft:"auto"}}>
           <div onClick={()=>setShowProfile(true)} style={{width:26,height:26,borderRadius:"50%",background:`${authUser.color}20`,border:`2px solid ${authUser.color}50`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"monospace",fontWeight:700,color:authUser.color,fontSize:9,flexShrink:0,cursor:"pointer"}} title={authUser.name}>{authUser.initials}</div>
+          <button className="hm" onClick={()=>window.open("/api/schwab-auth","_blank")} title="Re-authenticate Schwab (refresh token expires every 7 days)" style={{background:"transparent",border:"1px solid #1c2128",borderRadius:4,padding:"2px 5px",fontSize:8,color:"#555",fontFamily:"monospace",lineHeight:1.5,whiteSpace:"nowrap"}}>SCH⟳</button>
+          <button className="hm" onClick={()=>window.open("/api/etrade?action=auth","_blank")} title="Re-authenticate ETrade" style={{background:"transparent",border:"1px solid #1c2128",borderRadius:4,padding:"2px 5px",fontSize:8,color:"#555",fontFamily:"monospace",lineHeight:1.5,whiteSpace:"nowrap"}}>ET⟳</button>
           <button className="hm" onClick={()=>{const v=Math.min(+(uiScale+0.1).toFixed(1),1.3);setUiScale(v);try{localStorage.setItem("pri_ui_scale",v)}catch{}}} title="Increase text size" style={{background:"transparent",border:"1px solid #1c2128",borderRadius:4,padding:"2px 6px",fontSize:10,color:"#555",fontFamily:"monospace",lineHeight:1.5}}>A+</button>
           <button className="hm" onClick={()=>{const v=Math.max(+(uiScale-0.1).toFixed(1),0.8);setUiScale(v);try{localStorage.setItem("pri_ui_scale",v)}catch{}}} title="Decrease text size" style={{background:"transparent",border:"1px solid #1c2128",borderRadius:4,padding:"2px 6px",fontSize:10,color:"#555",fontFamily:"monospace",lineHeight:1.5}}>A-</button>
-          <button className="hm" title={autoRefreshEnabled ? "Auto-refresh ON — click to disable" : "Auto-refresh OFF — click to enable"} onClick={()=>{ const next=!autoRefreshEnabled; setAutoRefreshEnabled(next); try{localStorage.setItem("pri_auto_refresh",next?"on":"off")}catch{} }} style={{background:autoRefreshEnabled?"#00ff8814":"transparent",border:`1px solid ${autoRefreshEnabled?"#00ff8830":"#1c2128"}`,borderRadius:4,padding:"2px 6px",fontSize:9,color:autoRefreshEnabled?"#00ff88":"#555",fontFamily:"monospace",lineHeight:1.5,whiteSpace:"nowrap"}}>
+          <div style={{display:"flex",borderRadius:20,overflow:"hidden",border:"2px solid #ffffff",flexShrink:0}}>
+            <button onClick={()=>{setLightMode(false);try{localStorage.setItem("pri_light_mode","off")}catch{}}} style={{padding:"4px 9px",fontSize:10,fontWeight:700,fontFamily:"monospace",cursor:"pointer",border:"none",background:!lightMode?"#ffffff":"transparent",color:!lightMode?th("#0d1117","#f5f0e8"):"#555",transition:"all 0.15s",whiteSpace:"nowrap"}}>🌙 Dark</button>
+            <button onClick={()=>{setLightMode(true);try{localStorage.setItem("pri_light_mode","on")}catch{}}} style={{padding:"4px 9px",fontSize:10,fontWeight:700,fontFamily:"monospace",cursor:"pointer",border:"none",background:lightMode?"#ffffff":"transparent",color:lightMode?th("#0d1117","#f5f0e8"):"#555",transition:"all 0.15s",whiteSpace:"nowrap"}}>☀ Light</button>
+          </div>
+          <button className="hm" title={autoRefreshEnabled ? "Auto-refresh ON — click to disable" : "Auto-refresh OFF — click to enable"} onClick={()=>{ const next=!autoRefreshEnabled; setAutoRefreshEnabled(next); try{localStorage.setItem("pri_auto_refresh",next?"on":"off")}catch{} }} style={{background:autoRefreshEnabled?"#00ff8814":"transparent",border:`1px solid ${autoRefreshEnabled?"#00ff8830":th("#1c2128","#b8a898")}`,borderRadius:4,padding:"2px 6px",fontSize:9,color:autoRefreshEnabled?"#00ff88":"#555",fontFamily:"monospace",lineHeight:1.5,whiteSpace:"nowrap"}}>
             {autoRefreshEnabled ? "⟳ auto" : "⟳ off"}{lastAutoRefreshAt && autoRefreshEnabled ? <span style={{fontSize:7,opacity:0.6,marginLeft:3}}>{lastAutoRefreshAt}</span> : null}
           </button>
           <div ref={menuRef} style={{position:"relative"}}>
@@ -6891,7 +6935,7 @@ ${JSON.stringify(summary, null, 1)}`;
               {[0,1,2].map(i=><div key={i} style={{width:12,height:1.5,background:"#555",borderRadius:1}}/>)}
             </button>
             {showMenu && (
-              <div style={{position:"fixed",top:50,right:10,background:"#0d1117",border:"1px solid #21262d",borderRadius:8,minWidth:180,animation:"sd .15s ease",zIndex:9999,overflow:"hidden",boxShadow:"0 8px 32px rgba(0,0,0,0.8)"}}>
+              <div style={{position:"fixed",top:50,right:10,background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:8,minWidth:180,animation:"sd .15s ease",zIndex:9999,overflow:"hidden",boxShadow:"0 8px 32px rgba(0,0,0,0.8)"}}>
                 {[
                   {label:"Profile",      icon:"👤", fn:()=>{setShowProfile(true);setShowMenu(false);}},
                   {label:"Team",         icon:"👥", fn:()=>{setShowTeam(true);setShowMenu(false);}},
@@ -6906,11 +6950,13 @@ ${JSON.stringify(summary, null, 1)}`;
                   {label:"OTM/DTE Matrix",icon:"📐",fn:()=>{setShowMatrix(true);setShowMenu(false);}},
                   {label:"Trade Rules",  icon:"⚙", fn:()=>{setShowTradeRules(true);setShowMenu(false);}},
                   {label:"Goals",        icon:"📊", fn:()=>{setShowGoals(true);setShowMenu(false);}},
+                  {label:"Schwab Re-Auth",  icon:"🔑", fn:()=>{window.open("/api/schwab-auth","_blank");setShowMenu(false);}},
+                  {label:"ETrade Re-Auth",   icon:"🔑", fn:()=>{window.open("/api/etrade?action=auth","_blank");setShowMenu(false);}},
                   {label:"Export JSON",  icon:"⬇",  fn:()=>{doExport();setShowMenu(false);}},
 
                   {label:"Sign Out",     icon:"⏏",  fn:()=>{setAuthUser(null);setShowMenu(false);}},
                 ].map(x=>(
-                  <button key={x.label} onClick={x.fn} style={{display:"flex",alignItems:"center",gap:9,width:"100%",padding:"9px 13px",background:"transparent",border:"none",borderBottom:"1px solid #1c2128",color:"#c9d1d9",fontSize:12,textAlign:"left"}}><span style={{fontSize:13}}>{x.icon}</span>{x.label}</button>
+                  <button key={x.label} onClick={x.fn} style={{display:"flex",alignItems:"center",gap:9,width:"100%",padding:"9px 13px",background:"transparent",border:"none",borderBottom:"1px solid #1c2128",color:th("#c9d1d9","#1a1a18"),fontSize:12,textAlign:"left"}}><span style={{fontSize:13}}>{x.icon}</span>{x.label}</button>
                 ))}
               </div>
             )}
@@ -6924,16 +6970,16 @@ ${JSON.stringify(summary, null, 1)}`;
         {tab==="dashboard" && (
           <div style={{display:"flex",flexDirection:"column",gap:9}}>
             {/* Global filter */}
-            <div style={{display:"flex",gap:5,alignItems:"center",flexWrap:"wrap",padding:"7px 10px",background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8}}>
-              <span style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",letterSpacing:"0.07em"}}>FILTER</span>
+            <div style={{display:"flex",gap:5,alignItems:"center",flexWrap:"wrap",padding:"7px 10px",background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8}}>
+              <span style={{fontSize:7,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",letterSpacing:"0.07em"}}>FILTER</span>
               <select value={gTicker} onChange={e=>setGTicker(e.target.value)} style={{width:85,fontSize:11,padding:"3px 5px"}}><option value="All">All Tickers</option>{allTickers.map(t=><option key={t}>{t}</option>)}</select>
               <select value={gOptType} onChange={e=>setGOptType(e.target.value)} style={{width:78,fontSize:11,padding:"3px 5px"}}><option value="All">STO/BTO</option><option value="STO">STO</option><option value="BTO">BTO</option></select>
               <select value={gType} onChange={e=>setGType(e.target.value)} style={{width:85,fontSize:11,padding:"3px 5px"}}><option value="All">Call/Put</option><option value="Call">Call</option><option value="Put">Put</option></select>
               {(gTicker!=="All"||gOptType!=="All"||gType!=="All") && <button onClick={()=>{setGTicker("All");setGOptType("All");setGType("All");}} style={{background:"#ff456018",color:"#ff4560",border:"1px solid #ff456030",borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"monospace"}}>✕</button>}
               <div style={{marginLeft:"auto",display:"flex",gap:3,alignItems:"center"}}>
-                <span style={{fontSize:7,color:"#3a4050",fontFamily:"monospace"}}>PROFIT BY</span>
+                <span style={{fontSize:7,color:th("#3a4050","#8a7e74"),fontFamily:"monospace"}}>PROFIT BY</span>
                 {["exec","close","accounting"].map(m=>(
-                  <button key={m} onClick={()=>setProfitDateMode(m)} style={{background:profitDateMode===m?"#00ff8814":"transparent",color:profitDateMode===m?"#00ff88":"#2a3040",border:profitDateMode===m?"1px solid #00ff8825":"1px solid #1c2128",borderRadius:4,padding:"2px 7px",fontSize:8,fontFamily:"monospace"}}>{m==="exec"?"Open Date":m==="close"?"Close Date":"Accounting"}</button>
+                  <button key={m} onClick={()=>setProfitDateMode(m)} style={{background:profitDateMode===m?"#00ff8814":"transparent",color:profitDateMode===m?"#00ff88":th("#2a3040","#6b5f55"),border:profitDateMode===m?"1px solid #00ff8825":"1px solid #1c2128",borderRadius:4,padding:"2px 7px",fontSize:8,fontFamily:"monospace"}}>{m==="exec"?"Open Date":m==="close"?"Close Date":"Accounting"}</button>
                 ))}
               </div>
             </div>
@@ -6952,13 +6998,13 @@ ${JSON.stringify(summary, null, 1)}`;
                 <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"stretch"}}>
                   {sleepNumber != null && (
                     <div title="Sleep Number: largest single position as % of total equity. Motley Fool rule: stay below 20% to sleep well at night."
-                      style={{background:"#0a0e14",border:`1px solid ${sleepColor}30`,borderRadius:8,padding:"10px 14px",minWidth:120,cursor:"default"}}>
-                      <div style={{fontSize:8,color:"#3a4050",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:2}}>😴 SLEEP NUMBER</div>
+                      style={{background:th("#0a0e14","#f8f3eb"),border:`1px solid ${sleepColor}30`,borderRadius:8,padding:"10px 14px",minWidth:120,cursor:"default"}}>
+                      <div style={{fontSize:8,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:2}}>😴 SLEEP NUMBER</div>
                       <div style={{fontSize:22,fontWeight:700,color:sleepColor,fontFamily:"'JetBrains Mono',monospace",lineHeight:1}}>{sleepNumber.toFixed(1)}%</div>
-                      <div style={{fontSize:8,color:"#3a4050",fontFamily:"monospace",marginTop:2}}>{largest.sym} · {sleepNumber<20?"safe":"⚠ concentrated"}</div>
+                      <div style={{fontSize:8,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",marginTop:2}}>{largest.sym} · {sleepNumber<20?"safe":"⚠ concentrated"}</div>
                     </div>
                   )}
-                  <div style={{flex:1,background:"#0a0e14",border:"1px solid #00ff8815",borderRadius:8,padding:"10px 14px"}}>
+                  <div style={{flex:1,background:th("#0a0e14","#f8f3eb"),border:"1px solid #00ff8815",borderRadius:8,padding:"10px 14px"}}>
                     <div style={{fontFamily:"monospace",fontSize:8,color:"#00ff88",letterSpacing:"0.07em",marginBottom:8}}>🤖 SKYNET AUTOMATION</div>
                     <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"center"}}>
                       {[
@@ -6969,20 +7015,20 @@ ${JSON.stringify(summary, null, 1)}`;
                       ].map(s => (
                         <div key={s.label} style={{display:"flex",alignItems:"center",gap:8}}>
                           <div>
-                            <div style={{fontFamily:"monospace",fontSize:7,color:"#3a4050",letterSpacing:"0.06em"}}>{s.label}</div>
+                            <div style={{fontFamily:"monospace",fontSize:7,color:th("#3a4050","#8a7e74"),letterSpacing:"0.06em"}}>{s.label}</div>
                             <div style={{fontFamily:"monospace",fontSize:16,color:s.color}}>{s.val}</div>
                           </div>
                           {s.pct != null && <div style={{fontFamily:"monospace",fontSize:11,color:s.color,opacity:0.6}}>{s.pct}%</div>}
                         </div>
                       ))}
                       <div style={{marginLeft:"auto",textAlign:"right"}}>
-                        <div style={{fontFamily:"monospace",fontSize:7,color:"#3a4050",letterSpacing:"0.06em"}}>SKYNET PROFIT</div>
+                        <div style={{fontFamily:"monospace",fontSize:7,color:th("#3a4050","#8a7e74"),letterSpacing:"0.06em"}}>SKYNET PROFIT</div>
                         <div style={{fontFamily:"monospace",fontSize:16,color:autoProfit>=0?"#00ff88":"#ff4560"}}>{autoProfit>=0?"+":""}{f$0(autoProfit)}</div>
                       </div>
-                      <div style={{width:"100%",height:4,borderRadius:2,background:"#1c2128",display:"flex",overflow:"hidden"}}>
+                      <div style={{width:"100%",height:4,borderRadius:2,background:th("#1c2128","#b8a898"),display:"flex",overflow:"hidden"}}>
                         <div style={{width:autoClosePct+"%",background:"#00ff88",transition:"width .5s"}}/>
                         <div style={{width:appClosePct+"%",background:"#58a6ff",transition:"width .5s"}}/>
-                        <div style={{width:manualClosePct+"%",background:"#3a4050",transition:"width .5s"}}/>
+                        <div style={{width:manualClosePct+"%",background:th("#3a4050","#8a7e74"),transition:"width .5s"}}/>
                       </div>
                     </div>
                   </div>
@@ -6991,7 +7037,7 @@ ${JSON.stringify(summary, null, 1)}`;
             })()}
             <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
               <KPI label="Total Premium" value={f$0(totalPrem)}      sub={allF.length+" contracts"}/>
-              <KPI label="Realized P/L"  value={fSign0(totalProfit)} sub={winRate+"% win"} color={totalProfit>=0?"#00ff88":"#ff4560"}/>
+              <KPI label="Realized P/L"  value={fSign0(realizedPL)} sub={winRate+"% win"+(profitDateMode==="accounting"?" · cash basis":"")} color={realizedPL>=0?"#00ff88":"#ff4560"}/>
               <KPI label="Open Contract Value" value={f$0(openContractValue)} sub={openC.length+" contracts at market"} color="#ffd166"/>
               <KPI label="Net Exposure" value={f$0(committedFunds)} sub={"STO puts $"+f$0(stoLiability)+" − BTO assets $"+f$0(btoAssetVal)} color="#c084fc"/>
               <KPI label="Avg Profit"    value={fSign0(avgProfit)}    sub="per close" color={avgProfit>=0?"#58a6ff":"#ff4560"}/>
@@ -7024,19 +7070,19 @@ ${JSON.stringify(summary, null, 1)}`;
                 return (
                   <div style={{flex:1,minWidth:120}}>
                     <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
-                      <span style={{fontSize:8,color:"#3a4050",fontFamily:"monospace"}}>{label}</span>
+                      <span style={{fontSize:8,color:th("#3a4050","#8a7e74"),fontFamily:"monospace"}}>{label}</span>
                       <span style={{fontSize:8,color:reached?"#00ff88":"#555",fontFamily:"monospace"}}>{pct}%</span>
                     </div>
-                    <div style={{height:5,background:"#0a0e14",borderRadius:3,overflow:"hidden",border:"1px solid #1c2128"}}>
+                    <div style={{height:5,background:th("#0a0e14","#f8f3eb"),borderRadius:3,overflow:"hidden",border:"1px solid #1c2128"}}>
                       <div style={{height:"100%",width:pct+"%",background:barColor,borderRadius:3,transition:"width .4s"}}/>
                     </div>
-                    <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",marginTop:2}}>{fSign0(current)} / {f$0(Math.abs(t))}</div>
+                    <div style={{fontSize:7,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",marginTop:2}}>{fSign0(current)} / {f$0(Math.abs(t))}</div>
                   </div>
                 );
               };
               return (
-                <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:"10px 12px"}}>
-                  <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.07em",marginBottom:8}}>🎯 GOALS</div>
+                <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8,padding:"10px 12px"}}>
+                  <div style={{fontSize:7,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",letterSpacing:"0.07em",marginBottom:8}}>🎯 GOALS</div>
                   <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
                     <GoalBar label="Daily Premium"   current={premToday}  target={goals.dailyPremium}   color="#58a6ff"/>
                     <GoalBar label="Daily Profit"    current={profitToday} target={goals.dailyProfit}   color="#00ff88"/>
@@ -7049,39 +7095,39 @@ ${JSON.stringify(summary, null, 1)}`;
               );
             })()}
             <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
-              <span style={{fontSize:8,color:"#3a4050",fontFamily:"monospace"}}>VIEW</span>
+              <span style={{fontSize:8,color:th("#3a4050","#8a7e74"),fontFamily:"monospace"}}>VIEW</span>
               {["daily","weekly","monthly"].map(v=>(
-                <button key={v} onClick={()=>setChartView(v)} style={{background:chartView===v?"#00ff8814":"transparent",color:chartView===v?"#00ff88":"#2a3040",border:chartView===v?"1px solid #00ff8825":"1px solid #1c2128",borderRadius:4,padding:"2px 8px",fontSize:8,fontFamily:"monospace",textTransform:"uppercase"}}>{v}</button>
+                <button key={v} onClick={()=>setChartView(v)} style={{background:chartView===v?"#00ff8814":"transparent",color:chartView===v?"#00ff88":th("#2a3040","#6b5f55"),border:chartView===v?"1px solid #00ff8825":"1px solid #1c2128",borderRadius:4,padding:"2px 8px",fontSize:8,fontFamily:"monospace",textTransform:"uppercase"}}>{v}</button>
               ))}
-              <span style={{fontSize:8,color:"#3a4050",fontFamily:"monospace",marginLeft:8}}>DATE</span>
+              <span style={{fontSize:8,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",marginLeft:8}}>DATE</span>
               {["executed","closed"].map(v=>(
-                <button key={v} onClick={()=>setChartDate(v)} style={{background:chartDate===v?"#58a6ff14":"transparent",color:chartDate===v?"#58a6ff":"#2a3040",border:chartDate===v?"1px solid #58a6ff25":"1px solid #1c2128",borderRadius:4,padding:"2px 8px",fontSize:8,fontFamily:"monospace",textTransform:"uppercase"}}>{v}</button>
+                <button key={v} onClick={()=>setChartDate(v)} style={{background:chartDate===v?"#58a6ff14":"transparent",color:chartDate===v?"#58a6ff":th("#2a3040","#6b5f55"),border:chartDate===v?"1px solid #58a6ff25":"1px solid #1c2128",borderRadius:4,padding:"2px 8px",fontSize:8,fontFamily:"monospace",textTransform:"uppercase"}}>{v}</button>
               ))}
 
 
             </div>
             {/* Charts */}
             <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:8}}>
-              <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:11}}>
-                <div style={{fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em",marginBottom:7}}>PREMIUM & PROFIT — {chartView.toUpperCase()} BY DATE {chartDate.toUpperCase()}</div>
+              <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8,padding:11}}>
+                <div style={{fontFamily:"monospace",fontSize:7,color:th("#2a3040","#6b5f55"),letterSpacing:"0.08em",marginBottom:7}}>PREMIUM & PROFIT — {chartView.toUpperCase()} BY DATE {chartDate.toUpperCase()}</div>
                 <ResponsiveContainer width="100%" height={140}>
                   <BarChart data={chartData} barGap={2} barSize={chartView==="monthly"?20:chartView==="weekly"?12:6}>
-                    <CartesianGrid strokeDasharray="2 4" stroke="#0d1117" vertical={false}/>
-                    <XAxis dataKey="label" tick={{fill:"#2a3040",fontSize:8,fontFamily:"monospace"}} axisLine={false} tickLine={false}/>
-                    <YAxis tick={{fill:"#2a3040",fontSize:8,fontFamily:"monospace"}} axisLine={false} tickLine={false} tickFormatter={v=>"$"+(v/1000).toFixed(0)+"k"}/>
+                    <CartesianGrid strokeDasharray="2 4" stroke={th("#0d1117","#f5f0e8")} vertical={false}/>
+                    <XAxis dataKey="label" tick={{fill:th("#2a3040","#6b5f55"),fontSize:8,fontFamily:"monospace"}} axisLine={false} tickLine={false}/>
+                    <YAxis tick={{fill:th("#2a3040","#6b5f55"),fontSize:8,fontFamily:"monospace"}} axisLine={false} tickLine={false} tickFormatter={v=>"$"+(v/1000).toFixed(0)+"k"}/>
                     <Tooltip content={<ChartTip/>}/>
                     <Bar dataKey="premium" name="Premium" fill="#58a6ff" radius={[2,2,0,0]} opacity={0.7}/>
                     <Bar dataKey="profit"  name="Profit"  radius={[2,2,0,0]}>{chartData.map((e,i)=><Cell key={i} fill={e.profit>=0?"#00ff88":"#ff4560"} opacity={0.8}/>)}</Bar>
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-              <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:11}}>
-                <div style={{fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em",marginBottom:7}}>CONTRACTS / PERIOD</div>
+              <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8,padding:11}}>
+                <div style={{fontFamily:"monospace",fontSize:7,color:th("#2a3040","#6b5f55"),letterSpacing:"0.08em",marginBottom:7}}>CONTRACTS / PERIOD</div>
                 <ResponsiveContainer width="100%" height={140}>
                   <LineChart data={chartData}>
-                    <CartesianGrid strokeDasharray="2 4" stroke="#0d1117" vertical={false}/>
-                    <XAxis dataKey="label" tick={{fill:"#2a3040",fontSize:8,fontFamily:"monospace"}} axisLine={false} tickLine={false}/>
-                    <YAxis tick={{fill:"#2a3040",fontSize:8,fontFamily:"monospace"}} axisLine={false} tickLine={false}/>
+                    <CartesianGrid strokeDasharray="2 4" stroke={th("#0d1117","#f5f0e8")} vertical={false}/>
+                    <XAxis dataKey="label" tick={{fill:th("#2a3040","#6b5f55"),fontSize:8,fontFamily:"monospace"}} axisLine={false} tickLine={false}/>
+                    <YAxis tick={{fill:th("#2a3040","#6b5f55"),fontSize:8,fontFamily:"monospace"}} axisLine={false} tickLine={false}/>
                     <Tooltip content={<ChartTip/>}/>
                     <Line type="monotone" dataKey="contracts" name="Contracts" stroke="#ffd166" strokeWidth={2} dot={false}/>
                   </LineChart>
@@ -7125,19 +7171,19 @@ ${JSON.stringify(summary, null, 1)}`;
               const bucketRow = (label, arr, color) => arr.length===0 ? null : (
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"5px 0",borderBottom:"1px solid #1c2128"}}>
                   <span style={{fontSize:9,fontFamily:"monospace",color}}>{label}</span>
-                  <span style={{fontSize:9,fontFamily:"monospace",color:"#8b949e"}}>{arr.length} contracts · {arr.filter(c=>c.type==="Call").length}C {arr.filter(c=>c.type==="Put").length}P · {f$(arr.reduce((s,c)=>s+(c.premium||0),0))}</span>
+                  <span style={{fontSize:9,fontFamily:"monospace",color:th("#8b949e","#5a5248")}}>{arr.length} contracts · {arr.filter(c=>c.type==="Call").length}C {arr.filter(c=>c.type==="Put").length}P · {f$(arr.reduce((s,c)=>s+(c.premium||0),0))}</span>
                 </div>
               );
-              const statBox = (label, val, sub, col="#e6edf3") => (
-                <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:6,padding:"8px 12px",flex:1,minWidth:90}}>
-                  <div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",letterSpacing:"0.07em",marginBottom:4}}>{label}</div>
+              const statBox = (label, val, sub, col=lightMode?"#0d0d0b":"#e6edf3") => (
+                <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:6,padding:"8px 12px",flex:1,minWidth:90}}>
+                  <div style={{fontSize:7,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",letterSpacing:"0.07em",marginBottom:4}}>{label}</div>
                   <div style={{fontSize:13,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:col}}>{val}</div>
-                  {sub && <div style={{fontSize:8,color:"#2a3040",fontFamily:"monospace",marginTop:2}}>{sub}</div>}
+                  {sub && <div style={{fontSize:8,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",marginTop:2}}>{sub}</div>}
                 </div>
               );
               return (
-                <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:"10px 12px"}}>
-                  <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:8}}>OPEN POSITIONS SUMMARY</div>
+                <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8,padding:"10px 12px"}}>
+                  <div style={{fontSize:7,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:8}}>OPEN POSITIONS SUMMARY</div>
                   <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
                     {statBox("OPEN CALLS",openCalls.length,openCalls.length+" positions","#58a6ff")}
                     {statBox("OPEN PUTS",openPuts.length,openPuts.length+" positions","#ffd166")}
@@ -7145,7 +7191,7 @@ ${JSON.stringify(summary, null, 1)}`;
                     {statBox("CURRENT VALUE",f$(currVal),"live mark","#c084fc")}
                     {statBox("UNREALIZED P/L",fSign0(unrealPL),"collected − current",unrealPL>=0?"#00ff88":"#ff4560")}
                   </div>
-                  <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.07em",marginBottom:5}}>BY EXPIRY</div>
+                  <div style={{fontSize:7,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",letterSpacing:"0.07em",marginBottom:5}}>BY EXPIRY</div>
                   {bucketRow("THIS WEEK",thisWeek,"#ff4560")}
                   {bucketRow("NEXT WEEK",nextWeek,"#ffd166")}
                   {bucketRow("LATER",later,"#00ff88")}
@@ -7166,7 +7212,7 @@ ${JSON.stringify(summary, null, 1)}`;
               const weekTotal = weekClosed.reduce((s,c)=>s+(c.profit||0),0);
               const weekPremW = allF.filter(c=>c.dateExec>=weekKey).reduce((s,c)=>s+(c.premium||0),0);
               return (
-                <div style={{background:"#0a0e14",border:"1px solid #ffd16625",borderRadius:8,padding:"10px 13px"}}>
+                <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #ffd16625",borderRadius:8,padding:"10px 13px"}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:9}}>
                     <div style={{fontFamily:"monospace",fontSize:8,color:"#ffd166",letterSpacing:"0.07em"}}>⚡ WEEKLY HIGHLIGHTS — wk of {weekKey}</div>
                     <div style={{display:"flex",gap:12}}>
@@ -7179,7 +7225,7 @@ ${JSON.stringify(summary, null, 1)}`;
                       <div style={{fontSize:7,color:"#00ff88",fontFamily:"monospace",marginBottom:5}}>TOP 3 WINNERS</div>
                       {top3.map((c,i)=>(
                         <div key={c.id} style={{display:"flex",justifyContent:"space-between",padding:"3px 0",borderBottom:"1px solid #0d1117"}}>
-                          <span style={{fontSize:10,color:"#c9d1d9",fontFamily:"monospace"}}>{i+1}. {c.stock}</span>
+                          <span style={{fontSize:10,color:th("#c9d1d9","#1a1a18"),fontFamily:"monospace"}}>{i+1}. {c.stock}</span>
                           <span style={{fontSize:10,color:"#00ff88",fontFamily:"monospace",fontWeight:700}}>{fSign0(c.profit)}</span>
                         </div>
                       ))}
@@ -7188,7 +7234,7 @@ ${JSON.stringify(summary, null, 1)}`;
                       <div style={{fontSize:7,color:"#ff4560",fontFamily:"monospace",marginBottom:5}}>BOTTOM 2</div>
                       {bot2.filter(c=>c.profit<0).map((c,i)=>(
                         <div key={c.id} style={{display:"flex",justifyContent:"space-between",padding:"3px 0",borderBottom:"1px solid #0d1117"}}>
-                          <span style={{fontSize:10,color:"#c9d1d9",fontFamily:"monospace"}}>{i+1}. {c.stock}</span>
+                          <span style={{fontSize:10,color:th("#c9d1d9","#1a1a18"),fontFamily:"monospace"}}>{i+1}. {c.stock}</span>
                           <span style={{fontSize:10,color:"#ff4560",fontFamily:"monospace",fontWeight:700}}>{fSign0(c.profit)}</span>
                         </div>
                       ))}
@@ -7210,8 +7256,8 @@ ${JSON.stringify(summary, null, 1)}`;
           <div style={{display:"flex",flexDirection:"column",gap:9}}>
             <div style={{display:"flex",gap:7,flexWrap:"wrap",alignItems:"center"}}>
               <button onClick={()=>{setForm({...EMPTY_NEW,dateExec:TODAY});setEditing(null);setFormMode("new");setShowForm(p=>formMode==="new"?!p:true);}} style={{background:"#00ff8814",color:"#00ff88",border:"1px solid #00ff8830",borderRadius:6,padding:"7px 13px",fontSize:11,fontFamily:"monospace",fontWeight:700}}>+ New Contract</button>
-              <button onClick={()=>setShowColPicker(true)} style={{background:"transparent",color:"#3a4050",border:"1px solid #1c2128",borderRadius:6,padding:"7px 10px",fontSize:10,fontFamily:"monospace"}}>⠿ Columns</button>
-              <button onClick={doExportCSV} style={{background:"transparent",color:"#3a4050",border:"1px solid #1c2128",borderRadius:6,padding:"7px 10px",fontSize:10,fontFamily:"monospace"}} title={`Export ${sortedFiltered.length} filtered rows to CSV`}>↓ CSV ({sortedFiltered.length})</button>
+              <button onClick={()=>setShowColPicker(true)} style={{background:"transparent",color:th("#3a4050","#8a7e74"),border:"1px solid #1c2128",borderRadius:6,padding:"7px 10px",fontSize:10,fontFamily:"monospace"}}>⠿ Columns</button>
+              <button onClick={doExportCSV} style={{background:"transparent",color:th("#3a4050","#8a7e74"),border:"1px solid #1c2128",borderRadius:6,padding:"7px 10px",fontSize:10,fontFamily:"monospace"}} title={`Export ${sortedFiltered.length} filtered rows to CSV`}>↓ CSV ({sortedFiltered.length})</button>
               <button
                 onClick={refreshEtrade}
                 disabled={etradeStatus==="loading"}
@@ -7235,7 +7281,7 @@ ${JSON.stringify(summary, null, 1)}`;
 
             {/* New contract form */}
             {showForm && formMode==="new" && (
-              <div style={{background:"#0a0e14",border:"1px solid #00ff8825",borderRadius:8,padding:13,animation:"fadeIn .2s"}}>
+              <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #00ff8825",borderRadius:8,padding:13,animation:"fadeIn .2s"}}>
                 <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:10}}>
                   <div style={{width:5,height:5,borderRadius:"50%",background:"#00ff88"}}/>
                   <span style={{fontFamily:"monospace",fontSize:10,color:"#00ff88",letterSpacing:"0.07em"}}>{editing?"EDIT CONTRACT":"NEW CONTRACT"}</span>
@@ -7253,7 +7299,7 @@ ${JSON.stringify(summary, null, 1)}`;
                   <div>
                     <FL req>Expires</FL>
                     <input type="date" value={form.expires||""} onChange={e=>sf("expires",e.target.value)} className={formErrors.expires?"err":""}/>
-                    {form.stock && EXPIRY_SCHEDULES[form.stock.toUpperCase()] && <div style={{fontSize:7,color:"#2a3040",marginTop:1,fontFamily:"monospace"}}>{EXPIRY_SCHEDULES[form.stock.toUpperCase()].join("/")}</div>}
+                    {form.stock && EXPIRY_SCHEDULES[form.stock.toUpperCase()] && <div style={{fontSize:7,color:th("#2a3040","#6b5f55"),marginTop:1,fontFamily:"monospace"}}>{EXPIRY_SCHEDULES[form.stock.toUpperCase()].join("/")}</div>}
                   </div>
                   <div><FL req>Account</FL><select value={form.account||""} onChange={e=>sf("account",e.target.value)} className={formErrors.account?"err":""}><option value="">—</option><option>Schwab</option><option>Etrade</option></select></div>
                   <div><FL>Strategy</FL><select value={form.strategy||""} onChange={e=>sf("strategy",e.target.value)}><option value="">— none —</option>{strategies.map(s=><option key={s.id} value={s.name}>{s.name}</option>)}</select></div>
@@ -7275,7 +7321,7 @@ ${JSON.stringify(summary, null, 1)}`;
                 )}
                 {Object.keys(formErrors).length>0 && <div style={{marginTop:8,fontSize:10,color:"#ff4560",fontFamily:"monospace"}}>⚠ Please fill in all required fields (*)</div>}
                 <div style={{display:"flex",gap:7,marginTop:11}}>
-                  <button onClick={saveNew} style={{background:"#00ff88",color:"#010409",border:"none",borderRadius:6,padding:"7px 18px",fontSize:11,fontWeight:700,fontFamily:"monospace"}}>{editing?"UPDATE":"SAVE OPEN"}</button>
+                  <button onClick={saveNew} style={{background:"#00ff88",color:th("#010409","#f5f0e8"),border:"none",borderRadius:6,padding:"7px 18px",fontSize:11,fontWeight:700,fontFamily:"monospace"}}>{editing?"UPDATE":"SAVE OPEN"}</button>
                   <button onClick={()=>{setShowForm(false);setEditing(null);setForm({...EMPTY_NEW});setFormErrors({});}} style={{background:"transparent",color:"#555",border:"1px solid #21262d",borderRadius:6,padding:"7px 13px",fontSize:11}}>Cancel</button>
                 </div>
               </div>
@@ -7293,20 +7339,20 @@ ${JSON.stringify(summary, null, 1)}`;
               const closeLabel = isBTO ? "STC (Sell to Close)" : "BTC (Buy to Close)";
               const isApiAccount = !!(orig?.account?.startsWith("Schwab") || orig?.account?.startsWith("ETrade")) && formMode !== "manualClose";
               return (
-                <div style={{background:"#0a0e14",border:"1px solid #ffd16625",borderRadius:8,padding:13,animation:"fadeIn .2s"}}>
+                <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #ffd16625",borderRadius:8,padding:13,animation:"fadeIn .2s"}}>
                   <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:10}}>
                     <div style={{width:5,height:5,borderRadius:"50%",background:"#ffd166"}}/>
                     <span style={{fontFamily:"monospace",fontSize:10,color:"#ffd166",letterSpacing:"0.07em"}}>CLOSE CONTRACT — {closeLabel}</span>
-                    {orig && <span style={{fontSize:10,color:"#8b949e",fontFamily:"monospace"}}>{fTitle(orig)} — opened at <span style={{color:"#58a6ff"}}>{fMoney(orig.premium)}</span></span>}
+                    {orig && <span style={{fontSize:10,color:th("#8b949e","#5a5248"),fontFamily:"monospace"}}>{fTitle(orig)} — opened at <span style={{color:"#58a6ff"}}>{fMoney(orig.premium)}</span></span>}
                     <button onClick={()=>{setShowForm(false);setClosingId(null);setCloseForm({...EMPTY_CLOSE});}} style={{marginLeft:"auto",background:"transparent",border:"none",color:"#555",cursor:"pointer",fontSize:14}}>✕</button>
                   </div>
 
                   {/* ── Signal decision banner ── */}
                   {pendingSignalId && !signalDecision && (
-                    <div style={{background:"#0d1117",border:"1px solid #ffd16630",borderRadius:6,padding:"10px 12px",marginBottom:12}}>
-                      <div style={{fontFamily:"monospace",fontSize:9,color:"#3a4050",letterSpacing:"0.07em",marginBottom:8}}>📡 signal · closing trade will auto-log if submitted · or log a pass below</div>
+                    <div style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #ffd16630",borderRadius:6,padding:"10px 12px",marginBottom:12}}>
+                      <div style={{fontFamily:"monospace",fontSize:9,color:th("#3a4050","#8a7e74"),letterSpacing:"0.07em",marginBottom:8}}>📡 signal · closing trade will auto-log if submitted · or log a pass below</div>
                       <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                        <input id="signal-dec-notes-close" type="text" placeholder="reason for passing (optional)..." style={{flex:1,background:"#0a0e14",border:"1px solid #1c2128",borderRadius:4,padding:"5px 8px",fontSize:9,fontFamily:"monospace",color:"#c9d1d9"}} />
+                        <input id="signal-dec-notes-close" type="text" placeholder="reason for passing (optional)..." style={{flex:1,background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:4,padding:"5px 8px",fontSize:9,fontFamily:"monospace",color:th("#c9d1d9","#1a1a18")}} />
                         <button onClick={async () => {
                           const notes = document.getElementById("signal-dec-notes-close")?.value || "";
                           const { error } = await supabase.from("decision_log").insert({ signal_id: pendingSignalId, source_table: "signal_log", source_id: pendingSignalId, decision: "passed", notes, created_at: new Date().toISOString() });
@@ -7316,20 +7362,20 @@ ${JSON.stringify(summary, null, 1)}`;
                         }} style={{background:"transparent",border:"1px solid #ff456040",borderRadius:4,padding:"4px 12px",fontSize:9,fontFamily:"monospace",color:"#ff4560",cursor:"pointer",whiteSpace:"nowrap"}}>
                           PASSED
                         </button>
-                        <button onClick={() => { setPendingSignalId(null); setSignalDecision(null); }} style={{background:"transparent",border:"none",color:"#3a4050",fontSize:12,cursor:"pointer",lineHeight:1}}>×</button>
+                        <button onClick={() => { setPendingSignalId(null); setSignalDecision(null); }} style={{background:"transparent",border:"none",color:th("#3a4050","#8a7e74"),fontSize:12,cursor:"pointer",lineHeight:1}}>×</button>
                       </div>
                     </div>
                   )}
                   {signalDecision && (
-                    <div style={{background:"#0d1117",border:"1px solid #ffd16620",borderRadius:6,padding:"7px 12px",marginBottom:12,display:"flex",alignItems:"center",gap:8}}>
+                    <div style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #ffd16620",borderRadius:6,padding:"7px 12px",marginBottom:12,display:"flex",alignItems:"center",gap:8}}>
                       <span style={{fontFamily:"monospace",fontSize:9,color:"#555"}}>✓ logged as <span style={{color:"#ff4560"}}>passed</span>{signalDecision.notes ? ` — ${signalDecision.notes}` : ""}</span>
-                      <button onClick={()=>setSignalDecision(null)} style={{background:"transparent",border:"none",color:"#3a4050",fontSize:11,cursor:"pointer",marginLeft:"auto"}}>×</button>
+                      <button onClick={()=>setSignalDecision(null)} style={{background:"transparent",border:"none",color:th("#3a4050","#8a7e74"),fontSize:11,cursor:"pointer",marginLeft:"auto"}}>×</button>
                     </div>
                   )}
                   {/* For API accounts — go straight to order panel */}
                   {isApiAccount ? (
                     <div style={{display:"flex",flexDirection:"column",gap:10}}>
-                      <div style={{fontSize:11,color:"#8b949e",fontFamily:"monospace"}}>
+                      <div style={{fontSize:11,color:th("#8b949e","#5a5248"),fontFamily:"monospace"}}>
                         This contract is held at <span style={{color:"#ffd166"}}>{orig.account}</span>. Place a closing order via the API:
                       </div>
                       <div style={{display:"flex",gap:8}}>
@@ -7346,7 +7392,7 @@ ${JSON.stringify(summary, null, 1)}`;
                         </button>
                         <button onClick={()=>{setShowForm(false);setClosingId(null);setCloseForm({...EMPTY_CLOSE});}} style={{background:"transparent",color:"#555",border:"1px solid #21262d",borderRadius:6,padding:"8px 13px",fontSize:11,cursor:"pointer"}}>Cancel</button>
                       </div>
-                      <div style={{fontSize:9,color:"#3a4050",fontFamily:"monospace",borderTop:"1px solid #1c2128",paddingTop:8,marginTop:4}}>
+                      <div style={{fontSize:9,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",borderTop:"1px solid #1c2128",paddingTop:8,marginTop:4}}>
                         Need to record a manual close instead? 
                         <button onClick={()=>setFormMode("manualClose")} style={{background:"transparent",color:"#58a6ff",border:"none",cursor:"pointer",fontSize:9,fontFamily:"monospace",marginLeft:4,textDecoration:"underline"}}>
                           Record manually →
@@ -7365,15 +7411,15 @@ ${JSON.stringify(summary, null, 1)}`;
                   <div style={{marginBottom:9}}><FL>Stock Price at Close</FL><input type="number" value={closeForm.stockPriceAtClose||""} placeholder={stocksData[viewC?.stock?.toUpperCase()]?.currentPrice ? "~"+stocksData[viewC?.stock?.toUpperCase()]?.currentPrice : "enter price"} onChange={e=>setCloseForm(p=>({...p,stockPriceAtClose:e.target.value}))}/></div>
                   <div style={{marginBottom:9}}><FL>Notes</FL><textarea rows={2} value={closeForm.notes||""} onChange={e=>setCloseForm(p=>({...p,notes:e.target.value}))} style={{resize:"vertical"}}/></div>
                   {orig && ctc>0 && (
-                    <div style={{display:"flex",gap:14,padding:"7px 11px",background:"#080c12",borderRadius:6,marginBottom:9,fontFamily:"monospace",fontSize:11}}>
-                      <span style={{color:"#8b949e"}}>Profit: <span style={{color:ep>=0?"#00ff88":"#ff4560",fontWeight:700}}>{fSign(ep)}</span></span>
-                      <span style={{color:"#8b949e"}}>Return: <span style={{color:ep>=0?"#00ff88":"#ff4560",fontWeight:700}}>{epct}%</span></span>
-                      {ed!=null && <span style={{color:"#8b949e"}}>Days: <span style={{color:"#888"}}>{ed}</span></span>}
+                    <div style={{display:"flex",gap:14,padding:"7px 11px",background:th("#080c12","#ede8df"),borderRadius:6,marginBottom:9,fontFamily:"monospace",fontSize:11}}>
+                      <span style={{color:th("#8b949e","#5a5248")}}>Profit: <span style={{color:ep>=0?"#00ff88":"#ff4560",fontWeight:700}}>{fSign(ep)}</span></span>
+                      <span style={{color:th("#8b949e","#5a5248")}}>Return: <span style={{color:ep>=0?"#00ff88":"#ff4560",fontWeight:700}}>{epct}%</span></span>
+                      {ed!=null && <span style={{color:th("#8b949e","#5a5248")}}>Days: <span style={{color:"#888"}}>{ed}</span></span>}
                       <span style={{fontSize:16}}>{ep>=0?"🪙":"📉"}</span>
                     </div>
                   )}
                   <div style={{display:"flex",gap:7}}>
-                    <button onClick={saveClose} style={{background:"#ffd166",color:"#010409",border:"none",borderRadius:6,padding:"7px 18px",fontSize:11,fontWeight:700,fontFamily:"monospace"}}>CLOSE CONTRACT</button>
+                    <button onClick={saveClose} style={{background:"#ffd166",color:th("#010409","#f5f0e8"),border:"none",borderRadius:6,padding:"7px 18px",fontSize:11,fontWeight:700,fontFamily:"monospace"}}>CLOSE CONTRACT</button>
                     <button onClick={()=>{setShowForm(false);setClosingId(null);setCloseForm({...EMPTY_CLOSE});}} style={{background:"transparent",color:"#555",border:"1px solid #21262d",borderRadius:6,padding:"7px 13px",fontSize:11}}>Cancel</button>
                   </div>
                     </>
@@ -7437,11 +7483,11 @@ ${JSON.stringify(summary, null, 1)}`;
               };
 
               return (
-                <div style={{background:"#0a0e14",border:"1px solid #00ff8825",borderRadius:8,padding:13,animation:"fadeIn .2s"}}>
+                <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #00ff8825",borderRadius:8,padding:13,animation:"fadeIn .2s"}}>
                   <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:10}}>
                     <div style={{width:5,height:5,borderRadius:"50%",background:"#00ff88"}}/>
                     <span style={{fontFamily:"monospace",fontSize:10,color:"#00ff88",letterSpacing:"0.07em"}}>PLACE ORDER — {closeLabel} · {orig.account}</span>
-                    {orig && <span style={{fontSize:10,color:"#8b949e",fontFamily:"monospace"}}>{fTitle(orig)}</span>}
+                    {orig && <span style={{fontSize:10,color:th("#8b949e","#5a5248"),fontFamily:"monospace"}}>{fTitle(orig)}</span>}
                     <button onClick={()=>{setShowForm(false);setClosingId(null);setOrderPreview(null);setOrderError(null);setOrderSuccess(null);}} style={{marginLeft:"auto",background:"transparent",border:"none",color:"#555",cursor:"pointer",fontSize:14}}>✕</button>
                   </div>
                   {!orderSuccess ? (
@@ -7449,16 +7495,16 @@ ${JSON.stringify(summary, null, 1)}`;
                       {/* Controls */}
                       <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
                         <div>
-                          <div style={{fontSize:8,color:"#3a4050",letterSpacing:"0.08em",marginBottom:4}}>QTY</div>
+                          <div style={{fontSize:8,color:th("#3a4050","#8a7e74"),letterSpacing:"0.08em",marginBottom:4}}>QTY</div>
                           <div style={{display:"flex",alignItems:"center",gap:4}}>
-                            <button onClick={()=>setOrderControls(c=>({...c,qty:Math.max(1,(c.qty||orig.qty)-1)}))} style={{width:22,height:22,background:"#21262d",color:"#e6edf3",border:"none",borderRadius:3,cursor:"pointer"}}>−</button>
-                            <span style={{fontFamily:"monospace",fontSize:13,color:"#e6edf3",minWidth:20,textAlign:"center"}}>{orderControls.qty||orig.qty}</span>
-                            <button onClick={()=>setOrderControls(c=>({...c,qty:Math.min(orig.qty,(c.qty||orig.qty)+1)}))} style={{width:22,height:22,background:"#21262d",color:"#e6edf3",border:"none",borderRadius:3,cursor:"pointer"}}>+</button>
+                            <button onClick={()=>setOrderControls(c=>({...c,qty:Math.max(1,(c.qty||orig.qty)-1)}))} style={{width:22,height:22,background:th("#21262d","#c8b8a8"),color:th("#e6edf3","#0d0d0b"),border:"none",borderRadius:3,cursor:"pointer"}}>−</button>
+                            <span style={{fontFamily:"monospace",fontSize:13,color:th("#e6edf3","#0d0d0b"),minWidth:20,textAlign:"center"}}>{orderControls.qty||orig.qty}</span>
+                            <button onClick={()=>setOrderControls(c=>({...c,qty:Math.min(orig.qty,(c.qty||orig.qty)+1)}))} style={{width:22,height:22,background:th("#21262d","#c8b8a8"),color:th("#e6edf3","#0d0d0b"),border:"none",borderRadius:3,cursor:"pointer"}}>+</button>
                           </div>
                         </div>
                         {[["ORDER TYPE",["LIMIT","MARKET"],"orderType","#ffd166"],["DURATION",[["DAY","Day"],["GTC","GTC"]],"duration","#58a6ff"]].map(([label,opts,key,color])=>(
                           <div key={key}>
-                            <div style={{fontSize:8,color:"#3a4050",letterSpacing:"0.08em",marginBottom:4}}>{label}</div>
+                            <div style={{fontSize:8,color:th("#3a4050","#8a7e74"),letterSpacing:"0.08em",marginBottom:4}}>{label}</div>
                             <div style={{display:"flex"}}>
                               {opts.map(o=>{const[val,lbl]=Array.isArray(o)?o:[o,o];return(
                                 <button key={val} onClick={()=>setOrderControls(c=>({...c,[key]:val}))}
@@ -7470,8 +7516,8 @@ ${JSON.stringify(summary, null, 1)}`;
                       </div>
                       {/* Bid/Mid/Ask after preview */}
                       {orderPreview?.livePrice && orderControls.orderType==="LIMIT" && (
-                        <div style={{background:"#080c12",border:"1px solid #21262d",borderRadius:6,padding:"8px 10px",marginBottom:10}}>
-                          <div style={{fontSize:8,color:"#3a4050",letterSpacing:"0.08em",marginBottom:6}}>LIMIT PRICE</div>
+                        <div style={{background:th("#080c12","#ede8df"),border:"1px solid #21262d",borderRadius:6,padding:"8px 10px",marginBottom:10}}>
+                          <div style={{fontSize:8,color:th("#3a4050","#8a7e74"),letterSpacing:"0.08em",marginBottom:6}}>LIMIT PRICE</div>
                           <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
                             {[["Bid",orderPreview.livePrice.bid,"#ff4560"],["Mid",orderPreview.livePrice.mid,"#00ff88"],["Ask",orderPreview.livePrice.ask,"#58a6ff"]].map(([lbl,val,color])=>(
                               <button key={lbl} onClick={()=>setOrderControls(c=>({...c,limitPrice:Math.round(val*100)/100}))}
@@ -7479,21 +7525,21 @@ ${JSON.stringify(summary, null, 1)}`;
                                 {lbl} ${val?.toFixed(2)}
                               </button>
                             ))}
-                            <button onClick={()=>setOrderControls(c=>({...c,limitPrice:Math.max(0.01,Math.round(((c.limitPrice||0)-0.01)*100)/100)}))} style={{background:"#21262d",color:"#e6edf3",border:"none",borderRadius:3,width:22,height:22,cursor:"pointer",fontSize:13}}>−</button>
+                            <button onClick={()=>setOrderControls(c=>({...c,limitPrice:Math.max(0.01,Math.round(((c.limitPrice||0)-0.01)*100)/100)}))} style={{background:th("#21262d","#c8b8a8"),color:th("#e6edf3","#0d0d0b"),border:"none",borderRadius:3,width:22,height:22,cursor:"pointer",fontSize:13}}>−</button>
                             <span style={{fontFamily:"monospace",fontSize:13,color:"#ffd166",minWidth:40,textAlign:"center"}}>${(orderControls.limitPrice||0).toFixed(2)}</span>
-                            <button onClick={()=>setOrderControls(c=>({...c,limitPrice:Math.round(((c.limitPrice||0)+0.01)*100)/100}))} style={{background:"#21262d",color:"#e6edf3",border:"none",borderRadius:3,width:22,height:22,cursor:"pointer",fontSize:13}}>+</button>
-                            <input type="number" step="0.01" min="0.01" value={orderControls.limitPrice||""} onChange={e=>setOrderControls(c=>({...c,limitPrice:+e.target.value}))} style={{width:64,background:"#161b22",color:"#ffd166",border:"1px solid #30363d",borderRadius:4,padding:"3px 6px",fontFamily:"monospace",fontSize:11}}/>
+                            <button onClick={()=>setOrderControls(c=>({...c,limitPrice:Math.round(((c.limitPrice||0)+0.01)*100)/100}))} style={{background:th("#21262d","#c8b8a8"),color:th("#e6edf3","#0d0d0b"),border:"none",borderRadius:3,width:22,height:22,cursor:"pointer",fontSize:13}}>+</button>
+                            <input type="number" step="0.01" min="0.01" value={orderControls.limitPrice||""} onChange={e=>setOrderControls(c=>({...c,limitPrice:+e.target.value}))} style={{width:64,background:th("#161b22","#ede8df"),color:"#ffd166",border:"1px solid #30363d",borderRadius:4,padding:"3px 6px",fontFamily:"monospace",fontSize:11}}/>
                           </div>
                         </div>
                       )}
                       {/* Position summary */}
                       {orderPreview && (
-                        <div style={{background:"#080c12",border:"1px solid #21262d",borderRadius:6,padding:"8px 10px",marginBottom:10,fontFamily:"monospace",fontSize:11}}>
-                          <div style={{fontSize:8,color:"#3a4050",letterSpacing:"0.08em",marginBottom:6}}>POSITION SUMMARY</div>
+                        <div style={{background:th("#080c12","#ede8df"),border:"1px solid #21262d",borderRadius:6,padding:"8px 10px",marginBottom:10,fontFamily:"monospace",fontSize:11}}>
+                          <div style={{fontSize:8,color:th("#3a4050","#8a7e74"),letterSpacing:"0.08em",marginBottom:6}}>POSITION SUMMARY</div>
                           <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
                             {[
                               ["Opened At", orig.premium != null ? (orig.premium >= 0 ? "+$"+orig.premium.toFixed(2) : "-$"+Math.abs(orig.premium).toFixed(2)) : "—", orig.premium >= 0 ? "#00ff88" : "#ff4560"],
-                              ["Stock Price", stocksData[orig.stock?.toUpperCase()]?.currentPrice ? "$"+(stocksData[orig.stock?.toUpperCase()].currentPrice.toFixed(2)) : "—", "#e6edf3"],
+                              ["Stock Price", stocksData[orig.stock?.toUpperCase()]?.currentPrice ? "$"+(stocksData[orig.stock?.toUpperCase()].currentPrice.toFixed(2)) : "—", th("#e6edf3","#0d0d0b")],
                               ["Est. Cost", orderControls.limitPrice ? "$"+(orderControls.limitPrice*(orderControls.qty||orig.qty)*100).toFixed(2) : "—", "#ffd166"],
                               ["Est. Profit", (() => {
                                 if (!orderControls.limitPrice) return "—";
@@ -7514,7 +7560,7 @@ ${JSON.stringify(summary, null, 1)}`;
                               })()],
                             ].map(([label,val,color])=>(
                               <div key={label}>
-                                <div style={{fontSize:8,color:"#3a4050",letterSpacing:"0.06em"}}>{label}</div>
+                                <div style={{fontSize:8,color:th("#3a4050","#8a7e74"),letterSpacing:"0.06em"}}>{label}</div>
                                 <div style={{color}}>{val}</div>
                               </div>
                             ))}
@@ -7524,7 +7570,7 @@ ${JSON.stringify(summary, null, 1)}`;
                       {orderError && <div style={{fontSize:11,color:"#ff4560",marginBottom:8,fontFamily:"monospace"}}>⚠ {orderError}</div>}
                       {!orderPreview ? (
                         <button onClick={fetchPreview} disabled={orderLoading}
-                          style={{background:"#ffd166",color:"#010409",border:"none",borderRadius:6,padding:"7px 18px",fontSize:11,fontWeight:700,fontFamily:"monospace",cursor:orderLoading?"wait":"pointer"}}>
+                          style={{background:"#ffd166",color:th("#010409","#f5f0e8"),border:"none",borderRadius:6,padding:"7px 18px",fontSize:11,fontWeight:700,fontFamily:"monospace",cursor:orderLoading?"wait":"pointer"}}>
                           {orderLoading?"Fetching…":"Get Live Price →"}
                         </button>
                       ) : (
@@ -7534,7 +7580,7 @@ ${JSON.stringify(summary, null, 1)}`;
                             <button onClick={()=>approveOrder(true)} disabled={orderLoading} style={{background:"#58a6ff22",color:"#58a6ff",border:"1px solid #58a6ff44",borderRadius:6,padding:"7px 14px",fontSize:11,fontWeight:700,fontFamily:"monospace",cursor:"pointer"}}>{orderLoading?"…":"🧪 Dry Run"}</button>
                             <button onClick={()=>approveOrder(false)} disabled={orderLoading} style={{background:"#00ff8822",color:"#00ff88",border:"1px solid #00ff8844",borderRadius:6,padding:"7px 14px",fontSize:11,fontWeight:700,fontFamily:"monospace",cursor:"pointer"}}>{orderLoading?"Submitting…":`✅ Submit to ${orig.account}`}</button>
                             <button onClick={()=>{setOrderPreview(null);setOrderError(null);}} style={{background:"transparent",color:"#555",border:"1px solid #21262d",borderRadius:6,padding:"7px 13px",fontSize:11,cursor:"pointer"}}>← Back</button>
-                            <button onClick={()=>setShowRawJson(v=>!v)} style={{background:"transparent",color:"#3a4050",border:"1px solid #21262d",borderRadius:6,padding:"7px 13px",fontSize:11,cursor:"pointer",fontFamily:"monospace"}}>{showRawJson?"▲ Hide":"{ } JSON"}</button>
+                            <button onClick={()=>setShowRawJson(v=>!v)} style={{background:"transparent",color:th("#3a4050","#8a7e74"),border:"1px solid #21262d",borderRadius:6,padding:"7px 13px",fontSize:11,cursor:"pointer",fontFamily:"monospace"}}>{showRawJson?"▲ Hide":"{ } JSON"}</button>
                           </div>
                           {showRawJson && (() => {
                             const closingAction = orig.optType === "STO" ? (isETrade ? "BUY_CLOSE" : "BUY_TO_CLOSE") : (isETrade ? "SELL_CLOSE" : "SELL_TO_CLOSE");
@@ -7558,7 +7604,7 @@ ${JSON.stringify(summary, null, 1)}`;
                               ...(orderControls.specialInstruction!=="NONE"?{specialInstruction:orderControls.specialInstruction}:{}),
                               orderLegCollection:[{instruction:closingAction,quantity:orderControls.qty||orig.qty,instrument:{symbol:`${orig.stock?.toUpperCase().padEnd(6)}${orig.expires?.replace(/-/g,"").slice(2)}${orig.type==="Call"?"C":"P"}${((orig.strike||0)*1000).toFixed(0).padStart(8,"0")}`,assetType:"OPTION"}}],
                             };
-                            return <pre style={{marginTop:8,background:"#080c12",border:"1px solid #21262d",borderRadius:5,padding:"8px",fontSize:9,color:"#8b949e",fontFamily:"monospace",overflowX:"auto",whiteSpace:"pre-wrap"}}>{JSON.stringify(payload,null,2)}</pre>;
+                            return <pre style={{marginTop:8,background:th("#080c12","#ede8df"),border:"1px solid #21262d",borderRadius:5,padding:"8px",fontSize:9,color:th("#8b949e","#5a5248"),fontFamily:"monospace",overflowX:"auto",whiteSpace:"pre-wrap"}}>{JSON.stringify(payload,null,2)}</pre>;
                           })()}
                         </div>
                       )}
@@ -7590,7 +7636,7 @@ ${JSON.stringify(summary, null, 1)}`;
                       style={{background:fOriginals?"#00ff8814":"#58a6ff14",color:fOriginals?"#00ff88":"#58a6ff",border:`1px solid ${fOriginals?"#00ff8830":"#58a6ff30"}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"monospace",whiteSpace:"nowrap"}}>
                       {fOriginals?"Originals only":"All records"}
                     </button>
-                    <span style={{fontSize:9,color:"#3a4050",fontFamily:"monospace"}}>{sortedFiltered.length} rows</span>
+                    <span style={{fontSize:9,color:th("#3a4050","#8a7e74"),fontFamily:"monospace"}}>{sortedFiltered.length} rows</span>
                   </div>
                   <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
                     <select value={fCType}    onChange={e=>setFCType(e.target.value)}    style={{...sel,width:80}}><option value="All">Call/Put</option><option value="Call">Call</option><option value="Put">Put</option></select>
@@ -7604,13 +7650,13 @@ ${JSON.stringify(summary, null, 1)}`;
             })()}
 
             {/* Contracts table */}
-            <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8}} className="ms">
+            <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8}} className="ms">
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
                 <thead>
                   <tr>
                     {cols.filter(c=>c.show).map(col => (
                       <th key={col.key} className={col.sortKey?"thsort":""} onClick={()=>col.sortKey&&toggleSort(col.sortKey)}
-                        style={{padding:"6px 8px",textAlign:col.right?"right":"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,letterSpacing:"0.04em",fontWeight:500,whiteSpace:"nowrap",borderBottom:"1px solid #1c2128",userSelect:"none"}}>
+                        style={{padding:"6px 8px",textAlign:col.right?"right":"left",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:10,letterSpacing:"0.04em",fontWeight:500,whiteSpace:"nowrap",borderBottom:"1px solid #1c2128",userSelect:"none"}}>
                         {col.label}{sortKey===col.sortKey ? (sortDir==="asc"?" ↑":" ↓") : ""}
                       </th>
                     ))}
@@ -7624,15 +7670,15 @@ ${JSON.stringify(summary, null, 1)}`;
                       <tr key={c.id} className="rh" style={{borderTop:"1px solid #0d1117",cursor:"pointer",background:c.status==="Open"&&itmStatus==="ITM"?"#ff456005":c.status==="Open"&&itmStatus==="OTM"?"#00ff8803":"transparent"}} onClick={()=>setViewC(c)}>
                         {cols.filter(x=>x.show).map(col => {
                           switch(col.key) {
-                            case "ticker":  return <td key="ticker" className="sticky-col" style={{padding:"5px 8px",fontFamily:"monospace",fontWeight:700,color:c.parentId?"#58a6ff":"#e6edf3",fontSize:12}}>{c.stock||"—"}{c.parentId&&<span style={{fontSize:7,color:"#58a6ff",marginLeft:2}}>BTC</span>}</td>;
-                            case "contract":return <td key="contract" style={{padding:"5px 8px",fontFamily:"monospace",color:"#8b949e",fontSize:10,whiteSpace:"nowrap"}}>{fTitle(c)}</td>;
+                            case "ticker":  return <td key="ticker" className="sticky-col" style={{padding:"5px 8px",fontFamily:"monospace",fontWeight:700,color:c.parentId?"#58a6ff":th("#e6edf3","#0d0d0b"),fontSize:12}}>{c.stock||"—"}{c.parentId&&<span style={{fontSize:7,color:"#58a6ff",marginLeft:2}}>BTC</span>}</td>;
+                            case "contract":return <td key="contract" style={{padding:"5px 8px",fontFamily:"monospace",color:th("#8b949e","#5a5248"),fontSize:10,whiteSpace:"nowrap"}}>{fTitle(c)}</td>;
                             case "optType": return <td key="optType" style={{padding:"5px 8px"}}><Tag color={c.optType==="STO"?"green":c.optType==="BTC"?"amber":c.optType==="STC"?"blue":c.optType==="BTO"?"purple":"gray"}>{c.optType}</Tag></td>;
                             case "strike":  return <td key="strike" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#b0bac6"}}>${c.strike}</td>;
-                            case "qty":     return <td key="qty" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#c9d1d9",fontWeight:600}}>{c.qty}</td>;
-                            case "expires": return <td key="expires" style={{padding:"5px 8px",fontFamily:"monospace",fontSize:10,color:"#c9d1d9"}}>{c.expires||"—"}</td>;
-                            case "dateExec":return <td key="dateExec" style={{padding:"5px 8px",fontFamily:"monospace",fontSize:10,color:"#1c2128"}}>{c.dateExec||"—"}</td>;
+                            case "qty":     return <td key="qty" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:th("#c9d1d9","#1a1a18"),fontWeight:600}}>{c.qty}</td>;
+                            case "expires": return <td key="expires" style={{padding:"5px 8px",fontFamily:"monospace",fontSize:10,color:th("#c9d1d9","#1a1a18")}}>{c.expires||"—"}</td>;
+                            case "dateExec":return <td key="dateExec" style={{padding:"5px 8px",fontFamily:"monospace",fontSize:10,color:th("#1c2128","#b8a898")}}>{c.dateExec||"—"}</td>;
                             case "premium":     return <td key="premium" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:c.premium<0?"#ff4560":"#58a6ff"}}>{fMoney(c.premium)}</td>;
-                            case "costToClose": return <td key="costToClose" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#2a3040"}}>{c.costToClose!=null?fMoney(c.costToClose):"—"}</td>;
+                            case "costToClose": return <td key="costToClose" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:th("#2a3040","#6b5f55")}}>{c.costToClose!=null?fMoney(c.costToClose):"—"}</td>;
                             case "closeDate":   return <td key="closeDate" style={{padding:"5px 8px",fontFamily:"monospace",fontSize:10,color:"#555"}}>{c.closeDate||"—"}</td>;
                             case "profit": {
                               // For STO parent: find profit from linked BTC/STC child
@@ -7645,34 +7691,34 @@ ${JSON.stringify(summary, null, 1)}`;
                                 {displayProfit!=null
                                   ? <><span style={{color:displayProfit>=0?"#00ff88":"#ff4560"}}>{fSign(displayProfit)}</span>
                                       {displayPct!=null && <span style={{fontSize:8,color:displayProfit>=0?"#00ff8870":"#ff456070",marginLeft:3}}>{(displayPct*100).toFixed(1)}%</span>}</>
-                                  : <span style={{color:"#1c2128"}}>—</span>}
+                                  : <span style={{color:th("#1c2128","#b8a898")}}>—</span>}
                               </td>;
                             }
                             case "profitPct": {
                               const closeChild2 = c.profitPct == null ? contracts.find(x => x.parentId === c.id && x.profitPct != null) : null;
                               const pct = c.profitPct ?? closeChild2?.profitPct ?? null;
                               return <td key="profitPct" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11}}>
-                                {pct!=null ? <span style={{color:pct>=0?"#00ff88":"#ff4560"}}>{(pct*100).toFixed(1)}%</span> : <span style={{color:"#1c2128"}}>—</span>}
+                                {pct!=null ? <span style={{color:pct>=0?"#00ff88":"#ff4560"}}>{(pct*100).toFixed(1)}%</span> : <span style={{color:th("#1c2128","#b8a898")}}>—</span>}
                               </td>;
                             }
                             case "daysHeld": return <td key="daysHeld" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#555",fontSize:11}}>{c.daysHeld!=null?c.daysHeld:"—"}</td>;
                             case "account": return <td key="account" style={{padding:"5px 8px"}}><Tag color={c.account==="Schwab"?"blue":"amber"}>{c.account}</Tag></td>;
                             case "status":  return <td key="status" style={{padding:"5px 8px"}}><Tag color={c.status==="Open"?"green":"gray"}>{c.status}</Tag></td>;
-                            case "itmotm":  return <td key="itmotm" style={{padding:"5px 8px",textAlign:"center"}}>{c.status==="Open"&&itmStatus?<Tag color={itmStatus==="ITM"?"red":"green"}>{itmStatus==="ITM"?"🔴":"🟢"}</Tag>:<span style={{color:"#1c2128",fontSize:10}}>—</span>}</td>;
+                            case "itmotm":  return <td key="itmotm" style={{padding:"5px 8px",textAlign:"center"}}>{c.status==="Open"&&itmStatus?<Tag color={itmStatus==="ITM"?"red":"green"}>{itmStatus==="ITM"?"🔴":"🟢"}</Tag>:<span style={{color:th("#1c2128","#b8a898"),fontSize:10}}>—</span>}</td>;
                             case "otmPct":  return <td key="otmPct" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:10,color:bd?bd.bandColor:"#555"}}>{bd&&bd.otmPct!=null?bd.otmPct.toFixed(2)+"%":"—"}</td>;
-                            case "band":    return <td key="band" style={{padding:"5px 8px"}}>{bd?<span style={{fontSize:9,fontFamily:"monospace",background:bd.bandColor+"22",color:bd.bandColor,border:`1px solid ${bd.bandColor}40`,borderRadius:3,padding:"1px 5px"}}>{bd.bandLabel}</span>:<span style={{color:"#1c2128",fontSize:10}}>—</span>}</td>;
+                            case "band":    return <td key="band" style={{padding:"5px 8px"}}>{bd?<span style={{fontSize:9,fontFamily:"monospace",background:bd.bandColor+"22",color:bd.bandColor,border:`1px solid ${bd.bandColor}40`,borderRadius:3,padding:"1px 5px"}}>{bd.bandLabel}</span>:<span style={{color:th("#1c2128","#b8a898"),fontSize:10}}>—</span>}</td>;
                             case "tgtPerShare": return <td key="tgtPerShare" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:"#00ff88",fontWeight:700}}>{bd&&bd.targetPerShare!=null?"$"+(bd.targetPerShare).toFixed(2):"—"}</td>;
                             case "tgtClose": return <td key="tgtClose" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:"#00ff88"}}>{bd?f$(bd.targetClose):"—"}</td>;
                             case "liveStockPrice": {
-                              if (c.status!=="Open") return <td key="liveStockPrice" style={{padding:"5px 8px",textAlign:"right",color:"#1c2128",fontFamily:"monospace"}}>—</td>;
+                              if (c.status!=="Open") return <td key="liveStockPrice" style={{padding:"5px 8px",textAlign:"right",color:th("#1c2128","#b8a898"),fontFamily:"monospace"}}>—</td>;
                               const sq = c.stock ? stocksData[c.stock.toUpperCase()] : null;
-                              return <td key="liveStockPrice" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:sq?.lastQuoteAt?"#e6edf3":"#555"}}>
+                              return <td key="liveStockPrice" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:sq?.lastQuoteAt?th("#e6edf3","#0d0d0b"):"#555"}}>
                                 {sq?.currentPrice ? f$(sq.currentPrice) : "—"}
                                 {sq?.lastQuoteAt && <span style={{fontSize:7,color:"#00ff8870",marginLeft:3}}>●</span>}
                               </td>;
                             }
                             case "liveChange": {
-                              if (c.status!=="Open") return <td key="liveChange" style={{padding:"5px 8px",textAlign:"right",color:"#1c2128",fontFamily:"monospace"}}>—</td>;
+                              if (c.status!=="Open") return <td key="liveChange" style={{padding:"5px 8px",textAlign:"right",color:th("#1c2128","#b8a898"),fontFamily:"monospace"}}>—</td>;
                               const sq = c.stock ? stocksData[c.stock.toUpperCase()] : null;
                               const chg = sq?.changeClose;
                               const pct = sq?.changePct; // already normalized to decimal e.g. 0.012 = 1.2%
@@ -7683,33 +7729,33 @@ ${JSON.stringify(summary, null, 1)}`;
                               </td>;
                             }
                             case "liveBid": {
-                              if (c.status!=="Open") return <td key="liveBid" style={{padding:"5px 8px",textAlign:"right",color:"#1c2128",fontFamily:"monospace"}}>—</td>;
+                              if (c.status!=="Open") return <td key="liveBid" style={{padding:"5px 8px",textAlign:"right",color:th("#1c2128","#b8a898"),fontFamily:"monospace"}}>—</td>;
                               const lo = getLiveOption(c);
                               return <td key="liveBid" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:lo?.bid!=null?"#00ff88":"#555"}}>
                                 {lo?.bid!=null ? f$(lo.bid) : "—"}
                               </td>;
                             }
                             case "liveAsk": {
-                              if (c.status!=="Open") return <td key="liveAsk" style={{padding:"5px 8px",textAlign:"right",color:"#1c2128",fontFamily:"monospace"}}>—</td>;
+                              if (c.status!=="Open") return <td key="liveAsk" style={{padding:"5px 8px",textAlign:"right",color:th("#1c2128","#b8a898"),fontFamily:"monospace"}}>—</td>;
                               const lo = getLiveOption(c);
                               return <td key="liveAsk" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:lo?.ask!=null?"#58a6ff":"#555"}}>
                                 {lo?.ask!=null ? f$(lo.ask) : "—"}
                               </td>;
                             }
                             case "liveLast": {
-                              if (c.status!=="Open") return <td key="liveLast" style={{padding:"5px 8px",textAlign:"right",color:"#1c2128",fontFamily:"monospace"}}>—</td>;
+                              if (c.status!=="Open") return <td key="liveLast" style={{padding:"5px 8px",textAlign:"right",color:th("#1c2128","#b8a898"),fontFamily:"monospace"}}>—</td>;
                               const lo = getLiveOption(c);
-                              return <td key="liveLast" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:lo?.last!=null?"#c9d1d9":"#555"}}>
+                              return <td key="liveLast" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:lo?.last!=null?th("#c9d1d9","#1a1a18"):"#555"}}>
                                 {lo?.last!=null ? f$(lo.last) : "—"}
                               </td>;
                             }
                             case "mktValue": {
                               // Mkt Value = qty * mark (mid) * 100
-                              if (c.status!=="Open") return <td key="mktValue" style={{padding:"5px 8px",textAlign:"right",color:"#1c2128",fontFamily:"monospace"}}>—</td>;
+                              if (c.status!=="Open") return <td key="mktValue" style={{padding:"5px 8px",textAlign:"right",color:th("#1c2128","#b8a898"),fontFamily:"monospace"}}>—</td>;
                               const lo = getLiveOption(c);
                               const price = (lo?.bid != null && lo?.ask != null) ? (lo.bid + lo.ask) / 2 : lo?.mark ?? lo?.last ?? lo?.bid ?? null;
                               const mv = price != null ? (c.qty||1) * price * 100 : null;
-                              return <td key="mktValue" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:mv!=null?"#c9d1d9":"#555"}}>
+                              return <td key="mktValue" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:mv!=null?th("#c9d1d9","#1a1a18"):"#555"}}>
                                 {mv!=null ? f$(mv) : "—"}
                               </td>;
                             }
@@ -7717,7 +7763,7 @@ ${JSON.stringify(summary, null, 1)}`;
                               // Gain$ = Premium received - current market value
                               // For STO Call/Put: gain = premium - mktValue (positive = good, option lost value)
                               // For BTO: gain = mktValue - premium (positive = good, option gained value)
-                              if (c.status!=="Open") return <td key="liveGain" style={{padding:"5px 8px",textAlign:"right",color:"#1c2128",fontFamily:"monospace"}}>—</td>;
+                              if (c.status!=="Open") return <td key="liveGain" style={{padding:"5px 8px",textAlign:"right",color:th("#1c2128","#b8a898"),fontFamily:"monospace"}}>—</td>;
                               const lo = getLiveOption(c);
                               const last = (lo?.bid != null && lo?.ask != null) ? (lo.bid + lo.ask) / 2 : lo?.mark ?? lo?.last ?? lo?.bid ?? null;
                               if (last == null || c.premium == null) return <td key="liveGain" style={{padding:"5px 8px",textAlign:"right",color:"#555",fontFamily:"monospace"}}>—</td>;
@@ -7729,7 +7775,7 @@ ${JSON.stringify(summary, null, 1)}`;
                               </td>;
                             }
                             case "liveGainPct": {
-                              if (c.status!=="Open") return <td key="liveGainPct" style={{padding:"5px 8px",textAlign:"right",color:"#1c2128",fontFamily:"monospace"}}>—</td>;
+                              if (c.status!=="Open") return <td key="liveGainPct" style={{padding:"5px 8px",textAlign:"right",color:th("#1c2128","#b8a898"),fontFamily:"monospace"}}>—</td>;
                               const lo = getLiveOption(c);
                               const last = (lo?.bid != null && lo?.ask != null) ? (lo.bid + lo.ask) / 2 : lo?.mark ?? lo?.last ?? lo?.bid ?? null;
                               if (last == null || !c.premium) return <td key="liveGainPct" style={{padding:"5px 8px",textAlign:"right",color:"#555",fontFamily:"monospace"}}>—</td>;
@@ -7746,7 +7792,7 @@ ${JSON.stringify(summary, null, 1)}`;
                               const bd  = getContractBand(c);
                               const lo  = getLiveOption(c);
                               const last = (lo?.bid != null && lo?.ask != null) ? (lo.bid + lo.ask) / 2 : lo?.mark ?? lo?.last ?? lo?.bid ?? null;
-                              if (!bd || last == null || !c.premium) return <td key="signal" style={{padding:"5px 8px",color:"#1c2128",fontSize:10,fontFamily:"monospace"}}>—</td>;
+                              if (!bd || last == null || !c.premium) return <td key="signal" style={{padding:"5px 8px",color:th("#1c2128","#b8a898"),fontSize:10,fontFamily:"monospace"}}>—</td>;
                               const mv      = (c.qty||1) * last * 100;
                               const prem    = Math.abs(c.premium);
                               const gain    = c.optType==="BTO" ? mv - prem : prem - mv;
@@ -7766,7 +7812,7 @@ ${JSON.stringify(summary, null, 1)}`;
                               } else if (gainPct >= tgtPct*0.75) {
                                 label = "Approaching"; color = "#58a6ff"; bg = "#58a6ff20";
                               } else {
-                                return <td key="signal" style={{padding:"5px 8px",color:"#2a3040",fontSize:9,fontFamily:"monospace"}}>hold</td>;
+                                return <td key="signal" style={{padding:"5px 8px",color:th("#2a3040","#6b5f55"),fontSize:9,fontFamily:"monospace"}}>hold</td>;
                               }
                               return <td key="signal" style={{padding:"5px 8px"}}>
                                 <span style={{fontSize:9,fontFamily:"monospace",background:bg,color,border:`1px solid ${color}40`,borderRadius:4,padding:"2px 7px",whiteSpace:"nowrap"}}>{label}</span>
@@ -7787,25 +7833,41 @@ ${JSON.stringify(summary, null, 1)}`;
                       </tr>
                     );
                   })}
-                  {sortedFiltered.length===0 && <tr><td colSpan={cols.filter(c=>c.show).length} style={{padding:22,textAlign:"center",color:"#3a4050",fontSize:11,fontFamily:"monospace"}}>No contracts match filters</td></tr>}
+                  {sortedFiltered.length===0 && <tr><td colSpan={cols.filter(c=>c.show).length} style={{padding:22,textAlign:"center",color:th("#3a4050","#8a7e74"),fontSize:11,fontFamily:"monospace"}}>No contracts match filters</td></tr>}
                 </tbody>
                 {sortedFiltered.length > 0 && (() => {
                   const vis = cols.filter(c=>c.show).map(c=>c.key);
                   const totalsPremium    = sortedFiltered.filter(c=>["STO","BTO"].includes(c.optType)).reduce((s,c)=>s+(+c.premium||0),0);
                   const totalsProfit     = sortedFiltered.filter(c=>c.status==="Closed"&&c.profit!=null).reduce((s,c)=>s+(+c.profit||0),0);
                   const totalsCostClose  = sortedFiltered.filter(c=>c.status==="Open"&&c.costToClose!=null).reduce((s,c)=>s+(+c.costToClose||0),0);
+                  // Gain $ total — mirrors the per-row liveGain calc (case "liveGain" above), summed across Open rows with a live quote
+                  const liveGainRows = sortedFiltered.filter(c => {
+                    if (c.status!=="Open" || c.premium==null) return false;
+                    const lo = getLiveOption(c);
+                    const last = (lo?.bid != null && lo?.ask != null) ? (lo.bid + lo.ask) / 2 : lo?.mark ?? lo?.last ?? lo?.bid ?? null;
+                    return last != null;
+                  });
+                  const totalsLiveGain = liveGainRows.reduce((s,c) => {
+                    const lo = getLiveOption(c);
+                    const last = (lo?.bid != null && lo?.ask != null) ? (lo.bid + lo.ask) / 2 : lo?.mark ?? lo?.last ?? lo?.bid ?? null;
+                    const mv   = (c.qty||1) * last * 100;
+                    const prem = Math.abs(c.premium);
+                    const gain = c.optType==="BTO" ? mv - prem : prem - mv;
+                    return s + gain;
+                  }, 0);
                   const totalsCount      = sortedFiltered.length;
                   const closedCount      = sortedFiltered.filter(c=>c.status==="Closed").length;
                   const openCount        = sortedFiltered.filter(c=>c.status==="Open").length;
-                  const tdS = {padding:"5px 8px",background:"#0a0e14",borderTop:"2px solid #1c2128",fontFamily:"monospace",fontSize:10,color:"#555",fontWeight:700};
+                  const tdS = {padding:"5px 8px",background:th("#0a0e14","#f8f3eb"),borderTop:"2px solid #1c2128",fontFamily:"monospace",fontSize:10,color:"#555",fontWeight:700};
                   return (
                     <tfoot>
                       <tr>
                         {vis.map(key => {
-                          if (key==="ticker")   return <td key={key} style={{...tdS,textAlign:"left",color:"#3a4050"}}>TOTALS ({totalsCount})</td>;
+                          if (key==="ticker")   return <td key={key} style={{...tdS,textAlign:"left",color:th("#3a4050","#8a7e74")}}>TOTALS ({totalsCount})</td>;
                           if (key==="premium")  return <td key={key} style={{...tdS,textAlign:"right",color:totalsPremium>=0?"#58a6ff":"#ff4560"}}>{fMoney(totalsPremium)}</td>;
                           if (key==="profit")   return <td key={key} style={{...tdS,textAlign:"right",color:totalsProfit>=0?"#00ff88":"#ff4560"}}>{closedCount>0?fSign(totalsProfit):"—"}</td>;
                           if (key==="costToClose") return <td key={key} style={{...tdS,textAlign:"right",color:"#ffd166"}}>{openCount>0?fMoney(totalsCostClose):"—"}</td>;
+                          if (key==="liveGain")  return <td key={key} style={{...tdS,textAlign:"right",color:totalsLiveGain>=0?"#00ff88":"#ff4560"}}>{liveGainRows.length>0?fSign(totalsLiveGain):"—"}</td>;
                           if (key==="status")   return <td key={key} style={{...tdS,textAlign:"left"}}>{openCount}o/{closedCount}c</td>;
                           return <td key={key} style={tdS}/>;
                         })}
@@ -7821,20 +7883,20 @@ ${JSON.stringify(summary, null, 1)}`;
               const activeOrders = tradeOrders.filter(o => ["pending_approval","dry_run_approved","submitted"].includes(o.status));
               if (!activeOrders.length && !ordersLoading) return null;
               return (
-                <div style={{background:"#0a0e14",border:"1px solid #58a6ff25",borderRadius:8,padding:"10px 13px"}}>
+                <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #58a6ff25",borderRadius:8,padding:"10px 13px"}}>
                   <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
                     <span style={{fontSize:9,color:"#58a6ff",fontFamily:"monospace",letterSpacing:"0.08em",fontWeight:700}}>PENDING ORDERS</span>
-                    <button onClick={loadTradeOrders} disabled={ordersLoading} style={{background:"transparent",color:"#3a4050",border:"1px solid #1c2128",borderRadius:3,padding:"1px 7px",fontSize:9,fontFamily:"monospace",cursor:"pointer"}}>{ordersLoading?"…":"⟳ Refresh"}</button>
+                    <button onClick={loadTradeOrders} disabled={ordersLoading} style={{background:"transparent",color:th("#3a4050","#8a7e74"),border:"1px solid #1c2128",borderRadius:3,padding:"1px 7px",fontSize:9,fontFamily:"monospace",cursor:"pointer"}}>{ordersLoading?"…":"⟳ Refresh"}</button>
                   </div>
                   {activeOrders.length === 0 ? (
-                    <div style={{fontSize:10,color:"#3a4050",fontFamily:"monospace"}}>No pending orders</div>
+                    <div style={{fontSize:10,color:th("#3a4050","#8a7e74"),fontFamily:"monospace"}}>No pending orders</div>
                   ) : (
                     <div style={{overflowX:"auto"}}>
                       <table style={{width:"100%",borderCollapse:"collapse",fontSize:10,fontFamily:"monospace"}}>
                         <thead>
                           <tr style={{borderBottom:"1px solid #1c2128"}}>
                             {["Contract","Acct","Side","Qty","Limit","Type","Dur","Bid","Ask","Last","Status","Dry Run","Date",""].map(h=>(
-                              <th key={h} style={{padding:"3px 8px",textAlign:"left",color:"#3a4050",fontWeight:400,fontSize:8,letterSpacing:"0.06em"}}>{h}</th>
+                              <th key={h} style={{padding:"3px 8px",textAlign:"left",color:th("#3a4050","#8a7e74"),fontWeight:400,fontSize:8,letterSpacing:"0.06em"}}>{h}</th>
                             ))}
                           </tr>
                         </thead>
@@ -7847,19 +7909,19 @@ ${JSON.stringify(summary, null, 1)}`;
                             return [
                               <tr key={`order-${o.id}`} style={{borderBottom: isExpanded?"none":"1px solid #0d1117",cursor:"pointer"}}
                                 onClick={()=>setOrderStatuses(p=>({...p,[o.id]:{...p[o.id],expanded:!p[o.id]?.expanded}}))}>
-                                <td style={{padding:"4px 8px",color:"#e6edf3",fontWeight:600}}>{o.ticker} ${o.strike} {o.type} {o.expires}</td>
+                                <td style={{padding:"4px 8px",color:th("#e6edf3","#0d0d0b"),fontWeight:600}}>{o.ticker} ${o.strike} {o.type} {o.expires}</td>
                                 <td style={{padding:"4px 8px",color:o.account?.startsWith("Schwab")?"#58a6ff":"#ffd166",fontSize:9,fontFamily:"monospace"}}>{o.account||"—"}</td>
                                 <td style={{padding:"4px 8px"}}><span style={{color:o.side==="BUY"?"#ff4560":"#00ff88",fontWeight:700,fontSize:9}}>{o.opt_type}</span></td>
-                                <td style={{padding:"4px 8px",color:"#e6edf3"}}>{o.qty}</td>
+                                <td style={{padding:"4px 8px",color:th("#e6edf3","#0d0d0b")}}>{o.qty}</td>
                                 <td style={{padding:"4px 8px",color:"#ffd166"}}>{o.order_type==="MARKET"?"MKT":o.limit_price!=null?"$"+Number(o.limit_price).toFixed(2):"—"}</td>
-                                <td style={{padding:"4px 8px",color:"#8b949e"}}>{o.order_type||"LIMIT"}</td>
-                                <td style={{padding:"4px 8px",color:"#8b949e"}}>{o.duration==="GTC"?"GTC":"Day"}</td>
+                                <td style={{padding:"4px 8px",color:th("#8b949e","#5a5248")}}>{o.order_type||"LIMIT"}</td>
+                                <td style={{padding:"4px 8px",color:th("#8b949e","#5a5248")}}>{o.duration==="GTC"?"GTC":"Day"}</td>
                                 <td style={{padding:"4px 8px",color:"#ff4560",fontFamily:"monospace"}}>{lq?.bid!=null?`$${Number(lq.bid).toFixed(2)}`:"—"}</td>
                                 <td style={{padding:"4px 8px",color:"#58a6ff",fontFamily:"monospace"}}>{lq?.ask!=null?`$${Number(lq.ask).toFixed(2)}`:"—"}</td>
-                                <td style={{padding:"4px 8px",color:"#8b949e",fontFamily:"monospace"}}>{lq?.last!=null?`$${Number(lq.last).toFixed(2)}`:"—"}</td>
+                                <td style={{padding:"4px 8px",color:th("#8b949e","#5a5248"),fontFamily:"monospace"}}>{lq?.last!=null?`$${Number(lq.last).toFixed(2)}`:"—"}</td>
                                 <td style={{padding:"4px 8px"}}><span style={{color:statusColor,fontSize:9,fontWeight:600}}>{o.status.replace(/_/g," ").toUpperCase()}</span></td>
                                 <td style={{padding:"4px 8px",color:"#555"}}>{o.dry_run?"Yes":"—"}</td>
-                                <td style={{padding:"4px 8px",color:"#3a4050"}}>{o.created_at?.slice(0,10)}</td>
+                                <td style={{padding:"4px 8px",color:th("#3a4050","#8a7e74")}}>{o.created_at?.slice(0,10)}</td>
                                 <td style={{padding:"4px 8px"}} onClick={e=>e.stopPropagation()}>
                                   <div style={{display:"flex",gap:4}}>
                                     {o.status==="submitted" && o.schwab_order_id && (
@@ -7900,17 +7962,17 @@ ${JSON.stringify(summary, null, 1)}`;
                                 const history = Array.isArray(o.price_history) ? o.price_history : [];
                                 return (
                                   <tr key={`detail-${o.id}`} style={{borderBottom:"1px solid #0d1117"}}>
-                                    <td colSpan={14} style={{padding:"6px 10px 10px",background:"#080c12"}}>
+                                    <td colSpan={14} style={{padding:"6px 10px 10px",background:th("#080c12","#ede8df")}}>
                                       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
 
                                         {/* Left: reprice */}
                                         <div>
-                                          <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:6}}>CHANGE LIMIT PRICE</div>
+                                          <div style={{fontSize:7,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:6}}>CHANGE LIMIT PRICE</div>
                                           <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:8}}>
                                             <input type="number" step="0.01" min="0.01"
                                               defaultValue={o.limit_price != null ? Number(o.limit_price).toFixed(2) : ""}
                                               id={`reprice-${o.id}`}
-                                              style={{width:80,background:"#0d1117",border:"1px solid #21262d",borderRadius:4,padding:"5px 7px",fontSize:11,fontFamily:"monospace",color:"#e6edf3"}}
+                                              style={{width:80,background:th("#0d1117","#f5f0e8"),border:"1px solid #21262d",borderRadius:4,padding:"5px 7px",fontSize:11,fontFamily:"monospace",color:th("#e6edf3","#0d0d0b")}}
                                               placeholder="0.00"
                                             />
                                             <button onClick={async e=>{
@@ -7934,37 +7996,37 @@ ${JSON.stringify(summary, null, 1)}`;
 
                                           {/* Live quote status */}
                                           {sc?.result && (
-                                            <div style={{padding:"5px 8px",background:"#0d1117",border:`1px solid ${sc.result.error?"#ff456030":sc.result.schwabStatus==="FILLED"?"#00ff8830":"#58a6ff30"}`,borderRadius:4,fontFamily:"monospace",fontSize:10}}>
+                                            <div style={{padding:"5px 8px",background:th("#0d1117","#f5f0e8"),border:`1px solid ${sc.result.error?"#ff456030":sc.result.schwabStatus==="FILLED"?"#00ff8830":"#58a6ff30"}`,borderRadius:4,fontFamily:"monospace",fontSize:10}}>
                                               {sc.result.error ? <span style={{color:"#ff4560"}}>⚠ {sc.result.error}</span> : (
                                                 <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
-                                                  <div><span style={{color:"#3a4050"}}>Schwab: </span><span style={{color:sc.result.schwabStatus==="FILLED"?"#00ff88":sc.result.schwabStatus==="CANCELED"?"#ff4560":"#ffd166",fontWeight:700}}>{sc.result.schwabStatus||"—"}</span></div>
-                                                  {o.schwab_order_id && <div><span style={{color:"#3a4050"}}>ID: </span><span style={{color:"#555"}}>{o.schwab_order_id}</span></div>}
+                                                  <div><span style={{color:th("#3a4050","#8a7e74")}}>Schwab: </span><span style={{color:sc.result.schwabStatus==="FILLED"?"#00ff88":sc.result.schwabStatus==="CANCELED"?"#ff4560":"#ffd166",fontWeight:700}}>{sc.result.schwabStatus||"—"}</span></div>
+                                                  {o.schwab_order_id && <div><span style={{color:th("#3a4050","#8a7e74")}}>ID: </span><span style={{color:"#555"}}>{o.schwab_order_id}</span></div>}
                                                 </div>
                                               )}
                                             </div>
                                           )}
-                                          {o.schwab_order_id && !sc?.result && <div style={{fontSize:9,color:"#3a4050",fontFamily:"monospace",marginTop:4}}>Schwab ID: {o.schwab_order_id}</div>}
+                                          {o.schwab_order_id && !sc?.result && <div style={{fontSize:9,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",marginTop:4}}>Schwab ID: {o.schwab_order_id}</div>}
                                           {o.notes && <div style={{fontSize:9,color:"#555",fontFamily:"monospace",marginTop:6,fontStyle:"italic"}}>{o.notes}</div>}
                                         </div>
 
                                         {/* Right: price history */}
                                         <div>
-                                          <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:6}}>PRICE HISTORY</div>
+                                          <div style={{fontSize:7,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:6}}>PRICE HISTORY</div>
                                           {history.length === 0 ? (
-                                            <div style={{fontSize:9,color:"#3a4050",fontFamily:"monospace"}}>No changes yet</div>
+                                            <div style={{fontSize:9,color:th("#3a4050","#8a7e74"),fontFamily:"monospace"}}>No changes yet</div>
                                           ) : (
                                             <div style={{display:"flex",flexDirection:"column",gap:3,maxHeight:100,overflowY:"auto"}}>
                                               {[...history].reverse().map((h,i) => (
                                                 <div key={i} style={{display:"flex",gap:8,alignItems:"center",fontSize:9,fontFamily:"monospace"}}>
                                                   <span style={{color:"#ffd166",fontWeight:600}}>${Number(h.price).toFixed(2)}</span>
-                                                  <span style={{color:"#3a4050"}}>{h.at?.slice(0,16).replace("T"," ")}</span>
+                                                  <span style={{color:th("#3a4050","#8a7e74")}}>{h.at?.slice(0,16).replace("T"," ")}</span>
                                                   <span style={{color:"#555",fontSize:8}}>{h.reason||""}</span>
                                                 </div>
                                               ))}
                                             </div>
                                           )}
                                           {/* Timeline summary */}
-                                          <div style={{marginTop:8,fontSize:9,color:"#3a4050",fontFamily:"monospace",display:"flex",gap:10,flexWrap:"wrap"}}>
+                                          <div style={{marginTop:8,fontSize:9,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",display:"flex",gap:10,flexWrap:"wrap"}}>
                                             <span>Created: {o.created_at?.slice(0,16).replace("T"," ")}</span>
                                             {o.submitted_at && <span>Submitted: {o.submitted_at.slice(0,16).replace("T"," ")}</span>}
                                           </div>
@@ -7991,51 +8053,51 @@ ${JSON.stringify(summary, null, 1)}`;
         {tab==="analytics" && (
           <div style={{display:"flex",flexDirection:"column",gap:9}}>
             {/* Search filter */}
-            <div style={{display:"flex",gap:5,alignItems:"center",flexWrap:"wrap",padding:"7px 10px",background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8}}>
-              <span style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",letterSpacing:"0.07em"}}>SEARCH FILTER</span>
+            <div style={{display:"flex",gap:5,alignItems:"center",flexWrap:"wrap",padding:"7px 10px",background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8}}>
+              <span style={{fontSize:7,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",letterSpacing:"0.07em"}}>SEARCH FILTER</span>
               <select value={gTicker} onChange={e=>setGTicker(e.target.value)} style={{width:85,fontSize:11,padding:"3px 5px"}}><option value="All">All Tickers</option>{allTickers.map(t=><option key={t}>{t}</option>)}</select>
               <select value={gOptType} onChange={e=>setGOptType(e.target.value)} style={{width:78,fontSize:11,padding:"3px 5px"}}><option value="All">STO/BTO</option><option value="STO">STO</option><option value="BTO">BTO</option></select>
               <select value={gType} onChange={e=>setGType(e.target.value)} style={{width:85,fontSize:11,padding:"3px 5px"}}><option value="All">Call/Put</option><option value="Call">Call</option><option value="Put">Put</option></select>
               {(gTicker!=="All"||gOptType!=="All"||gType!=="All") && <button onClick={()=>{setGTicker("All");setGOptType("All");setGType("All");}} style={{background:"#ff456018",color:"#ff4560",border:"1px solid #ff456030",borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"monospace"}}>✕</button>}
               <div style={{marginLeft:"auto",display:"flex",gap:5,alignItems:"center",flexWrap:"wrap"}}>
                 <div style={{display:"flex",gap:3}}>
-                  <span style={{fontSize:7,color:"#3a4050",fontFamily:"monospace"}}>PROFIT BY</span>
+                  <span style={{fontSize:7,color:th("#3a4050","#8a7e74"),fontFamily:"monospace"}}>PROFIT BY</span>
                   {["exec","close","accounting"].map(m=>(
-                    <button key={m} onClick={()=>setProfitDateMode(m)} style={{background:profitDateMode===m?"#00ff8814":"transparent",color:profitDateMode===m?"#00ff88":"#2a3040",border:profitDateMode===m?"1px solid #00ff8825":"1px solid #1c2128",borderRadius:4,padding:"2px 7px",fontSize:8,fontFamily:"monospace"}}>{m==="exec"?"Open Date":m==="close"?"Close Date":"Accounting"}</button>
+                    <button key={m} onClick={()=>setProfitDateMode(m)} style={{background:profitDateMode===m?"#00ff8814":"transparent",color:profitDateMode===m?"#00ff88":th("#2a3040","#6b5f55"),border:profitDateMode===m?"1px solid #00ff8825":"1px solid #1c2128",borderRadius:4,padding:"2px 7px",fontSize:8,fontFamily:"monospace"}}>{m==="exec"?"Open Date":m==="close"?"Close Date":"Accounting"}</button>
                   ))}
                 </div>
                 <div style={{display:"flex",gap:3}}>
                   {["daily","weekly","monthly"].map(v=>(
-                    <button key={v} onClick={()=>setAnalyticsView(v)} style={{background:analyticsView===v?"#00ff8814":"transparent",color:analyticsView===v?"#00ff88":"#2a3040",border:analyticsView===v?"1px solid #00ff8825":"1px solid #1c2128",borderRadius:4,padding:"2px 7px",fontSize:8,fontFamily:"monospace",textTransform:"uppercase"}}>{v}</button>
+                    <button key={v} onClick={()=>setAnalyticsView(v)} style={{background:analyticsView===v?"#00ff8814":"transparent",color:analyticsView===v?"#00ff88":th("#2a3040","#6b5f55"),border:analyticsView===v?"1px solid #00ff8825":"1px solid #1c2128",borderRadius:4,padding:"2px 7px",fontSize:8,fontFamily:"monospace",textTransform:"uppercase"}}>{v}</button>
                   ))}
                 </div>
               </div>
             </div>
 
             {/* Period breakdown with notes */}
-            <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8}} className="ms">
+            <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8}} className="ms">
               <div style={{padding:"7px 11px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-                <span style={{fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em"}}>{analyticsView.toUpperCase()} BREAKDOWN — {profitDateMode==="accounting"?"accounting (cash basis)":"profit by "+(profitDateMode==="exec"?"open date":"close date")}</span>
+                <span style={{fontFamily:"monospace",fontSize:7,color:th("#2a3040","#6b5f55"),letterSpacing:"0.08em"}}>{analyticsView.toUpperCase()} BREAKDOWN — {profitDateMode==="accounting"?"accounting (cash basis)":"profit by "+(profitDateMode==="exec"?"open date":"close date")}</span>
                 {analyticsView==="monthly" && (
-                  <button onClick={()=>setShowBalCols(v=>!v)} style={{fontSize:8,fontFamily:"monospace",padding:"2px 8px",borderRadius:3,border:"1px solid #21262d",cursor:"pointer",background:showBalCols?"#00ff8810":"transparent",color:showBalCols?"#00ff88":"#3a4050"}}>
+                  <button onClick={toggleBalCols} style={{fontSize:8,fontFamily:"monospace",padding:"2px 8px",borderRadius:3,border:"1px solid #21262d",cursor:"pointer",background:showBalCols?"#00ff8810":"transparent",color:showBalCols?"#00ff88":th("#3a4050","#8a7e74")}}>
                     {showBalCols?"▼ Hide Balances":"▶ Show Balances"}
                   </button>
                 )}
               </div>
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                 <thead><tr>
-                  <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Period</th>
-                  <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Premium</th>
-                  <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Profit</th>
-                  <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Margin</th>
-                  <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Contracts</th>
+                  <th style={{padding:"5px 8px",textAlign:"left",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Period</th>
+                  <th style={{padding:"5px 8px",textAlign:"right",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Premium</th>
+                  <th style={{padding:"5px 8px",textAlign:"right",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Profit</th>
+                  <th style={{padding:"5px 8px",textAlign:"right",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Margin</th>
+                  <th style={{padding:"5px 8px",textAlign:"right",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Contracts</th>
                   {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#58a6ff",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Schwab $</th>}
                   {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#ffd166",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>ETrade $</th>}
                   {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#00ff88",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Total $</th>}
                   {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#ff4560",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Distrib $</th>}
-                  {analyticsView==="monthly" && <th style={{padding:"5px 8px",textAlign:"right",color:"#c084fc",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>MoM%</th>}
-                  {analyticsView==="monthly" && <th style={{padding:"5px 8px",textAlign:"right",color:"#ff9f1c",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>YTD%</th>}
-                  {analyticsView!=="daily" && <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Notes</th>}
+                  {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#c084fc",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>MoM%</th>}
+                  {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#ff9f1c",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>YTD%</th>}
+                  {analyticsView!=="daily" && <th style={{padding:"5px 8px",textAlign:"left",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Notes</th>}
                 </tr></thead>
                 <tbody>
                   {[...periodData].reverse().map((m,i) => {
@@ -8043,33 +8105,18 @@ ${JSON.stringify(summary, null, 1)}`;
                     const note = periodNotes[m.key] || "";
                     return (
                       <tr key={i} className="rh" style={{borderTop:"1px solid #0d1117"}}>
-                        <td style={{padding:"5px 8px",fontFamily:"monospace",color:"#c9d1d9",fontSize:12}}>{m.label}</td>
+                        <td style={{padding:"5px 8px",fontFamily:"monospace",color:th("#c9d1d9","#1a1a18"),fontSize:12}}>{m.label}</td>
                         <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#58a6ff"}}>{f$(m.premium)}</td>
                         <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:m.profit>=0?"#00ff88":"#ff4560"}}>{fSign(m.profit)}</td>
                         <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:pp<0?"#ff4560":pp>=0.6?"#00ff88":pp>=0.3?"#ffd166":"#58a6ff"}}>{(pp*100).toFixed(1)}%</td>
-                        <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#2a3040"}}>{m.contracts}</td>
+                        <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:th("#2a3040","#6b5f55")}}>{m.contracts}</td>
                         {analyticsView==="monthly" && showBalCols && (() => {
                           const b = balHistoryInline?.[m.key] || {};
                           const schwab = b.schwab ?? (m.key===nowMonthKey&&liveSchwabInline ? liveSchwabInline : null);
                           const etrade = b.etrade ?? (m.key===nowMonthKey&&liveEtradeInline ? liveEtradeInline : null);
-                          const total  = schwab||etrade ? (schwab||0)+(etrade||0) : null;
-                          // MoM: compare to previous month in periodData
-                          const allKeys = [...periodData].reverse().map(x=>x.key);
-                          const prevKey = allKeys[allKeys.indexOf(m.key)-1];
-                          const prevB = prevKey ? (balHistoryInline?.[prevKey]||{}) : {};
-                          const prevSchwab = prevB.schwab ?? null;
-                          const prevEtrade = prevB.etrade ?? null;
-                          const prevTotal = prevSchwab||prevEtrade ? (+prevSchwab||0)+(+prevEtrade||0) : null;
-                          const mom = total&&prevTotal ? ((total-prevTotal)/prevTotal*100) : null;
-                          // YTD: compare to Jan 1 of same year
-                          const janKey = m.key.slice(0,4)+"-01";
-                          const janB = balHistoryInline?.[janKey] || {};
-                          const janSchwab = janB.schwab ?? null;
-                          const janEtrade = janB.etrade ?? null;
-                          const janTotal = janSchwab||janEtrade ? (+janSchwab||0)+(+janEtrade||0) : null;
-                          const ytd = total&&janTotal&&m.key!==janKey ? ((total-janTotal)/janTotal*100) : null;
+                          const total  = getMonthTotal(m.key).total;
                           const fBal = v => v!=null ? "\$"+(+v).toLocaleString("en-US",{maximumFractionDigits:0}) : "—";
-                          const fPct = (v,col1,col2) => v!=null ? <span style={{color:v>0?col1:v<0?col2:"#3a4050"}}>{v>0?"+":""}{v.toFixed(1)}%</span> : "—";
+                          const fPct = (v,col1,col2) => v!=null ? <span style={{color:v>0?col1:v<0?col2:th("#3a4050","#8a7e74")}}>{v>0?"+":""}{v.toFixed(1)}%</span> : "—";
                           return (<>
                             <td style={{padding:"4px 6px",textAlign:"right"}} onClick={e=>e.stopPropagation()}>
                               {b.schwabAuto
@@ -8114,42 +8161,25 @@ ${JSON.stringify(summary, null, 1)}`;
                           );
                         })()}
                         {/* MoM%: (end - start) / (start - distributions) */}
-                        {analyticsView==="monthly" && (() => {
-                          const bm   = balHistoryInline?.[m.key]||{};
-                          const sm   = bm.schwab??(m.key===nowMonthKey&&liveSchwabInline?liveSchwabInline:null);
-                          const em   = bm.etrade??null;
-                          const totalM = (sm||em) ? (+sm||0)+(+em||0) : null;
+                        {analyticsView==="monthly" && showBalCols && (() => {
+                          const totalM = getMonthTotal(m.key).total;
                           const [yr,mo] = m.key.split("-").map(Number);
                           const prevMo = mo===1 ? 12 : mo-1;
                           const prevYr = mo===1 ? yr-1 : yr;
                           const prevKM = prevYr+"-"+(prevMo<10?"0":"")+prevMo;
-                          const prevBm = balHistoryInline?.[prevKM]||{};
-                          const prevSM = prevBm.schwab??(prevKM===nowMonthKey&&liveSchwabInline?liveSchwabInline:null);
-                          const prevEM = prevBm.etrade??null;
-                          const prevTM = (prevSM||prevEM) ? (+prevSM||0)+(+prevEM||0) : null;
-                          const distrib = +(bm.distrib||0);
+                          const prevTM = getMonthTotal(prevKM).total;
+                          const distrib = +(balHistoryInline?.[m.key]?.distrib||0);
                           const adjDenom = prevTM ? Math.max(prevTM - distrib, 1) : null;
-                          const momM = totalM&&adjDenom ? ((totalM-prevTM)/adjDenom*100) : null;
-                          return <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:momM>0?"#00ff88":momM<0?"#ff4560":"#3a4050"}}>{momM!=null?(momM>0?"+":"")+momM.toFixed(1)+"%":"—"}</td>;
+                          const momM = totalM!=null&&adjDenom ? ((totalM-prevTM)/adjDenom*100) : null;
+                          return <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:momM>0?"#00ff88":momM<0?"#ff4560":th("#3a4050","#8a7e74")}}>{momM!=null?(momM>0?"+":"")+momM.toFixed(1)+"%":"—"}</td>;
                         })()}
-                        {/* YTD%: (end - base) / (base - cumulative distributions since base) */}
-                        {analyticsView==="monthly" && (() => {
-                          const b2   = balHistoryInline?.[m.key]||{};
-                          const s2   = b2.schwab??(m.key===nowMonthKey&&liveSchwabInline?liveSchwabInline:null);
-                          const e2   = b2.etrade??null;
-                          const total2 = (s2||e2) ? (+s2||0)+(+e2||0) : null;
-                          const yr2  = m.key.slice(0,4);
-                          const decPrior = (Number(yr2)-1)+"-12";
-                          const janSame  = yr2+"-01";
-                          const baseKey2 = balHistoryInline?.[decPrior]?.schwab||balHistoryInline?.[decPrior]?.etrade ? decPrior : janSame;
-                          const baseB2   = balHistoryInline?.[baseKey2]||{};
-                          const baseTotal2 = (baseB2.schwab||baseB2.etrade) ? (+baseB2.schwab||0)+(+baseB2.etrade||0) : null;
-                          const cumDistrib = Object.keys(balHistoryInline).sort()
-                            .filter(mk => mk > baseKey2 && mk <= m.key)
-                            .reduce((s,mk) => s + (+(balHistoryInline[mk]?.distrib)||0), 0);
-                          const adjBase = baseTotal2 ? Math.max(baseTotal2 - cumDistrib, 1) : null;
-                          const ytd2 = total2&&adjBase&&m.key!==baseKey2 ? ((total2-baseTotal2)/adjBase*100) : null;
-                          return <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:ytd2>0?"#ff9f1c":ytd2<0?"#ff4560":"#3a4050"}}>{ytd2!=null?(ytd2>0?"+":"")+ytd2.toFixed(1)+"%":"—"}</td>;
+                        {/* YTD%: (current total - Jan 1 total) / Jan 1 total */}
+                        {analyticsView==="monthly" && showBalCols && (() => {
+                          const total2  = getMonthTotal(m.key).total;
+                          const janKey  = m.key.slice(0,4)+"-01";
+                          const janTotal = getMonthTotal(janKey).total;
+                          const ytd2 = total2!=null&&janTotal!=null&&m.key!==janKey ? ((total2-janTotal)/janTotal*100) : null;
+                          return <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:ytd2>0?"#ff9f1c":ytd2<0?"#ff4560":th("#3a4050","#8a7e74")}}>{ytd2!=null?(ytd2>0?"+":"")+ytd2.toFixed(1)+"%":"—"}</td>;
                         })()}
                         {analyticsView!=="daily" && (
                           <td style={{padding:"5px 8px",minWidth:180}} onClick={e=>e.stopPropagation()}>
@@ -8159,7 +8189,7 @@ ${JSON.stringify(summary, null, 1)}`;
                                 onKeyDown={e=>{if(e.key==="Enter"||e.key==="Escape"){const n={...periodNotes,[m.key]:e.target.value};persistNotes(n);setEditingNote(null);}}}
                                 style={{fontSize:10,padding:"2px 5px"}}/>
                             ) : (
-                              <span onClick={()=>setEditingNote(m.key)} style={{fontSize:10,color:note?"#888":"#2a3040",fontStyle:note?"normal":"italic",cursor:"pointer"}}>
+                              <span onClick={()=>setEditingNote(m.key)} style={{fontSize:10,color:note?"#888":th("#2a3040","#6b5f55"),fontStyle:note?"normal":"italic",cursor:"pointer"}}>
                                 {note||"+ add note"}
                               </span>
                             )}
@@ -8168,16 +8198,16 @@ ${JSON.stringify(summary, null, 1)}`;
                       </tr>
                     );
                   })}
-                  {periodData.length===0 && <tr><td colSpan={analyticsView!=="daily"?6:5} style={{padding:18,textAlign:"center",color:"#3a4050",fontSize:11,fontFamily:"monospace"}}>No data — import history first</td></tr>}
+                  {periodData.length===0 && <tr><td colSpan={analyticsView!=="daily"?6:5} style={{padding:18,textAlign:"center",color:th("#3a4050","#8a7e74"),fontSize:11,fontFamily:"monospace"}}>No data — import history first</td></tr>}
                 </tbody>
               </table>
             </div>
 
             {/* S&P 500 vs Portfolio Balance Chart */}
             {analyticsView==="monthly" && (
-              <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:11}}>
+              <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8,padding:11}}>
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
-                  <div style={{fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em"}}>PORTFOLIO BALANCE vs S&P 500 — MONTHLY</div>
+                  <div style={{fontFamily:"monospace",fontSize:7,color:th("#2a3040","#6b5f55"),letterSpacing:"0.08em"}}>PORTFOLIO BALANCE vs S&P 500 — MONTHLY</div>
                   <button onClick={async()=>{
                     if(spxOverlay){setSpxOverlay(false);return;}
                     try {
@@ -8198,7 +8228,7 @@ ${JSON.stringify(summary, null, 1)}`;
                         setSpxOverlay(true);
                       }
                     } catch(e){console.warn("SPX fetch failed:",e.message);}
-                  }} style={{background:spxOverlay?"#ff9f1c14":"transparent",color:spxOverlay?"#ff9f1c":"#3a4050",border:spxOverlay?"1px solid #ff9f1c25":"1px solid #21262d",borderRadius:4,padding:"3px 10px",fontSize:8,fontFamily:"monospace",cursor:"pointer"}}>
+                  }} style={{background:spxOverlay?"#ff9f1c14":"transparent",color:spxOverlay?"#ff9f1c":th("#3a4050","#8a7e74"),border:spxOverlay?"1px solid #ff9f1c25":"1px solid #21262d",borderRadius:4,padding:"3px 10px",fontSize:8,fontFamily:"monospace",cursor:"pointer"}}>
                     {spxOverlay?"✓ S&P 500 ON":"+ Compare S&P 500"}
                   </button>
                 </div>
@@ -8208,7 +8238,7 @@ ${JSON.stringify(summary, null, 1)}`;
                     const b=balHistoryInline[mk]||{};
                     return (+b.schwab||0)+(+b.etrade||0)>0;
                   });
-                  if(months.length < 2) return <div style={{padding:"20px 0",textAlign:"center",color:"#3a4050",fontSize:10,fontFamily:"monospace"}}>Enter balance data above to see chart</div>;
+                  if(months.length < 2) return <div style={{padding:"20px 0",textAlign:"center",color:th("#3a4050","#8a7e74"),fontSize:10,fontFamily:"monospace"}}>Enter balance data above to see chart</div>;
                   const firstMk = months[0];
                   const firstB = balHistoryInline[firstMk]||{};
                   const firstTotal = (+firstB.schwab||0)+(+firstB.etrade||0);
@@ -8230,9 +8260,9 @@ ${JSON.stringify(summary, null, 1)}`;
                   return (
                     <ResponsiveContainer width="100%" height={180}>
                       <ComposedChart data={chartBalData}>
-                        <CartesianGrid strokeDasharray="2 4" stroke="#0d1117" vertical={false}/>
-                        <XAxis dataKey="label" tick={{fill:"#2a3040",fontSize:8,fontFamily:"monospace"}} axisLine={false} tickLine={false}/>
-                        <YAxis tick={{fill:"#2a3040",fontSize:8,fontFamily:"monospace"}} axisLine={false} tickLine={false} tickFormatter={v=>(v>0?"+":"")+v.toFixed(0)+"%"}/>
+                        <CartesianGrid strokeDasharray="2 4" stroke={th("#0d1117","#f5f0e8")} vertical={false}/>
+                        <XAxis dataKey="label" tick={{fill:th("#2a3040","#6b5f55"),fontSize:8,fontFamily:"monospace"}} axisLine={false} tickLine={false}/>
+                        <YAxis tick={{fill:th("#2a3040","#6b5f55"),fontSize:8,fontFamily:"monospace"}} axisLine={false} tickLine={false} tickFormatter={v=>(v>0?"+":"")+v.toFixed(0)+"%"}/>
                         <Tooltip formatter={(val,name)=>[val!=null?(val>0?"+":"")+val.toFixed(1)+"%":"—",name]} labelFormatter={l=>l}/>
                         <Line type="monotone" dataKey="portPct" name="Portfolio" stroke="#00ff88" strokeWidth={2} dot={{fill:"#00ff88",r:3}} connectNulls/>
                         {spxOverlay&&<Line type="monotone" dataKey="spxPct" name="S&P 500" stroke="#ff9f1c" strokeWidth={2} dot={{fill:"#ff9f1c",r:3}} connectNulls/>}
@@ -8248,12 +8278,12 @@ ${JSON.stringify(summary, null, 1)}`;
               {["Schwab","Etrade"].map(acct=>{
                 const ac=allF.filter(c=> acct==="Schwab" ? c.account?.startsWith("Schwab") : c.account?.startsWith("ETrade")||c.account?.startsWith("Etrade"));
                 const acp=ac.filter(c=>c.status==="Closed").reduce((s,c)=>s+(c.profit||0),0);
-                return(<div key={acct} style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:12}}>
+                return(<div key={acct} style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8,padding:12}}>
                   <div style={{fontFamily:"monospace",fontSize:8,color:acct==="Schwab"?"#58a6ff":"#ffd166",letterSpacing:"0.07em",marginBottom:8}}>{acct.toUpperCase()}</div>
                   <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-                    <div><div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace"}}>PREMIUM</div><div style={{fontSize:14,fontFamily:"monospace",color:"#58a6ff",fontWeight:700}}>{f$(ac.reduce((s,c)=>s+(c.premium||0),0))}</div></div>
-                    <div><div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace"}}>PROFIT</div><div style={{fontSize:14,fontFamily:"monospace",color:acp>=0?"#00ff88":"#ff4560",fontWeight:700}}>{fSign(acp)}</div></div>
-                    <div><div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace"}}>COUNT</div><div style={{fontSize:14,fontFamily:"monospace",color:"#e6edf3",fontWeight:700}}>{ac.length}</div></div>
+                    <div><div style={{fontSize:7,color:th("#3a4050","#8a7e74"),fontFamily:"monospace"}}>PREMIUM</div><div style={{fontSize:14,fontFamily:"monospace",color:"#58a6ff",fontWeight:700}}>{f$(ac.reduce((s,c)=>s+(c.premium||0),0))}</div></div>
+                    <div><div style={{fontSize:7,color:th("#3a4050","#8a7e74"),fontFamily:"monospace"}}>PROFIT</div><div style={{fontSize:14,fontFamily:"monospace",color:acp>=0?"#00ff88":"#ff4560",fontWeight:700}}>{fSign(acp)}</div></div>
+                    <div><div style={{fontSize:7,color:th("#3a4050","#8a7e74"),fontFamily:"monospace"}}>COUNT</div><div style={{fontSize:14,fontFamily:"monospace",color:th("#e6edf3","#0d0d0b"),fontWeight:700}}>{ac.length}</div></div>
                   </div>
                 </div>);
               })}
@@ -8262,24 +8292,24 @@ ${JSON.stringify(summary, null, 1)}`;
               {["Call","Put"].map(t=>{
                 const tc=allF.filter(c=>c.type===t);
                 const tcp=tc.filter(c=>c.status==="Closed").reduce((s,c)=>s+(c.profit||0),0);
-                return(<div key={t} style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:12}}>
+                return(<div key={t} style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8,padding:12}}>
                   <div style={{fontFamily:"monospace",fontSize:8,color:t==="Call"?"#58a6ff":"#ffd166",letterSpacing:"0.07em",marginBottom:8}}>{t.toUpperCase()}S</div>
                   <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-                    <div><div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace"}}>COUNT</div><div style={{fontSize:14,fontFamily:"monospace",color:"#e6edf3",fontWeight:700}}>{tc.length}</div></div>
-                    <div><div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace"}}>PROFIT</div><div style={{fontSize:14,fontFamily:"monospace",color:tcp>=0?"#00ff88":"#ff4560",fontWeight:700}}>{fSign(tcp)}</div></div>
+                    <div><div style={{fontSize:7,color:th("#3a4050","#8a7e74"),fontFamily:"monospace"}}>COUNT</div><div style={{fontSize:14,fontFamily:"monospace",color:th("#e6edf3","#0d0d0b"),fontWeight:700}}>{tc.length}</div></div>
+                    <div><div style={{fontSize:7,color:th("#3a4050","#8a7e74"),fontFamily:"monospace"}}>PROFIT</div><div style={{fontSize:14,fontFamily:"monospace",color:tcp>=0?"#00ff88":"#ff4560",fontWeight:700}}>{fSign(tcp)}</div></div>
                   </div>
                 </div>);
               })}
             </div>
 
             {/* ── AI ASSISTANT (inline in Analytics) ── */}
-            <div style={{background:"#0a0e14",border:"1px solid #c084fc25",borderRadius:8,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+            <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #c084fc25",borderRadius:8,display:"flex",flexDirection:"column",overflow:"hidden"}}>
               {/* Header */}
               <div style={{padding:"10px 14px",borderBottom:"1px solid #1c2128",display:"flex",alignItems:"center",gap:9}}>
                 <div style={{width:24,height:24,borderRadius:6,background:"linear-gradient(135deg,#1a0a1f,#0d1f12)",border:"1px solid #c084fc30",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,flexShrink:0}}>🤖</div>
                 <div style={{flex:1}}>
                   <div style={{fontFamily:"monospace",fontSize:10,color:"#c084fc",letterSpacing:"0.06em"}}>AI ASSISTANT</div>
-                  <div style={{fontSize:8,color:"#3a4050",fontFamily:"monospace"}}>Ask questions about your trading data</div>
+                  <div style={{fontSize:8,color:th("#3a4050","#8a7e74"),fontFamily:"monospace"}}>Ask questions about your trading data</div>
                 </div>
                 {aiMessages.length>0 && (
                   <button onClick={async()=>{setAiMessages([]);try{await supabase.from("ai_chats").delete().neq("id",0);}catch{}}} style={{background:"transparent",border:"1px solid #1c2128",borderRadius:4,padding:"3px 8px",fontSize:8,color:"#555",fontFamily:"monospace",cursor:"pointer"}}>Clear</button>
@@ -8288,7 +8318,7 @@ ${JSON.stringify(summary, null, 1)}`;
               {/* Suggestions */}
               {aiMessages.length===0 && (
                 <div style={{padding:"10px 14px",borderBottom:"1px solid #0d1117"}}>
-                  <div style={{fontSize:8,color:"#2a3040",fontFamily:"monospace",marginBottom:7,letterSpacing:"0.06em"}}>SUGGESTED QUESTIONS</div>
+                  <div style={{fontSize:8,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",marginBottom:7,letterSpacing:"0.06em"}}>SUGGESTED QUESTIONS</div>
                   <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
                     {[
                       "How far OTM do I write the average contract?",
@@ -8312,14 +8342,14 @@ ${JSON.stringify(summary, null, 1)}`;
                     <div key={i} style={{display:"flex",flexDirection:"column",alignItems:m.role==="user"?"flex-end":"flex-start",gap:4}}>
                       <div
                         onClick={()=>{if(m.role==="assistant"){navigator.clipboard?.writeText(m.content).catch(()=>{});setAiMessages(p=>p.map((x,j)=>j===i?{...x,copied:true}:x));setTimeout(()=>setAiMessages(p=>p.map((x,j)=>j===i?{...x,copied:false}:x)),1500);}}}
-                        style={{maxWidth:"85%",background:m.role==="user"?"#1a2030":"#080c12",border:`1px solid ${m.role==="user"?"#58a6ff30":m.starred?"#ffd16660":"#21262d"}`,borderRadius:8,padding:"8px 11px",fontSize:12,color:m.role==="user"?"#58a6ff":"#c9d1d9",fontFamily:m.role==="assistant"?"monospace":"inherit",lineHeight:1.6,whiteSpace:"pre-wrap",cursor:m.role==="assistant"?"pointer":"default"}}
+                        style={{maxWidth:"85%",background:m.role==="user"?"#1a2030":th("#080c12","#ede8df"),border:`1px solid ${m.role==="user"?"#58a6ff30":m.starred?"#ffd16660":th("#21262d","#c8b8a8")}`,borderRadius:8,padding:"8px 11px",fontSize:12,color:m.role==="user"?"#58a6ff":th("#c9d1d9","#1a1a18"),fontFamily:m.role==="assistant"?"monospace":"inherit",lineHeight:1.6,whiteSpace:"pre-wrap",cursor:m.role==="assistant"?"pointer":"default"}}
                         title={m.role==="assistant"?"Click to copy":""}
                       >
                         {m.content}
                       </div>
                       {m.role==="assistant" && (
                         <div style={{display:"flex",gap:8,alignItems:"center",paddingLeft:2}}>
-                          <span style={{fontSize:9,color:m.copied?"#00ff88":"#3a4050",fontFamily:"monospace",transition:"color .2s"}}>{m.copied?"✓ copied":"⎘ click to copy"}</span>
+                          <span style={{fontSize:9,color:m.copied?"#00ff88":th("#3a4050","#8a7e74"),fontFamily:"monospace",transition:"color .2s"}}>{m.copied?"✓ copied":"⎘ click to copy"}</span>
                           <button
                             onClick={async e=>{
                               e.stopPropagation();
@@ -8339,7 +8369,7 @@ ${JSON.stringify(summary, null, 1)}`;
                   {aiLoading && (
                     <div style={{display:"flex",alignItems:"center",gap:7,padding:"4px 0"}}>
                       <div style={{width:8,height:8,borderRadius:"50%",border:"1.5px solid #c084fc",borderTopColor:"transparent",animation:"spin .6s linear infinite"}}/>
-                      <span style={{fontSize:10,color:"#3a4050",fontFamily:"monospace"}}>Analyzing your data…</span>
+                      <span style={{fontSize:10,color:th("#3a4050","#8a7e74"),fontFamily:"monospace"}}>Analyzing your data…</span>
                     </div>
                   )}
                   <div ref={aiEndRef}/>
@@ -8355,7 +8385,7 @@ ${JSON.stringify(summary, null, 1)}`;
                   placeholder="Ask about your options data…"
                   style={{flex:1,fontSize:12,padding:"8px 10px"}}
                 />
-                <button onClick={sendAI} disabled={aiLoading||!aiInput.trim()} style={{background:"#c084fc",color:"#010409",border:"none",borderRadius:6,padding:"8px 14px",fontSize:11,fontWeight:700,fontFamily:"monospace",opacity:aiLoading||!aiInput.trim()?0.5:1,cursor:aiLoading||!aiInput.trim()?"default":"pointer"}}>Ask</button>
+                <button onClick={sendAI} disabled={aiLoading||!aiInput.trim()} style={{background:"#c084fc",color:th("#010409","#f5f0e8"),border:"none",borderRadius:6,padding:"8px 14px",fontSize:11,fontWeight:700,fontFamily:"monospace",opacity:aiLoading||!aiInput.trim()?0.5:1,cursor:aiLoading||!aiInput.trim()?"default":"pointer"}}>Ask</button>
               </div>
             </div>
 
@@ -8381,7 +8411,7 @@ ${JSON.stringify(summary, null, 1)}`;
 
             {/* New/edit form */}
             {stratForm && (
-              <div style={{background:"#0a0e14",border:"1px solid #ffd16625",borderRadius:8,padding:13,animation:"fadeIn .2s"}}>
+              <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #ffd16625",borderRadius:8,padding:13,animation:"fadeIn .2s"}}>
                 <div style={{fontFamily:"monospace",fontSize:9,color:"#ffd166",marginBottom:8}}>{stratForm.id?"EDIT":"NEW"} STRATEGY</div>
                 <div style={{display:"flex",flexDirection:"column",gap:7}}>
                   <div><FL req>Name</FL><input type="text" value={stratForm.name} onChange={e=>setStratForm(p=>({...p,name:e.target.value}))} placeholder="e.g. Wheel Strategy"/></div>
@@ -8397,7 +8427,7 @@ ${JSON.stringify(summary, null, 1)}`;
                       else{const{data,error}=await supabase.from("strategies").insert(row).select().single();if(error)throw error;if(data)setStrategies(p=>[...p,data]);}
                       setStratForm(null);
                     }catch(e){alert("Save failed: "+e.message);}
-                  }} style={{background:"#ffd166",color:"#010409",border:"none",borderRadius:6,padding:"7px 18px",fontSize:11,fontWeight:700,fontFamily:"monospace"}}>SAVE</button>
+                  }} style={{background:"#ffd166",color:th("#010409","#f5f0e8"),border:"none",borderRadius:6,padding:"7px 18px",fontSize:11,fontWeight:700,fontFamily:"monospace"}}>SAVE</button>
                   <button onClick={()=>setStratForm(null)} style={{background:"transparent",color:"#555",border:"1px solid #21262d",borderRadius:6,padding:"7px 12px",fontSize:11}}>Cancel</button>
                 </div>
               </div>
@@ -8405,7 +8435,7 @@ ${JSON.stringify(summary, null, 1)}`;
 
             {/* Strategy cards with stats */}
             {strategies.length===0 && !stratForm && (
-              <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:24,textAlign:"center",color:"#3a4050",fontSize:11,fontFamily:"monospace"}}>
+              <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8,padding:24,textAlign:"center",color:th("#3a4050","#8a7e74"),fontSize:11,fontFamily:"monospace"}}>
                 No strategies yet — click + New Strategy to add one
               </div>
             )}
@@ -8421,11 +8451,11 @@ ${JSON.stringify(summary, null, 1)}`;
                 ?(scClosed.filter(c=>c.daysHeld).reduce((sum,c)=>sum+(c.daysHeld||0),0)/scClosed.filter(c=>c.daysHeld).length).toFixed(1)
                 :null;
               return (
-                <div key={s.id} style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:14}}>
+                <div key={s.id} style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8,padding:14}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
                     <div>
                       <div style={{fontFamily:"monospace",fontWeight:700,color:"#ffd166",fontSize:14}}>{s.name}</div>
-                      {s.description && <div style={{fontSize:11,color:"#8b949e",marginTop:2}}>{s.description}</div>}
+                      {s.description && <div style={{fontSize:11,color:th("#8b949e","#5a5248"),marginTop:2}}>{s.description}</div>}
                     </div>
                     <div style={{display:"flex",gap:5}}>
                       <button onClick={()=>setStratForm({...s})} style={{background:"transparent",color:"#58a6ff",border:"1px solid #58a6ff30",borderRadius:4,padding:"3px 10px",fontSize:9,fontFamily:"monospace",cursor:"pointer"}}>Edit</button>
@@ -8435,7 +8465,7 @@ ${JSON.stringify(summary, null, 1)}`;
                   {/* Stats row */}
                   <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:s.rules?10:0}}>
                     {[
-                      {label:"Contracts", value:sc.length, color:"#e6edf3"},
+                      {label:"Contracts", value:sc.length, color:th("#e6edf3","#0d0d0b")},
                       {label:"Open",      value:scOpen.length, color:"#ffd166"},
                       {label:"Closed",    value:scClosed.length, color:"#555"},
                       {label:"Win Rate",  value:winRate!=null?winRate+"%":"—", color:winRate>=60?"#00ff88":winRate>=40?"#ffd166":"#ff4560"},
@@ -8444,8 +8474,8 @@ ${JSON.stringify(summary, null, 1)}`;
                       {label:"Avg Profit", value:avgProfit!=null?fSign(+avgProfit):"—", color:+avgProfit>=0?"#00ff88":"#ff4560"},
                       {label:"Avg Days",  value:avgDays!=null?avgDays+"d":"—", color:"#555"},
                     ].map(({label,value,color})=>(
-                      <div key={label} style={{background:"#080c12",border:"1px solid #1c2128",borderRadius:6,padding:"6px 10px",minWidth:80}}>
-                        <div style={{fontSize:7,color:"#3a4050",fontFamily:"monospace",marginBottom:2,textTransform:"uppercase"}}>{label}</div>
+                      <div key={label} style={{background:th("#080c12","#ede8df"),border:"1px solid #1c2128",borderRadius:6,padding:"6px 10px",minWidth:80}}>
+                        <div style={{fontSize:7,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",marginBottom:2,textTransform:"uppercase"}}>{label}</div>
                         <div style={{fontSize:13,fontFamily:"monospace",fontWeight:700,color}}>{value}</div>
                       </div>
                     ))}
@@ -8475,16 +8505,16 @@ ${JSON.stringify(summary, null, 1)}`;
                     const openPrem   = g.contracts.filter(c=>c.status==="Open").reduce((s,c)=>s+Math.abs(c.premium||0),0);
                     const currentCostToClose = g.contracts.filter(c=>c.status==="Open").reduce((s,c)=>s+(c.costToClose||0),0);
                     return (
-                      <div key={g.id} style={{background:"#0a0e14",border:"1px solid #00ff8820",borderRadius:6,padding:"10px 12px",marginBottom:8}}>
+                      <div key={g.id} style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #00ff8820",borderRadius:6,padding:"10px 12px",marginBottom:8}}>
                         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-                          <span style={{fontFamily:"monospace",fontSize:11,fontWeight:700,color:"#e6edf3"}}>{g.stock} — Wheel Group #{g.id}</span>
-                          <span style={{fontFamily:"monospace",fontSize:9,color:"#3a4050"}}>{g.contracts.length} contracts</span>
+                          <span style={{fontFamily:"monospace",fontSize:11,fontWeight:700,color:th("#e6edf3","#0d0d0b")}}>{g.stock} — Wheel Group #{g.id}</span>
+                          <span style={{fontFamily:"monospace",fontSize:9,color:th("#3a4050","#8a7e74")}}>{g.contracts.length} contracts</span>
                         </div>
                         <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
-                          <span style={{fontSize:9,color:"#8b949e",fontFamily:"monospace"}}>Premium collected: <b style={{color:"#00ff88"}}>{f$(totalPrem)}</b></span>
-                          <span style={{fontSize:9,color:"#8b949e",fontFamily:"monospace"}}>Realized P/L: <b style={{color:closedP>=0?"#00ff88":"#ff4560"}}>{fSign(closedP)}</b></span>
-                          <span style={{fontSize:9,color:"#8b949e",fontFamily:"monospace"}}>Open premium: <b style={{color:"#ffd166"}}>{f$(openPrem)}</b></span>
-                          {currentCostToClose > 0 && <span style={{fontSize:9,color:"#8b949e",fontFamily:"monospace"}}>Current close cost: <b style={{color:"#ff4560"}}>{f$(currentCostToClose)}</b></span>}
+                          <span style={{fontSize:9,color:th("#8b949e","#5a5248"),fontFamily:"monospace"}}>Premium collected: <b style={{color:"#00ff88"}}>{f$(totalPrem)}</b></span>
+                          <span style={{fontSize:9,color:th("#8b949e","#5a5248"),fontFamily:"monospace"}}>Realized P/L: <b style={{color:closedP>=0?"#00ff88":"#ff4560"}}>{fSign(closedP)}</b></span>
+                          <span style={{fontSize:9,color:th("#8b949e","#5a5248"),fontFamily:"monospace"}}>Open premium: <b style={{color:"#ffd166"}}>{f$(openPrem)}</b></span>
+                          {currentCostToClose > 0 && <span style={{fontSize:9,color:th("#8b949e","#5a5248"),fontFamily:"monospace"}}>Current close cost: <b style={{color:"#ff4560"}}>{f$(currentCostToClose)}</b></span>}
                         </div>
                       </div>
                     );
@@ -8510,7 +8540,7 @@ ${JSON.stringify(summary, null, 1)}`;
             const sd   = T(sym);
             const chg  = sd.changeClose;
             const chgPct = sd.changePct;
-            const chgColor = chg == null ? "#3a4050" : chg >= 0 ? "#00ff88" : "#ff4560";
+            const chgColor = chg == null ? th("#3a4050","#8a7e74") : chg >= 0 ? "#00ff88" : "#ff4560";
             const alerts = watchlistAlerts[sym] || [];
             const note   = watchlistNotes[sym] || "";
             const pos    = schwabPositions.find(p => p.symbol === sym);
@@ -8524,13 +8554,13 @@ ${JSON.stringify(summary, null, 1)}`;
                 <div
                   onClick={() => setSelectedWatchTicker(isOpen ? null : sym)}
                   style={{display:"grid",gridTemplateColumns:"62px 88px 110px 1fr auto 80px",alignItems:"center",gap:8,
-                    background: isOpen ? "#58a6ff0a" : "#0a0e14",
-                    border:`1px solid ${isOpen ? "#58a6ff50" : alerts.length ? "#c084fc30" : "#1c2128"}`,
+                    background: isOpen ? "#58a6ff0a" : th("#0a0e14","#f8f3eb"),
+                    border:`1px solid ${isOpen ? "#58a6ff50" : alerts.length ? "#c084fc30" : th("#1c2128","#b8a898")}`,
                     borderRadius:6,padding:"5px 10px",cursor:"pointer",minHeight:34,
                     transition:"border-color .12s,background .12s"}}
                 >
-                  <span style={{fontFamily:"monospace",fontWeight:700,fontSize:12,color:"#e6edf3"}}>{sym}</span>
-                  <span style={{fontFamily:"monospace",fontSize:11,color:"#c9d1d9",textAlign:"right"}}>
+                  <span style={{fontFamily:"monospace",fontWeight:700,fontSize:12,color:th("#e6edf3","#0d0d0b")}}>{sym}</span>
+                  <span style={{fontFamily:"monospace",fontSize:11,color:th("#c9d1d9","#1a1a18"),textAlign:"right"}}>
                     {sd.currentPrice ? "$"+sd.currentPrice.toFixed(2) : "—"}
                   </span>
                   <span style={{fontFamily:"monospace",fontSize:10,color:chgColor,textAlign:"right"}}>
@@ -8541,14 +8571,14 @@ ${JSON.stringify(summary, null, 1)}`;
                     {sd.earningsDate && sd.earningsDate >= TODAY && <span style={{fontSize:8,padding:"1px 5px",borderRadius:3,color:"#ffd166",border:"1px solid #ffd16640",background:"#ffd16610"}}>⚡ earn</span>}
                     {alerts.length > 0 && <span style={{fontSize:8,padding:"1px 5px",borderRadius:3,color:"#c084fc",border:"1px solid #c084fc40",background:"#c084fc10"}}>🔔 {alerts.length}</span>}
                     {hasDani(sym) && <span style={{fontSize:8,padding:"1px 5px",borderRadius:3,color:"#ff4560",border:"1px solid #ff456040",background:"#ff456010"}}>DANI</span>}
-                    {note && <span style={{fontSize:8,padding:"1px 5px",borderRadius:3,color:"#3a4050",border:"1px solid #1c2128"}}>note</span>}
+                    {note && <span style={{fontSize:8,padding:"1px 5px",borderRadius:3,color:th("#3a4050","#8a7e74"),border:"1px solid #1c2128"}}>note</span>}
                     {openC2.length > 0 && <span style={{fontSize:8,padding:"1px 5px",borderRadius:3,color:"#58a6ff",border:"1px solid #58a6ff40",background:"#58a6ff10"}}>{openC2.length} contract{openC2.length>1?"s":""}</span>}
                   </div>
                   <span/>
                   <div style={{display:"flex",gap:4,alignItems:"center",justifyContent:"flex-end"}}>
                     <button
                       onClick={e=>{e.stopPropagation();setOppForm({ticker:sym,type:"WATCH",detail:"",target:"",note:""});}}
-                      style={{background:"transparent",border:"1px solid #1c2128",color:"#3a4050",fontFamily:"monospace",fontSize:9,padding:"2px 7px",borderRadius:4,cursor:"pointer"}}
+                      style={{background:"transparent",border:"1px solid #1c2128",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:9,padding:"2px 7px",borderRadius:4,cursor:"pointer"}}
                     >+ Opp</button>
                     <button
                       onClick={e=>{e.stopPropagation();
@@ -8561,42 +8591,42 @@ ${JSON.stringify(summary, null, 1)}`;
                           removeFromWatchlist(sym);
                         }
                       }}
-                      style={{background:orderStatuses[`wl_del_${sym}`]?.confirm?"#ff456020":"transparent",border:`1px solid ${orderStatuses[`wl_del_${sym}`]?.confirm?"#ff456050":"#1c2128"}`,color:orderStatuses[`wl_del_${sym}`]?.confirm?"#ff4560":"#555",cursor:"pointer",fontSize:9,padding:"2px 7px",borderRadius:4,fontFamily:"monospace",transition:"all 0.2s"}}
+                      style={{background:orderStatuses[`wl_del_${sym}`]?.confirm?"#ff456020":"transparent",border:`1px solid ${orderStatuses[`wl_del_${sym}`]?.confirm?"#ff456050":th("#1c2128","#b8a898")}`,color:orderStatuses[`wl_del_${sym}`]?.confirm?"#ff4560":"#555",cursor:"pointer",fontSize:9,padding:"2px 7px",borderRadius:4,fontFamily:"monospace",transition:"all 0.2s"}}
                     >{orderStatuses[`wl_del_${sym}`]?.confirm?"Remove?":"🗑"}</button>
                   </div>
                 </div>
 
                 {/* Expanded detail */}
                 {isOpen && (
-                  <div style={{background:"#080c12",border:"1px solid #21262d",borderRadius:"0 0 8px 8px",borderTop:"none",animation:"fadeIn .15s",overflow:"hidden"}}>
+                  <div style={{background:th("#080c12","#ede8df"),border:"1px solid #21262d",borderRadius:"0 0 8px 8px",borderTop:"none",animation:"fadeIn .15s",overflow:"hidden"}}>
                     {/* Header with price */}
                     <div style={{display:"flex",alignItems:"center",gap:10,padding:"9px 13px",borderBottom:"1px solid #1c2128",flexWrap:"wrap"}}>
-                      <span style={{fontFamily:"monospace",fontWeight:700,fontSize:16,color:"#e6edf3"}}>{sym}</span>
-                      {sd.currentPrice && <span style={{fontFamily:"monospace",fontSize:14,color:"#c9d1d9"}}>${sd.currentPrice.toFixed(2)}</span>}
+                      <span style={{fontFamily:"monospace",fontWeight:700,fontSize:16,color:th("#e6edf3","#0d0d0b")}}>{sym}</span>
+                      {sd.currentPrice && <span style={{fontFamily:"monospace",fontSize:14,color:th("#c9d1d9","#1a1a18")}}>${sd.currentPrice.toFixed(2)}</span>}
                       {chg != null && <span style={{fontFamily:"monospace",fontSize:11,fontWeight:700,color:chgColor}}>{chg>=0?"+":""}{chg.toFixed(2)} ({chgPct!=null?(chgPct*100).toFixed(2)+"%":""})</span>}
-                      {sd.earningsDate && <span style={{fontSize:9,fontFamily:"monospace",padding:"2px 7px",borderRadius:3,background:sd.earningsDate>=TODAY?"#ffd16620":"#1c2128",color:sd.earningsDate>=TODAY?"#ffd166":"#3a4050",border:`1px solid ${sd.earningsDate>=TODAY?"#ffd16640":"#21262d"}`}}>{sd.earningsDate>=TODAY?"⚡ Earnings ":""}{sd.earningsDate}</span>}
+                      {sd.earningsDate && <span style={{fontSize:9,fontFamily:"monospace",padding:"2px 7px",borderRadius:3,background:sd.earningsDate>=TODAY?"#ffd16620":th("#1c2128","#b8a898"),color:sd.earningsDate>=TODAY?"#ffd166":th("#3a4050","#8a7e74"),border:`1px solid ${sd.earningsDate>=TODAY?"#ffd16640":th("#21262d","#c8b8a8")}`}}>{sd.earningsDate>=TODAY?"⚡ Earnings ":""}{sd.earningsDate}</span>}
                     </div>
 
                     {/* Two-col body */}
                     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr"}}>
                       {/* Left: notes + alerts */}
                       <div style={{padding:"11px 13px",borderRight:"1px solid #1c2128"}}>
-                        <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:5}}>NOTES / THESIS</div>
+                        <div style={{fontSize:7,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:5}}>NOTES / THESIS</div>
                         <textarea
                           defaultValue={note}
                           id={`wl-note-${sym}`}
                           placeholder="Entry thesis, levels to watch, catalyst…"
-                          style={{width:"100%",background:"#0d1117",border:"1px solid #1c2128",color:"#8b949e",fontFamily:"monospace",fontSize:11,padding:"6px 8px",borderRadius:5,resize:"none",outline:"none",height:52}}
-                          onFocus={e=>{e.target.style.borderColor="#58a6ff40";e.target.style.color="#c9d1d9";}}
-                          onBlur={e=>{e.target.style.borderColor="#1c2128";e.target.style.color="#8b949e";}}
+                          style={{width:"100%",background:th("#0d1117","#f5f0e8"),border:"1px solid #1c2128",color:th("#8b949e","#5a5248"),fontFamily:"monospace",fontSize:11,padding:"6px 8px",borderRadius:5,resize:"none",outline:"none",height:52}}
+                          onFocus={e=>{e.target.style.borderColor="#58a6ff40";e.target.style.color=th("#c9d1d9","#1a1a18");}}
+                          onBlur={e=>{e.target.style.borderColor=th("#1c2128","#b8a898");e.target.style.color=th("#8b949e","#5a5248");}}
                         />
                         <div style={{display:"flex",justifyContent:"flex-end",marginTop:4}}>
                           <button onClick={()=>saveWatchlistNote(sym, document.getElementById(`wl-note-${sym}`)?.value||"")}
-                            style={{background:"transparent",border:"1px solid #1c2128",color:"#3a4050",fontFamily:"monospace",fontSize:9,padding:"2px 8px",borderRadius:4,cursor:"pointer"}}>Save</button>
+                            style={{background:"transparent",border:"1px solid #1c2128",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:9,padding:"2px 8px",borderRadius:4,cursor:"pointer"}}>Save</button>
                         </div>
 
                         <div style={{marginTop:9}}>
-                          <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:5}}>PRICE ALERTS</div>
+                          <div style={{fontSize:7,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:5}}>PRICE ALERTS</div>
                           <div style={{display:"flex",gap:5,alignItems:"center",flexWrap:"wrap"}}>
                             {alerts.map(a => (
                               <div key={a} style={{display:"flex",alignItems:"center",gap:3,background:"#c084fc12",border:"1px solid #c084fc30",borderRadius:20,padding:"2px 8px",fontSize:10,color:"#c084fc"}}>
@@ -8606,21 +8636,21 @@ ${JSON.stringify(summary, null, 1)}`;
                             ))}
                             <input id={`wl-alrt-${sym}`} type="number" placeholder="$0.00"
                               onKeyDown={e=>{if(e.key==="Enter"){const v=parseFloat(e.target.value);if(v){addWatchlistAlert(sym,v);e.target.value="";}}}}
-                              style={{background:"#0d1117",border:"1px solid #1c2128",color:"#c9d1d9",fontFamily:"monospace",fontSize:11,padding:"3px 7px",borderRadius:5,width:75,outline:"none"}}/>
+                              style={{background:th("#0d1117","#f5f0e8"),border:"1px solid #1c2128",color:th("#c9d1d9","#1a1a18"),fontFamily:"monospace",fontSize:11,padding:"3px 7px",borderRadius:5,width:75,outline:"none"}}/>
                             <button onClick={()=>{const v=parseFloat(document.getElementById(`wl-alrt-${sym}`)?.value);if(v){addWatchlistAlert(sym,v);document.getElementById(`wl-alrt-${sym}`).value="";}}}
-                              style={{background:"transparent",border:"1px solid #1c2128",color:"#3a4050",fontFamily:"monospace",fontSize:9,padding:"2px 8px",borderRadius:4,cursor:"pointer"}}>+ Alert</button>
+                              style={{background:"transparent",border:"1px solid #1c2128",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:9,padding:"2px 8px",borderRadius:4,cursor:"pointer"}}>+ Alert</button>
                           </div>
                         </div>
 
                         {/* Open contracts for this ticker */}
                         {openC2.length > 0 && (
                           <div style={{marginTop:9}}>
-                            <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:5}}>OPEN CONTRACTS</div>
+                            <div style={{fontSize:7,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:5}}>OPEN CONTRACTS</div>
                             {openC2.map(c => {
                               const lo = getLiveOption(c);
                               return (
                                 <div key={c.id} onClick={()=>setViewC(c)} style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",fontSize:10,fontFamily:"monospace",color:"#555",padding:"3px 0",borderTop:"1px solid #1c2128",cursor:"pointer"}}>
-                                  <span style={{color:"#e6edf3",fontWeight:700}}>{fTitle(c)}</span>
+                                  <span style={{color:th("#e6edf3","#0d0d0b"),fontWeight:700}}>{fTitle(c)}</span>
                                   <span>×{c.qty}</span>
                                   {lo && <><span style={{color:"#00ff88"}}>b:{f$(lo.bid)}</span><span style={{color:"#58a6ff"}}>a:{f$(lo.ask)}</span></>}
                                   {lo?.delta && <span style={{color:"#58a6ff"}}>Δ{lo.delta.toFixed(2)}</span>}
@@ -8638,38 +8668,38 @@ ${JSON.stringify(summary, null, 1)}`;
                           const sig = oppItems.find(o => o.ticker === sym && o.src === "dani" && o.status === "open");
                           if (!sig) return (
                             <div style={{marginBottom:10}}>
-                              <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:5}}>DANI SIGNAL</div>
-                              <div style={{fontSize:10,color:"#3a4050",fontFamily:"monospace"}}>No signal this week</div>
+                              <div style={{fontSize:7,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:5}}>DANI SIGNAL</div>
+                              <div style={{fontSize:10,color:th("#3a4050","#8a7e74"),fontFamily:"monospace"}}>No signal this week</div>
                             </div>
                           );
                           return (
                             <div style={{marginBottom:10}}>
-                              <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:5}}>DANI SIGNAL</div>
+                              <div style={{fontSize:7,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:5}}>DANI SIGNAL</div>
                               <div style={{display:"flex",alignItems:"center",gap:8,background:"#ff456008",border:"1px solid #ff456025",borderRadius:6,padding:"7px 10px"}}>
                                 <span style={{fontSize:8,padding:"2px 5px",borderRadius:3,background:"#ff456020",color:"#ff4560",border:"1px solid #ff456040",fontWeight:700,flexShrink:0}}>DANI</span>
                                 <div style={{flex:1}}>
-                                  <div style={{fontFamily:"monospace",fontWeight:700,fontSize:11,color:"#e6edf3",marginBottom:2}}>{sig.detail}</div>
-                                  <div style={{fontFamily:"monospace",fontSize:10,color:"#8b949e"}}>{sig.note}</div>
+                                  <div style={{fontFamily:"monospace",fontWeight:700,fontSize:11,color:th("#e6edf3","#0d0d0b"),marginBottom:2}}>{sig.detail}</div>
+                                  <div style={{fontFamily:"monospace",fontSize:10,color:th("#8b949e","#5a5248")}}>{sig.note}</div>
                                 </div>
                               </div>
                             </div>
                           );
                         })()}
 
-                        <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:5}}>QUICK ADD</div>
+                        <div style={{fontSize:7,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:5}}>QUICK ADD</div>
                         <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:10}}>
                           {["STO","BTO","WATCH"].map(t => (
                             <button key={t} onClick={()=>setOppForm({ticker:sym,type:t,detail:"",target:"",note:""})}
-                              style={{background:"transparent",border:"1px solid #1c2128",color:"#3a4050",fontFamily:"monospace",fontSize:9,padding:"3px 9px",borderRadius:4,cursor:"pointer"}}>+ {t}</button>
+                              style={{background:"transparent",border:"1px solid #1c2128",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:9,padding:"3px 9px",borderRadius:4,cursor:"pointer"}}>+ {t}</button>
                           ))}
                         </div>
 
                         {pos && (
                           <div>
-                            <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:5}}>STOCK POSITION</div>
+                            <div style={{fontSize:7,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:5}}>STOCK POSITION</div>
                             <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
                               {[["Shares",pos.qty],["Avg Cost",f$(pos.avgPrice)],["Gain",`${pos.gainLoss>=0?"+":""}${f$(pos.gainLoss)}`]].map(([l,v])=>(
-                                <div key={l}><div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace"}}>{l}</div><div style={{fontSize:11,fontFamily:"monospace",color:"#c9d1d9"}}>{v}</div></div>
+                                <div key={l}><div style={{fontSize:7,color:th("#2a3040","#6b5f55"),fontFamily:"monospace"}}>{l}</div><div style={{fontSize:11,fontFamily:"monospace",color:th("#c9d1d9","#1a1a18")}}>{v}</div></div>
                               ))}
                             </div>
                           </div>
@@ -8680,9 +8710,9 @@ ${JSON.stringify(summary, null, 1)}`;
                     {/* Option chain toggle */}
                     <div style={{borderTop:"1px solid #1c2128"}}>
                       <div onClick={()=>setWatchlistChainOpen(p=>({...p,[sym]:!p[sym]}))}
-                        style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"7px 13px",cursor:"pointer",background:"#080c12"}}>
-                        <span style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em"}}>OPTION CHAIN — {sym}</span>
-                        <span style={{fontSize:9,color:"#3a4050"}}>{chainOp ? "▲ collapse" : "▼ expand"}</span>
+                        style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"7px 13px",cursor:"pointer",background:th("#080c12","#ede8df")}}>
+                        <span style={{fontSize:7,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",letterSpacing:"0.08em"}}>OPTION CHAIN — {sym}</span>
+                        <span style={{fontSize:9,color:th("#3a4050","#8a7e74")}}>{chainOp ? "▲ collapse" : "▼ expand"}</span>
                       </div>
                       {chainOp && (
                         <div style={{padding:"0 0 11px"}}>
@@ -8716,32 +8746,32 @@ ${JSON.stringify(summary, null, 1)}`;
             const typeColors = {STO:"#00ff88",BTO:"#c084fc",WATCH:"#58a6ff",BTC:"#ffd166"};
             const typeBg = {STO:"#00ff8818",BTO:"#c084fc18",WATCH:"#58a6ff18",BTC:"#ffd16618"};
             const typeBorder = {STO:"#00ff8830",BTO:"#c084fc30",WATCH:"#58a6ff30",BTC:"#ffd16630"};
-            const srcColor = {dani:"#ff4560",sage:"#c084fc",manual:"#3a4050"};
+            const srcColor = {dani:"#ff4560",sage:"#c084fc",manual:th("#3a4050","#8a7e74")};
             const srcBg = {dani:"#ff456010",sage:"#c084fc10",manual:"transparent"};
-            const srcBorder = {dani:"#ff456030",sage:"#c084fc30",manual:"#1c2128"};
+            const srcBorder = {dani:"#ff456030",sage:"#c084fc30",manual:th("#1c2128","#b8a898")};
             const isDone = o.status !== "open";
             return (
               <div onClick={()=>setSelectedWatchTicker(o.ticker)}
                 style={{display:"grid",gridTemplateColumns:"56px 68px 1fr auto auto 72px",alignItems:"center",gap:8,
-                  background:"#0a0e14",border:`1px solid ${isDone?"#1c2128":"#21262d"}`,
+                  background:th("#0a0e14","#f8f3eb"),border:`1px solid ${isDone?th("#1c2128","#b8a898"):th("#21262d","#c8b8a8")}`,
                   borderLeft:`2px solid ${o.src==="dani"?"#ff456040":o.src==="sage"?"#c084fc40":"#58a6ff30"}`,
                   borderRadius:6,padding:"6px 10px",cursor:"pointer",opacity:isDone?0.4:1,
                   transition:"border-color .12s"}}>
-                <span style={{fontFamily:"monospace",fontWeight:700,fontSize:11,color:"#e6edf3"}}>{o.ticker}</span>
+                <span style={{fontFamily:"monospace",fontWeight:700,fontSize:11,color:th("#e6edf3","#0d0d0b")}}>{o.ticker}</span>
                 <span style={{fontSize:9,padding:"2px 6px",borderRadius:3,fontWeight:700,textAlign:"center",
-                  color:typeColors[o.type]||"#555",background:typeBg[o.type]||"transparent",border:`1px solid ${typeBorder[o.type]||"#1c2128"}`}}>{o.type}</span>
-                <span style={{fontFamily:"monospace",fontSize:10,color:"#8b949e"}}>
-                  {o.detail && <span style={{color:"#c9d1d9",marginRight:6}}>{o.detail}</span>}
+                  color:typeColors[o.type]||"#555",background:typeBg[o.type]||"transparent",border:`1px solid ${typeBorder[o.type]||th("#1c2128","#b8a898")}`}}>{o.type}</span>
+                <span style={{fontFamily:"monospace",fontSize:10,color:th("#8b949e","#5a5248")}}>
+                  {o.detail && <span style={{color:th("#c9d1d9","#1a1a18"),marginRight:6}}>{o.detail}</span>}
                   {o.note}
                 </span>
                 {o.target ? <span style={{fontFamily:"monospace",fontSize:10,color:"#ffd166",whiteSpace:"nowrap"}}>${(+o.target).toFixed(2)}</span> : <span/>}
                 <span style={{fontSize:8,padding:"1px 5px",borderRadius:3,color:srcColor[o.src],background:srcBg[o.src],border:`1px solid ${srcBorder[o.src]}`}}>{o.src}</span>
                 <div style={{display:"flex",gap:3}} onClick={e=>e.stopPropagation()}>
                   {o.status==="open" && <>
-                    <button onClick={()=>markOppDone(o.id)} style={{background:"none",border:"1px solid #1c2128",color:"#3a4050",fontFamily:"monospace",fontSize:9,padding:"2px 6px",borderRadius:3,cursor:"pointer"}}>✓</button>
-                    <button onClick={()=>skipOppItem(o.id)} style={{background:"none",border:"1px solid #1c2128",color:"#3a4050",fontFamily:"monospace",fontSize:9,padding:"2px 6px",borderRadius:3,cursor:"pointer"}}>skip</button>
+                    <button onClick={()=>markOppDone(o.id)} style={{background:"none",border:"1px solid #1c2128",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:9,padding:"2px 6px",borderRadius:3,cursor:"pointer"}}>✓</button>
+                    <button onClick={()=>skipOppItem(o.id)} style={{background:"none",border:"1px solid #1c2128",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:9,padding:"2px 6px",borderRadius:3,cursor:"pointer"}}>skip</button>
                   </>}
-                  <button onClick={()=>deleteOppItem(o.id)} style={{background:"none",border:"1px solid #1c2128",color:"#3a4050",fontFamily:"monospace",fontSize:9,padding:"2px 6px",borderRadius:3,cursor:"pointer"}}>✕</button>
+                  <button onClick={()=>deleteOppItem(o.id)} style={{background:"none",border:"1px solid #1c2128",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:9,padding:"2px 6px",borderRadius:3,cursor:"pointer"}}>✕</button>
                 </div>
               </div>
             );
@@ -8757,10 +8787,10 @@ ${JSON.stringify(summary, null, 1)}`;
             <div style={{display:"flex",flexDirection:"column",gap:9}}>
 
               {/* ── WATCHLIST ── */}
-              <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:11}}>
+              <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8,padding:11}}>
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
-                  <span style={{fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em"}}>WATCHLIST</span>
-                  <span style={{fontSize:8,color:"#3a4050",fontFamily:"monospace"}}>click row to expand · alerts · chain · notes</span>
+                  <span style={{fontFamily:"monospace",fontSize:7,color:th("#2a3040","#6b5f55"),letterSpacing:"0.08em"}}>WATCHLIST</span>
+                  <span style={{fontSize:8,color:th("#3a4050","#8a7e74"),fontFamily:"monospace"}}>click row to expand · alerts · chain · notes</span>
                 </div>
 
                 {/* Add bar */}
@@ -8807,56 +8837,56 @@ ${JSON.stringify(summary, null, 1)}`;
                 {/* Column headers */}
                 <div style={{display:"grid",gridTemplateColumns:"62px 88px 110px 1fr auto 80px",gap:8,padding:"2px 10px",marginBottom:3}}>
                   {["TICKER","PRICE","CHG","","",""].map((h,i) => (
-                    <span key={i} style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",textAlign:i===1||i===2?"right":"left"}}>{h}</span>
+                    <span key={i} style={{fontSize:7,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",textAlign:i===1||i===2?"right":"left"}}>{h}</span>
                   ))}
                 </div>
 
                 {/* Rows */}
                 {watchlist.length === 0
-                  ? <div style={{color:"#2a3040",fontSize:10,fontFamily:"monospace",padding:"8px 10px"}}>Add tickers above to start watching</div>
+                  ? <div style={{color:th("#2a3040","#6b5f55"),fontSize:10,fontFamily:"monospace",padding:"8px 10px"}}>Add tickers above to start watching</div>
                   : watchlist.map(sym => <WatchRow key={sym} sym={sym} />)
                 }
               </div>
 
               {/* ── OPPORTUNITIES ── */}
-              <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:11}}>
+              <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8,padding:11}}>
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
-                  <span style={{fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em"}}>OPPORTUNITIES</span>
+                  <span style={{fontFamily:"monospace",fontSize:7,color:th("#2a3040","#6b5f55"),letterSpacing:"0.08em"}}>OPPORTUNITIES</span>
                   <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                    <span style={{fontSize:8,color:"#3a4050",fontFamily:"monospace"}}>DANI · SAGE · manual flags</span>
+                    <span style={{fontSize:8,color:th("#3a4050","#8a7e74"),fontFamily:"monospace"}}>DANI · SAGE · manual flags</span>
                     <button onClick={()=>setOppForm({ticker:"",type:"WATCH",detail:"",target:"",note:""})}
-                      style={{background:"transparent",border:"1px solid #1c2128",color:"#3a4050",fontFamily:"monospace",fontSize:9,padding:"2px 8px",borderRadius:4,cursor:"pointer"}}>+ Add</button>
+                      style={{background:"transparent",border:"1px solid #1c2128",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:9,padding:"2px 8px",borderRadius:4,cursor:"pointer"}}>+ Add</button>
                   </div>
                 </div>
 
                 {/* Add opp form */}
                 {oppForm && (
-                  <div style={{background:"#080c12",border:"1px solid #00ff8820",borderRadius:7,padding:"11px 13px",marginBottom:10,animation:"fadeIn .15s"}}>
+                  <div style={{background:th("#080c12","#ede8df"),border:"1px solid #00ff8820",borderRadius:7,padding:"11px 13px",marginBottom:10,animation:"fadeIn .15s"}}>
                     <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:7,marginBottom:7}}>
                       <div>
-                        <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",marginBottom:3}}>TICKER</div>
+                        <div style={{fontSize:7,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",marginBottom:3}}>TICKER</div>
                         <input value={oppForm.ticker} onChange={e=>setOppForm(p=>({...p,ticker:e.target.value.toUpperCase()}))}
                           placeholder="NVDA" style={{width:"100%",fontSize:11,padding:"4px 7px",textTransform:"uppercase"}}/>
                       </div>
                       <div>
-                        <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",marginBottom:3}}>TYPE</div>
+                        <div style={{fontSize:7,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",marginBottom:3}}>TYPE</div>
                         <select value={oppForm.type} onChange={e=>setOppForm(p=>({...p,type:e.target.value}))} style={{width:"100%",fontSize:11,padding:"4px 7px"}}>
                           <option>WATCH</option><option>STO</option><option>BTO</option><option>BTC</option>
                         </select>
                       </div>
                       <div>
-                        <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",marginBottom:3}}>DETAIL</div>
+                        <div style={{fontSize:7,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",marginBottom:3}}>DETAIL</div>
                         <input value={oppForm.detail} onChange={e=>setOppForm(p=>({...p,detail:e.target.value}))}
                           placeholder="$310 Call Jun 5" style={{width:"100%",fontSize:11,padding:"4px 7px"}}/>
                       </div>
                       <div>
-                        <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",marginBottom:3}}>TARGET $</div>
+                        <div style={{fontSize:7,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",marginBottom:3}}>TARGET $</div>
                         <input type="number" value={oppForm.target} onChange={e=>setOppForm(p=>({...p,target:e.target.value}))}
                           placeholder="—" style={{width:"100%",fontSize:11,padding:"4px 7px"}}/>
                       </div>
                     </div>
                     <div style={{marginBottom:7}}>
-                      <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",marginBottom:3}}>NOTE / THESIS</div>
+                      <div style={{fontSize:7,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",marginBottom:3}}>NOTE / THESIS</div>
                       <input value={oppForm.note} onChange={e=>setOppForm(p=>({...p,note:e.target.value}))}
                         placeholder="Why is this interesting?" style={{width:"100%",fontSize:11,padding:"4px 7px"}}/>
                     </div>
@@ -8866,7 +8896,7 @@ ${JSON.stringify(summary, null, 1)}`;
                         saveOppItem({id:Date.now(),ticker:oppForm.ticker.trim().toUpperCase(),type:oppForm.type,
                           detail:oppForm.detail,target:oppForm.target?+oppForm.target:null,note:oppForm.note,src:"manual",status:"open",createdAt:new Date().toISOString()});
                         setOppForm(null);
-                      }} style={{background:"#00ff88",color:"#010409",border:"none",borderRadius:5,padding:"5px 14px",fontSize:10,fontWeight:700,fontFamily:"monospace",cursor:"pointer"}}>Save</button>
+                      }} style={{background:"#00ff88",color:th("#010409","#f5f0e8"),border:"none",borderRadius:5,padding:"5px 14px",fontSize:10,fontWeight:700,fontFamily:"monospace",cursor:"pointer"}}>Save</button>
                       <button onClick={()=>setOppForm(null)}
                         style={{background:"transparent",color:"#555",border:"1px solid #21262d",borderRadius:5,padding:"5px 10px",fontSize:10,fontFamily:"monospace",cursor:"pointer"}}>Cancel</button>
                     </div>
@@ -8875,23 +8905,23 @@ ${JSON.stringify(summary, null, 1)}`;
 
                 {/* Grouped opp rows */}
                 {openOpps.length === 0 && doneOpps.length === 0 && (
-                  <div style={{color:"#2a3040",fontSize:10,fontFamily:"monospace",padding:"8px 10px"}}>No opportunities yet — DANI signals and manual flags appear here</div>
+                  <div style={{color:th("#2a3040","#6b5f55"),fontSize:10,fontFamily:"monospace",padding:"8px 10px"}}>No opportunities yet — DANI signals and manual flags appear here</div>
                 )}
                 <div style={{display:"flex",flexDirection:"column",gap:3}}>
                   {daniOpps.length > 0 && <>
-                    <div style={{fontSize:8,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",padding:"4px 10px 2px"}}>DANI SIGNALS</div>
+                    <div style={{fontSize:8,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",letterSpacing:"0.08em",padding:"4px 10px 2px"}}>DANI SIGNALS</div>
                     {daniOpps.map(o => <OppRow key={o.id} o={o}/>)}
                   </>}
                   {sageOpps.length > 0 && <>
-                    <div style={{fontSize:8,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",padding:"8px 10px 2px"}}>SAGE / SYSTEM</div>
+                    <div style={{fontSize:8,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",letterSpacing:"0.08em",padding:"8px 10px 2px"}}>SAGE / SYSTEM</div>
                     {sageOpps.map(o => <OppRow key={o.id} o={o}/>)}
                   </>}
                   {manualOpps.length > 0 && <>
-                    <div style={{fontSize:8,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",padding:"8px 10px 2px"}}>MANUAL FLAGS</div>
+                    <div style={{fontSize:8,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",letterSpacing:"0.08em",padding:"8px 10px 2px"}}>MANUAL FLAGS</div>
                     {manualOpps.map(o => <OppRow key={o.id} o={o}/>)}
                   </>}
                   {doneOpps.length > 0 && <>
-                    <div style={{fontSize:8,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",padding:"8px 10px 2px"}}>DONE / SKIPPED</div>
+                    <div style={{fontSize:8,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",letterSpacing:"0.08em",padding:"8px 10px 2px"}}>DONE / SKIPPED</div>
                     {doneOpps.map(o => <OppRow key={o.id} o={o}/>)}
                   </>}
                 </div>
@@ -8921,7 +8951,7 @@ ${JSON.stringify(summary, null, 1)}`;
               <div style={{display:"flex",flexDirection:"column",gap:9}}>
                 <div style={{display:"flex",alignItems:"center",gap:10}}>
                   <button onClick={()=>setSelectedTicker(null)} style={{background:"transparent",border:"1px solid #1c2128",borderRadius:6,padding:"5px 10px",fontSize:11,color:"#555",fontFamily:"monospace"}}>← Stocks</button>
-                  <span style={{fontFamily:"'JetBrains Mono',monospace",fontWeight:700,fontSize:20,color:"#e6edf3"}}>{selectedTicker}</span>
+                  <span style={{fontFamily:"'JetBrains Mono',monospace",fontWeight:700,fontSize:20,color:th("#e6edf3","#0d0d0b")}}>{selectedTicker}</span>
                   <Tag color={td.openCount>0?"green":"gray"}>{td.openCount} open</Tag>
                 </div>
                 {/* Stock info cards */}
@@ -8931,15 +8961,15 @@ ${JSON.stringify(summary, null, 1)}`;
                   <KPI label="Open"          value={td.openCount} sub="active contracts" color="#ffd166"/>
                 </div>
                 {/* Editable stock data */}
-                <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:13}}>
+                <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8,padding:13}}>
                   <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
-                    <span style={{fontFamily:"monospace",fontSize:8,color:"#2a3040",letterSpacing:"0.08em"}}>STOCK DATA</span>
+                    <span style={{fontFamily:"monospace",fontSize:8,color:th("#2a3040","#6b5f55"),letterSpacing:"0.08em"}}>STOCK DATA</span>
                     {sd.earningsDate && (
                       <span style={{
                         fontSize:9, fontFamily:"monospace", padding:"2px 8px", borderRadius:4,
-                        background: sd.earningsDate >= TODAY ? "#ffd16620" : "#1c2128",
-                        color:      sd.earningsDate >= TODAY ? "#ffd166"   : "#3a4050",
-                        border:     `1px solid ${sd.earningsDate >= TODAY ? "#ffd16640" : "#21262d"}`,
+                        background: sd.earningsDate >= TODAY ? "#ffd16620" : th("#1c2128","#b8a898"),
+                        color:      sd.earningsDate >= TODAY ? "#ffd166"   : th("#3a4050","#8a7e74"),
+                        border:     `1px solid ${sd.earningsDate >= TODAY ? "#ffd16640" : th("#21262d","#c8b8a8")}`,
                       }}>
                         {sd.earningsDate >= TODAY ? "⚡ Earnings " : "Earnings "}{sd.earningsDate}
                       </span>
@@ -8966,7 +8996,7 @@ ${JSON.stringify(summary, null, 1)}`;
                     if (!greeks.length) return null;
                     return (
                       <div style={{marginBottom:10}}>
-                        <div style={{fontSize:7,color:"#2a3040",fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:6}}>GREEKS — OPEN CONTRACTS</div>
+                        <div style={{fontSize:7,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",letterSpacing:"0.08em",marginBottom:6}}>GREEKS — OPEN CONTRACTS</div>
                         <div style={{display:"flex",flexDirection:"column",gap:4}}>
                           {greeks.map((g,i) => (
                             <div key={i} style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
@@ -8991,8 +9021,8 @@ ${JSON.stringify(summary, null, 1)}`;
                       <FL>🤖 Skynet Auto-STO</FL>
                       <div style={{display:"flex",alignItems:"center",gap:8,marginTop:4}}>
                         <div onClick={()=>updateStockData(selectedTicker,"autoSto",!sd.autoSto)}
-                          style={{width:36,height:20,borderRadius:10,background:sd.autoSto?"#00ff88":"#21262d",position:"relative",cursor:"pointer",transition:"background .2s",border:`1px solid ${sd.autoSto?"#00ff88":"#30363d"}`}}>
-                          <div style={{position:"absolute",top:3,left:sd.autoSto?17:3,width:14,height:14,borderRadius:"50%",background:sd.autoSto?"#010409":"#555",transition:"left .2s"}}/>
+                          style={{width:36,height:20,borderRadius:10,background:sd.autoSto?"#00ff88":th("#21262d","#c8b8a8"),position:"relative",cursor:"pointer",transition:"background .2s",border:`1px solid ${sd.autoSto?"#00ff88":th("#30363d","#c0b0a0")}`}}>
+                          <div style={{position:"absolute",top:3,left:sd.autoSto?17:3,width:14,height:14,borderRadius:"50%",background:sd.autoSto?th("#010409","#f5f0e8"):"#555",transition:"left .2s"}}/>
                         </div>
                         <span style={{fontFamily:"monospace",fontSize:9,color:sd.autoSto?"#00ff88":"#555"}}>
                           {sd.autoSto?"ENABLED — Skynet will auto-sell covered calls":"OFF"}
@@ -9006,44 +9036,44 @@ ${JSON.stringify(summary, null, 1)}`;
                         {sd.bid!=null && <span style={{fontSize:8,color:"#555",fontFamily:"monospace",whiteSpace:"nowrap"}}>b:{sd.bid} a:{sd.ask}</span>}
                       </div>
                     </div>
-                    <div><FL>IV % <span style={{color:"#2a3040",fontSize:7}}>(manual)</span></FL><input type="number" defaultValue={sd.iv||""} placeholder="e.g. 45.2" onBlur={e=>updateStockData(selectedTicker,"iv",e.target.value?+e.target.value:null)}/></div>
+                    <div><FL>IV % <span style={{color:th("#2a3040","#6b5f55"),fontSize:7}}>(manual)</span></FL><input type="number" defaultValue={sd.iv||""} placeholder="e.g. 45.2" onBlur={e=>updateStockData(selectedTicker,"iv",e.target.value?+e.target.value:null)}/></div>
                     <div><FL>Next Earnings Date</FL><input type="date" defaultValue={sd.earningsDate||""} onBlur={e=>updateStockData(selectedTicker,"earningsDate",e.target.value||null)}/></div>
                   </div>
                 </div>
                 {/* Contract history for this ticker */}
-                <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8}} className="ms">
+                <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8}} className="ms">
                   <div style={{padding:"7px 11px",display:"flex",alignItems:"center",gap:8}}>
-                  <span style={{fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em"}}>CONTRACT HISTORY</span>
-                  <button onClick={()=>setStockContractFilter("open")} style={{fontSize:8,fontFamily:"monospace",padding:"1px 7px",borderRadius:3,border:"none",cursor:"pointer",background:stockContractFilter==="open"?"#00ff8820":"transparent",color:stockContractFilter==="open"?"#00ff88":"#3a4050"}}>Open</button>
-                  <button onClick={()=>setStockContractFilter("all")} style={{fontSize:8,fontFamily:"monospace",padding:"1px 7px",borderRadius:3,border:"none",cursor:"pointer",background:stockContractFilter==="all"?"#58a6ff20":"transparent",color:stockContractFilter==="all"?"#58a6ff":"#3a4050"}}>All</button>
+                  <span style={{fontFamily:"monospace",fontSize:7,color:th("#2a3040","#6b5f55"),letterSpacing:"0.08em"}}>CONTRACT HISTORY</span>
+                  <button onClick={()=>setStockContractFilter("open")} style={{fontSize:8,fontFamily:"monospace",padding:"1px 7px",borderRadius:3,border:"none",cursor:"pointer",background:stockContractFilter==="open"?"#00ff8820":"transparent",color:stockContractFilter==="open"?"#00ff88":th("#3a4050","#8a7e74")}}>Open</button>
+                  <button onClick={()=>setStockContractFilter("all")} style={{fontSize:8,fontFamily:"monospace",padding:"1px 7px",borderRadius:3,border:"none",cursor:"pointer",background:stockContractFilter==="all"?"#58a6ff20":"transparent",color:stockContractFilter==="all"?"#58a6ff":th("#3a4050","#8a7e74")}}>All</button>
                 </div>
                   <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
                     <thead><tr>
-                      <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Contract</th>
-                      <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Opt</th>
-                      <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Qty</th>
-                      <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Executed</th>
-                      <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Premium</th>
+                      <th style={{padding:"5px 8px",textAlign:"left",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Contract</th>
+                      <th style={{padding:"5px 8px",textAlign:"left",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Opt</th>
+                      <th style={{padding:"5px 8px",textAlign:"right",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Qty</th>
+                      <th style={{padding:"5px 8px",textAlign:"left",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Executed</th>
+                      <th style={{padding:"5px 8px",textAlign:"right",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Premium</th>
                       <th style={{padding:"5px 8px",textAlign:"right",color:"#00ff8860",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Live Bid</th>
                       <th style={{padding:"5px 8px",textAlign:"right",color:"#00ff8860",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Live Ask</th>
-                      <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Profit</th>
-                      <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Acct</th>
-                      <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Status</th>
+                      <th style={{padding:"5px 8px",textAlign:"right",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Profit</th>
+                      <th style={{padding:"5px 8px",textAlign:"left",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Acct</th>
+                      <th style={{padding:"5px 8px",textAlign:"left",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Status</th>
                     </tr></thead>
                     <tbody>
                       {tickerContracts.filter(c => stockContractFilter==="open" ? c.status==="Open" : true).map(c=>(
                         <tr key={c.id} className="rh" style={{borderTop:"1px solid #0d1117",cursor:"pointer"}} onClick={()=>setViewC(c)}>
                           {(() => { const lo = c.status==="Open" ? getLiveOption(c) : null; return (<>
-                          <td style={{padding:"5px 8px",fontFamily:"monospace",color:"#c9d1d9",fontSize:10,whiteSpace:"nowrap"}}>{fTitle(c)}</td>
+                          <td style={{padding:"5px 8px",fontFamily:"monospace",color:th("#c9d1d9","#1a1a18"),fontSize:10,whiteSpace:"nowrap"}}>{fTitle(c)}</td>
                           <td style={{padding:"5px 8px"}}><Tag color={c.optType==="STO"?"green":c.optType==="BTC"?"amber":"gray"}>{c.optType}</Tag></td>
-                          <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#c9d1d9",fontWeight:600}}>{c.qty}</td>
+                          <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:th("#c9d1d9","#1a1a18"),fontWeight:600}}>{c.qty}</td>
                           <td style={{padding:"5px 8px",fontFamily:"monospace",fontSize:10,color:"#555"}}>{c.dateExec||"—"}</td>
                           <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:c.premium<0?"#ff4560":"#58a6ff"}}>{fMoney(c.premium)}</td>
                           <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:10,color:"#00ff88"}}>
-                            {lo?.bid!=null ? f$(lo.bid) : <span style={{color:"#1c2128"}}>—</span>}
+                            {lo?.bid!=null ? f$(lo.bid) : <span style={{color:th("#1c2128","#b8a898")}}>—</span>}
                           </td>
                           <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:10,color:"#58a6ff"}}>
-                            {lo?.ask!=null ? f$(lo.ask) : <span style={{color:"#1c2128"}}>—</span>}
+                            {lo?.ask!=null ? f$(lo.ask) : <span style={{color:th("#1c2128","#b8a898")}}>—</span>}
                           </td>
                           <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11}}>{(() => {
                             const cc = c.profit == null ? contracts.find(x => x.parentId === c.id && x.profit != null) : null;
@@ -9051,7 +9081,7 @@ ${JSON.stringify(summary, null, 1)}`;
                             const dpp = c.profitPct ?? cc?.profitPct ?? null;
                             return dp!=null
                               ? <><span style={{color:dp>=0?"#00ff88":"#ff4560"}}>{fSign(dp)}</span>{dpp!=null&&<span style={{fontSize:8,color:dp>=0?"#00ff8870":"#ff456070",marginLeft:3}}>{(dpp*100).toFixed(1)}%</span>}</>
-                              : <span style={{color:"#1c2128"}}>—</span>;
+                              : <span style={{color:th("#1c2128","#b8a898")}}>—</span>;
                           })()}</td>
                           <td style={{padding:"5px 8px"}}><Tag color={c.account==="Schwab"?"blue":"amber"}>{c.account}</Tag></td>
                           <td style={{padding:"5px 8px"}}><Tag color={c.status==="Open"?"green":"gray"}>{c.status}</Tag></td>
@@ -9113,7 +9143,7 @@ ${JSON.stringify(summary, null, 1)}`;
           });
           const sth = (key,label,right=false) => (
             <th onClick={()=>toggleStocksSort(key)} className="thsort"
-              style={{padding:"5px 8px",textAlign:right?"right":"left",color:stocksSortKey===key?"#c9d1d9":"#3a4050",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128",whiteSpace:"nowrap"}}>
+              style={{padding:"5px 8px",textAlign:right?"right":"left",color:stocksSortKey===key?th("#c9d1d9","#1a1a18"):th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128",whiteSpace:"nowrap"}}>
               {label}{stocksSortKey===key?(stocksSortDir==="asc"?" ↑":" ↓"):""}
             </th>
           );
@@ -9138,10 +9168,10 @@ ${JSON.stringify(summary, null, 1)}`;
                     : etradeStatus==="error" ? "⚠ Retry"
                     : "⟳ Refresh Live Data"}
                 </button>
-                <span style={{fontSize:9,color:etradeStatus==="error"?"#ff4560":etradeStatus==="ok"?"#00ff8870":"#3a4050",fontFamily:"monospace",flex:1}}>
+                <span style={{fontSize:9,color:etradeStatus==="error"?"#ff4560":etradeStatus==="ok"?"#00ff8870":th("#3a4050","#8a7e74"),fontFamily:"monospace",flex:1}}>
                   {etradeMsg || "Click to pull live quotes & option chains from E*TRADE sandbox"}
                 </span>
-                {etradeLastFetch && <span style={{fontSize:8,color:"#2a3040",fontFamily:"monospace",flexShrink:0}}>last sync {etradeLastFetch}</span>}
+                {etradeLastFetch && <span style={{fontSize:8,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",flexShrink:0}}>last sync {etradeLastFetch}</span>}
               </div>
 
               {/* Unified Positions + Tickers table */}
@@ -9165,27 +9195,27 @@ ${JSON.stringify(summary, null, 1)}`;
                 ])];
 
                 return (
-                  <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8}} className="ms">
+                  <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8}} className="ms">
                     <div style={{padding:"7px 11px",display:"flex",alignItems:"center",gap:8}}>
-                      <span style={{fontFamily:"monospace",fontSize:7,color:"#2a3040",letterSpacing:"0.08em"}}>POSITIONS — click to view details</span>
+                      <span style={{fontFamily:"monospace",fontSize:7,color:th("#2a3040","#6b5f55"),letterSpacing:"0.08em"}}>POSITIONS — click to view details</span>
                       {schwabPositions.length > 0 && <span style={{fontSize:7,color:"#00ff8870",fontFamily:"monospace"}}>● {schwabPositions.length} live from Schwab</span>}
                     </div>
                     <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
                       <thead><tr>
-                        <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Ticker</th>
+                        <th style={{padding:"5px 8px",textAlign:"left",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Ticker</th>
                         <th style={{padding:"5px 8px",textAlign:"right",color:"#58a6ff",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Schwab Qty</th>
                         <th style={{padding:"5px 8px",textAlign:"right",color:"#ffd166",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>ETrade Qty</th>
-                        <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Avg Cost</th>
-                        <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Mkt Value</th>
-                        <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Gain $</th>
-                        <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Gain %</th>
-                        <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Day $</th>
-                        <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Day %</th>
-                        <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>IV %</th>
-                        <th style={{padding:"5px 8px",textAlign:"left",color:"#3a4050",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Earnings</th>
-                        <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Premium</th>
-                        <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Profit</th>
-                        <th style={{padding:"5px 8px",textAlign:"right",color:"#3a4050",fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Open</th>
+                        <th style={{padding:"5px 8px",textAlign:"right",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Avg Cost</th>
+                        <th style={{padding:"5px 8px",textAlign:"right",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Mkt Value</th>
+                        <th style={{padding:"5px 8px",textAlign:"right",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Gain $</th>
+                        <th style={{padding:"5px 8px",textAlign:"right",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Gain %</th>
+                        <th style={{padding:"5px 8px",textAlign:"right",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Day $</th>
+                        <th style={{padding:"5px 8px",textAlign:"right",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Day %</th>
+                        <th style={{padding:"5px 8px",textAlign:"right",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>IV %</th>
+                        <th style={{padding:"5px 8px",textAlign:"left",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Earnings</th>
+                        <th style={{padding:"5px 8px",textAlign:"right",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Premium</th>
+                        <th style={{padding:"5px 8px",textAlign:"right",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Profit</th>
+                        <th style={{padding:"5px 8px",textAlign:"right",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:9,borderBottom:"1px solid #1c2128"}}>Open</th>
                       </tr></thead>
                       <tbody>
                         {allSymbols.map(sym => {
@@ -9196,20 +9226,20 @@ ${JSON.stringify(summary, null, 1)}`;
                           const etradeQty = sd.sharesEtrade || 0;
                           return (
                             <tr key={sym} className="rh" style={{borderTop:"1px solid #0d1117",cursor:"pointer"}} onClick={()=>setSelectedTicker(sym)}>
-                              <td style={{padding:"5px 8px",fontFamily:"'JetBrains Mono',monospace",fontWeight:700,color:"#e6edf3",fontSize:13}}>
+                              <td style={{padding:"5px 8px",fontFamily:"'JetBrains Mono',monospace",fontWeight:700,color:th("#e6edf3","#0d0d0b"),fontSize:13}}>
                                 {sym}
                                 {(pos || etradeQty > 0) && <span style={{fontSize:7,color: pos ? "#00ff8870" : "#ffd16670",marginLeft:4}}>●</span>}
                               </td>
-                              <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color: schwabQty > 0 ? "#58a6ff" : "#3a4050",fontSize:10}}>
+                              <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color: schwabQty > 0 ? "#58a6ff" : th("#3a4050","#8a7e74"),fontSize:10}}>
                                 {schwabQty > 0 ? schwabQty : "—"}
                               </td>
-                              <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color: etradeQty > 0 ? "#ffd166" : "#3a4050",fontSize:10}}>
+                              <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color: etradeQty > 0 ? "#ffd166" : th("#3a4050","#8a7e74"),fontSize:10}}>
                                 {etradeQty > 0 ? etradeQty : "—"}
                               </td>
                               <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#555",fontSize:10}}>
                                 {pos ? f$(pos.avgPrice) : "—"}
                               </td>
-                              <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#c9d1d9",fontWeight:600}}>
+                              <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:th("#c9d1d9","#1a1a18"),fontWeight:600}}>
                                 {pos ? f$(pos.marketValue) : (sd.currentPrice && (schwabQty + etradeQty) > 0 ? f$(sd.currentPrice * (schwabQty + etradeQty)) : "—")}
                               </td>
                               <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontWeight:700,fontSize:10,color:pos?(pos.gainLoss>=0?"#00ff88":"#ff4560"):"#555"}}>
@@ -9237,18 +9267,18 @@ ${JSON.stringify(summary, null, 1)}`;
                                 {tk ? fSign(tk.totalProfit) : "—"}
                               </td>
                               <td style={{padding:"5px 8px",textAlign:"right"}}>
-                                {tk?.openCount>0 ? <Tag color="green">{tk.openCount}</Tag> : <span style={{color:"#1c2128",fontSize:10}}>—</span>}
+                                {tk?.openCount>0 ? <Tag color="green">{tk.openCount}</Tag> : <span style={{color:th("#1c2128","#b8a898"),fontSize:10}}>—</span>}
                               </td>
                             </tr>
                           );
                         })}
-                        {allSymbols.length===0 && <tr><td colSpan={14} style={{padding:20,textAlign:"center",color:"#3a4050",fontSize:11,fontFamily:"monospace"}}>No positions — click ⟳ Live Data to sync from Schwab</td></tr>}
+                        {allSymbols.length===0 && <tr><td colSpan={14} style={{padding:20,textAlign:"center",color:th("#3a4050","#8a7e74"),fontSize:11,fontFamily:"monospace"}}>No positions — click ⟳ Live Data to sync from Schwab</td></tr>}
                       </tbody>
                       {schwabPositions.length > 0 && (
                         <tfoot>
                           <tr style={{borderTop:"1px solid #21262d"}}>
-                            <td colSpan={4} style={{padding:"6px 8px",fontFamily:"monospace",fontSize:9,color:"#3a4050"}}>TOTAL</td>
-                            <td style={{padding:"6px 8px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:"#c9d1d9"}}>{f$(schwabPositions.reduce((s,p)=>s+p.marketValue,0))}</td>
+                            <td colSpan={4} style={{padding:"6px 8px",fontFamily:"monospace",fontSize:9,color:th("#3a4050","#8a7e74")}}>TOTAL</td>
+                            <td style={{padding:"6px 8px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:th("#c9d1d9","#1a1a18")}}>{f$(schwabPositions.reduce((s,p)=>s+p.marketValue,0))}</td>
                             <td style={{padding:"6px 8px",textAlign:"right",fontFamily:"monospace",fontWeight:700,color:schwabPositions.reduce((s,p)=>s+p.gainLoss,0)>=0?"#00ff88":"#ff4560"}}>{schwabPositions.reduce((s,p)=>s+p.gainLoss,0)>=0?"+":""}{f$(schwabPositions.reduce((s,p)=>s+p.gainLoss,0))}</td>
                             <td colSpan={9}/>
                           </tr>
@@ -9262,47 +9292,55 @@ ${JSON.stringify(summary, null, 1)}`;
               {/* Cash row — Schwab auto-populated, E*TRADE manual */}
               <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"stretch"}}>
                 {/* Schwab cash — live from API */}
-                <div style={{background:"#0a0e14",border:"1px solid #58a6ff30",borderRadius:8,padding:"8px 12px",minWidth:120,display:"flex",flexDirection:"column",gap:4}}>
+                <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #58a6ff30",borderRadius:8,padding:"8px 12px",minWidth:120,display:"flex",flexDirection:"column",gap:4}}>
                   <div style={{display:"flex",alignItems:"center",gap:5}}>
                     <span style={{fontSize:7,color:"#58a6ff",fontFamily:"monospace",letterSpacing:"0.08em"}}>SCHWAB ACCT</span>
                     {cashData.schwab && <span style={{fontSize:7,color:"#00ff8870",fontFamily:"monospace"}}>live</span>}
                   </div>
                   <div style={{fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:"#58a6ff"}}>
-                    {cashData.schwab ? f$(+cashData.schwab) : <span style={{color:"#2a3040",fontSize:11}}>—</span>}
+                    {cashData.schwab ? f$(+cashData.schwab) : <span style={{color:th("#2a3040","#6b5f55"),fontSize:11}}>—</span>}
                   </div>
                 </div>
-                {/* E*TRADE cash — manual */}
-                <div style={{background:"#0a0e14",border:"1px solid #ffd16630",borderRadius:8,padding:"8px 12px",minWidth:120,display:"flex",flexDirection:"column",gap:4}}>
-                  <div style={{fontSize:7,color:"#ffd166",fontFamily:"monospace",letterSpacing:"0.08em"}}>E*TRADE ACCT</div>
+                {/* E*TRADE cash — manual entry, falls back for accounts not yet synced via live snapshot (6917 + 8222 combined) */}
+                <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #ffd16630",borderRadius:8,padding:"8px 12px",minWidth:120,display:"flex",flexDirection:"column",gap:4}}>
+                  <div style={{display:"flex",alignItems:"center",gap:5}}>
+                    <span style={{fontSize:7,color:"#ffd166",fontFamily:"monospace",letterSpacing:"0.08em"}}>E*TRADE ACCT</span>
+                    {liveEtradeInline!=null && <span style={{fontSize:7,color:"#00ff8870",fontFamily:"monospace"}}>live · both accts</span>}
+                  </div>
                   <input type="number" defaultValue={cashData.etrade||""} placeholder="0.00"
                     onBlur={e=>updateCash("etrade",e.target.value)}
                     style={{width:"100%",fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:"#ffd166",background:"transparent",border:"none",borderBottom:"1px solid #ffd16630",padding:"2px 0",outline:"none"}}/>
                 </div>
-                {/* Total */}
-                {((cashData.schwab||0)+(cashData.etrade||0))>0 && (
-                  <div style={{background:"#0a0e14",border:"1px solid #00ff8830",borderRadius:8,padding:"8px 12px",minWidth:120,display:"flex",flexDirection:"column",gap:4}}>
-                    <div style={{fontSize:7,color:"#00ff88",fontFamily:"monospace",letterSpacing:"0.08em"}}>TOTAL ACCT</div>
-                    <div style={{fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:"#00ff88"}}>{f$((+cashData.schwab||0)+(+cashData.etrade||0))}</div>
-                  </div>
-                )}
+                {/* Total — prefers combined live ETrade value (both accounts) over the single manual entry */}
+                {(() => {
+                  const etradeCombined = liveEtradeInline ?? (+cashData.etrade || 0);
+                  const totalAcct = (+cashData.schwab||0) + etradeCombined;
+                  return totalAcct>0 && (
+                    <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #00ff8830",borderRadius:8,padding:"8px 12px",minWidth:120,display:"flex",flexDirection:"column",gap:4}}>
+                      <div style={{fontSize:7,color:"#00ff88",fontFamily:"monospace",letterSpacing:"0.08em"}}>TOTAL ACCT</div>
+                      <div style={{fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:"#00ff88"}}>{f$(totalAcct)}</div>
+                    </div>
+                  );
+                })()}
                 {/* Committed funds + available to write puts */}
                 {(() => {
+                  const etradeCombined = liveEtradeInline ?? (+cashData.etrade || 0);
                   const schwabCommitted = openC.filter(c=>c.optType==="STO"&&c.type==="Put"&&c.account==="Schwab").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
                   const schwabBTOAssets = openC.filter(c=>c.optType==="BTO"&&c.account==="Schwab").reduce((s,c)=>{const lo=findOptionForContract(etradeChains,c);return s+((lo?.bid!=null&&lo?.ask!=null)?(lo.bid+lo.ask)/2*(c.qty||1)*100:lo?.mark!=null?lo.mark*(c.qty||1)*100:Math.abs(c.premium||0));},0);
                   const etradeCommitted = openC.filter(c=>c.optType==="STO"&&c.type==="Put"&&c.account==="Etrade").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
                   const etradeBTOAssets = openC.filter(c=>c.optType==="BTO"&&c.account==="Etrade").reduce((s,c)=>{const lo=findOptionForContract(etradeChains,c);return s+((lo?.bid!=null&&lo?.ask!=null)?(lo.bid+lo.ask)/2*(c.qty||1)*100:lo?.mark!=null?lo.mark*(c.qty||1)*100:Math.abs(c.premium||0));},0);
                   const schwabAvail = (+cashData.schwab||0) - schwabCommitted + schwabBTOAssets;
-                  const etradeAvail = (+cashData.etrade||0) - etradeCommitted + etradeBTOAssets;
+                  const etradeAvail = etradeCombined - etradeCommitted + etradeBTOAssets;
                   return (<>
-                    <div style={{background:"#0a0e14",border:"1px solid #c084fc30",borderRadius:8,padding:"8px 12px",minWidth:140,display:"flex",flexDirection:"column",gap:3}}>
+                    <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #c084fc30",borderRadius:8,padding:"8px 12px",minWidth:140,display:"flex",flexDirection:"column",gap:3}}>
                       <div style={{fontSize:7,color:"#c084fc",fontFamily:"monospace",letterSpacing:"0.08em"}}>SCHWAB AVAILABLE</div>
                       <div style={{fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:schwabAvail>=0?"#00ff88":"#ff4560"}}>{f$(schwabAvail)}</div>
-                      <div style={{fontSize:8,color:"#3a4050",fontFamily:"monospace"}}>acct {f$(+cashData.schwab||0)} − STO {f$(schwabCommitted)} + BTO {f$(schwabBTOAssets)}</div>
+                      <div style={{fontSize:8,color:th("#3a4050","#8a7e74"),fontFamily:"monospace"}}>acct {f$(+cashData.schwab||0)} − STO {f$(schwabCommitted)} + BTO {f$(schwabBTOAssets)}</div>
                     </div>
-                    <div style={{background:"#0a0e14",border:"1px solid #c084fc30",borderRadius:8,padding:"8px 12px",minWidth:140,display:"flex",flexDirection:"column",gap:3}}>
+                    <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #c084fc30",borderRadius:8,padding:"8px 12px",minWidth:140,display:"flex",flexDirection:"column",gap:3}}>
                       <div style={{fontSize:7,color:"#c084fc",fontFamily:"monospace",letterSpacing:"0.08em"}}>ETRADE AVAILABLE</div>
                       <div style={{fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:etradeAvail>=0?"#00ff88":"#ff4560"}}>{f$(etradeAvail)}</div>
-                      <div style={{fontSize:8,color:"#3a4050",fontFamily:"monospace"}}>acct {f$(+cashData.etrade||0)} − STO {f$(etradeCommitted)} + BTO {f$(etradeBTOAssets)}</div>
+                      <div style={{fontSize:8,color:th("#3a4050","#8a7e74"),fontFamily:"monospace"}}>acct {f$(etradeCombined)} − STO {f$(etradeCommitted)} + BTO {f$(etradeBTOAssets)}</div>
                     </div>
                   </>);
                 })()}
@@ -9316,7 +9354,7 @@ ${JSON.stringify(summary, null, 1)}`;
 
               {/* Add Stock form */}
               {showAddStock && (
-                <div style={{background:"#0a0e14",border:"1px solid #00ff8825",borderRadius:8,padding:12,animation:"fadeIn .2s"}}>
+                <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #00ff8825",borderRadius:8,padding:12,animation:"fadeIn .2s"}}>
                   <div style={{fontFamily:"monospace",fontSize:9,color:"#00ff88",marginBottom:8,letterSpacing:"0.07em"}}>ADD / UPDATE STOCK</div>
                   <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))",gap:7}}>
                     <div><FL req>Ticker</FL><input type="text" value={addStockForm.ticker} onChange={e=>setAddStockForm(p=>({...p,ticker:e.target.value.toUpperCase()}))} style={{textTransform:"uppercase"}}/></div>
@@ -9334,7 +9372,7 @@ ${JSON.stringify(summary, null, 1)}`;
                       try{await supabase.from("col_prefs").upsert({id:"stocks_data",cols:updated,updated_at:new Date().toISOString()});}catch{}
                       setAddStockForm({ticker:"",schwabShares:"",etradeShares:"",price:"",earningsDate:""});
                       setShowAddStock(false);
-                    }} style={{background:"#00ff88",color:"#010409",border:"none",borderRadius:6,padding:"7px 16px",fontSize:11,fontWeight:700,fontFamily:"monospace"}}>SAVE</button>
+                    }} style={{background:"#00ff88",color:th("#010409","#f5f0e8"),border:"none",borderRadius:6,padding:"7px 16px",fontSize:11,fontWeight:700,fontFamily:"monospace"}}>SAVE</button>
                     <button onClick={()=>setShowAddStock(false)} style={{background:"transparent",color:"#555",border:"1px solid #21262d",borderRadius:6,padding:"7px 12px",fontSize:11}}>Cancel</button>
                   </div>
                 </div>
@@ -9346,8 +9384,8 @@ ${JSON.stringify(summary, null, 1)}`;
               {(() => {
                 const snaps = portfolioSnapshots;
                 if (!snaps.length) return (
-                  <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:24,textAlign:"center"}}>
-                    <div style={{color:"#3a4050",fontSize:11,fontFamily:"monospace"}}>No portfolio snapshots yet — data will appear after market close today</div>
+                  <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8,padding:24,textAlign:"center"}}>
+                    <div style={{color:th("#3a4050","#8a7e74"),fontSize:11,fontFamily:"monospace"}}>No portfolio snapshots yet — data will appear after market close today</div>
                   </div>
                 );
 
@@ -9388,12 +9426,12 @@ ${JSON.stringify(summary, null, 1)}`;
                 }, []);
 
                 return (
-                  <div style={{background:"#0a0e14",border:"1px solid #1c2128",borderRadius:8,padding:"12px 14px"}}>
+                  <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8,padding:"12px 14px"}}>
                     {/* Header */}
                     <div style={{display:"flex",alignItems:"baseline",gap:12,marginBottom:10,flexWrap:"wrap"}}>
-                      <span style={{fontFamily:"monospace",fontSize:7,color:"#3a4050",letterSpacing:"0.08em"}}>PORTFOLIO VALUE</span>
+                      <span style={{fontFamily:"monospace",fontSize:7,color:th("#3a4050","#8a7e74"),letterSpacing:"0.08em"}}>PORTFOLIO VALUE</span>
                       {latest?.total_value && (
-                        <span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:18,fontWeight:700,color:"#e6edf3"}}>{f$(+latest.total_value)}</span>
+                        <span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:18,fontWeight:700,color:th("#e6edf3","#0d0d0b")}}>{f$(+latest.total_value)}</span>
                       )}
                       {todayChg != null && (
                         <span style={{fontFamily:"monospace",fontSize:11,color: isUp ? "#00ff88" : "#ff4560"}}>
@@ -9401,7 +9439,7 @@ ${JSON.stringify(summary, null, 1)}`;
                         </span>
                       )}
                       {totalChg != null && snaps.length > 1 && (
-                        <span style={{fontFamily:"monospace",fontSize:10,color:"#3a4050"}}>
+                        <span style={{fontFamily:"monospace",fontSize:10,color:th("#3a4050","#8a7e74")}}>
                           {totalChg >= 0 ? "+" : ""}{f$(totalChg)} ({totalChgPct?.toFixed(1)}%) since {first.snapshot_date}
                         </span>
                       )}
@@ -9412,8 +9450,8 @@ ${JSON.stringify(summary, null, 1)}`;
                       {/* Grid lines + Y labels */}
                       {yTicks.map((v, i) => (
                         <g key={i}>
-                          <line x1={PAD.left} y1={yScale(v)} x2={PAD.left+chartW} y2={yScale(v)} stroke="#1c2128" strokeWidth={1}/>
-                          <text x={PAD.left-6} y={yScale(v)+4} textAnchor="end" fill="#3a4050" fontSize={9} fontFamily="monospace">{f$(v,0)}</text>
+                          <line x1={PAD.left} y1={yScale(v)} x2={PAD.left+chartW} y2={yScale(v)} stroke={th("#1c2128","#b8a898")} strokeWidth={1}/>
+                          <text x={PAD.left-6} y={yScale(v)+4} textAnchor="end" fill={th("#3a4050","#8a7e74")} fontSize={9} fontFamily="monospace">{f$(v,0)}</text>
                         </g>
                       ))}
 
@@ -9431,7 +9469,7 @@ ${JSON.stringify(summary, null, 1)}`;
 
                       {/* X axis labels */}
                       {xLabels.map(({ mo, i }) => (
-                        <text key={mo} x={xScale(i)} y={PAD.top+chartH+16} textAnchor="middle" fill="#3a4050" fontSize={8} fontFamily="monospace">
+                        <text key={mo} x={xScale(i)} y={PAD.top+chartH+16} textAnchor="middle" fill={th("#3a4050","#8a7e74")} fontSize={8} fontFamily="monospace">
                           {mo?.slice(5)}
                         </text>
                       ))}
@@ -9451,7 +9489,7 @@ ${JSON.stringify(summary, null, 1)}`;
                         { label: "Contracts", value: latest?.open_contracts_value,  color: "#00ff88" },
                       ].map(({ label, value, color }) => value != null && (
                         <div key={label} style={{display:"flex",flexDirection:"column",gap:2}}>
-                          <span style={{fontFamily:"monospace",fontSize:7,color:"#3a4050",letterSpacing:"0.08em"}}>{label}</span>
+                          <span style={{fontFamily:"monospace",fontSize:7,color:th("#3a4050","#8a7e74"),letterSpacing:"0.08em"}}>{label}</span>
                           <span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:12,fontWeight:600,color}}>{f$(+value)}</span>
                         </div>
                       ))}
@@ -9486,7 +9524,7 @@ ${JSON.stringify(summary, null, 1)}`;
     {/* ── Mobile bottom ribbon ──────────────────────────────────────────── */}
     <div style={{
       position:"fixed", bottom:0, left:0, right:0, zIndex:9000,
-      background:"#0a0e14", borderTop:"1px solid #1c2128",
+      background:th("#0a0e14","#f8f3eb"), borderTop:"1px solid #1c2128",
       display:"flex", alignItems:"stretch",
       paddingBottom:"env(safe-area-inset-bottom)",
     }}>

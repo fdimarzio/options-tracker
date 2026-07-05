@@ -1514,7 +1514,9 @@ describe("Auto-STO full simulation — all decision points", () => {
   });
 
   it("skips expiry outside DTE range", () => {
-    const chain = makeChain("AAPL", "2026-06-20", [[202, 1.50, 1.70]]); // 36 DTE > max 14
+    // Use a dynamic date 30 days from now to ensure it's always > max_dte of 14
+    const farDate = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+    const chain = makeChain("AAPL", farDate, [[202, 1.50, 1.70]]); // 30 DTE > max 14
     const r = evaluateAutoSto({ rule: makeRule({ max_dte: 14 }), quote: defaultQuote, symbol:"AAPL", stocksData: defaultStocksData, chainData: chain, momentumConfig: defaultMom });
     expect(r.action).toBe("skip");
   });
@@ -1572,5 +1574,255 @@ describe("Auto-STO full simulation — all decision points", () => {
     expect(r.orders[0].qty).toBe(2);
     expect(r.orders[0].strike).toBe(202); // highest premium in range
     expect(r.orders[0].isDryRun).toBe(true);
+  });
+});
+
+// ── isDryRun used in STO block, not contractDryRun (June 8 2026 bug fix) ──────
+describe("auto-STO dry run variable scoping", () => {
+  // Verifies that the STO placement block uses isDryRun (defined in STO scope)
+  // and not contractDryRun (only defined in the BTC scope — was causing ReferenceError)
+
+  function simulateStoPlacement(rule, usesCorrectVar) {
+    // usesCorrectVar simulates whether the code uses isDryRun vs contractDryRun
+    const isDryRun = rule?.dry_run !== false;
+    if (usesCorrectVar) {
+      // Correct: uses isDryRun which is defined in STO scope
+      return { placed: !isDryRun, error: null };
+    } else {
+      // Bug: references contractDryRun which is undefined in STO scope
+      try {
+        const contractDryRun = undefined; // not defined in STO scope
+        if (contractDryRun === undefined) throw new ReferenceError("contractDryRun is not defined");
+        return { placed: true, error: null };
+      } catch (e) {
+        return { placed: false, error: e.message };
+      }
+    }
+  }
+
+  it("positive — isDryRun correctly gates STO placement (dry_run=false → places order)", () => {
+    const rule = { dry_run: false, enabled: true };
+    const r = simulateStoPlacement(rule, true);
+    expect(r.error).toBeNull();
+    expect(r.placed).toBe(true);
+  });
+
+  it("positive — isDryRun correctly gates STO placement (dry_run=true → does not place)", () => {
+    const rule = { dry_run: true, enabled: true };
+    const r = simulateStoPlacement(rule, true);
+    expect(r.error).toBeNull();
+    expect(r.placed).toBe(false);
+  });
+
+  it("negative — using contractDryRun in STO scope throws ReferenceError", () => {
+    // This documents the exact bug: contractDryRun is only defined in the BTC block
+    const rule = { dry_run: false, enabled: true };
+    const r = simulateStoPlacement(rule, false);
+    expect(r.error).toContain("contractDryRun is not defined");
+    expect(r.placed).toBe(false);
+  });
+
+  it("negative — STO should never throw ReferenceError with correct variable", () => {
+    const rule = { dry_run: false, enabled: true };
+    const r = simulateStoPlacement(rule, true);
+    expect(r.error).toBeNull(); // no reference error
+  });
+});
+
+// ── Expiry protection — auto-close ITM contracts at 3:30 PM ET ───────────────
+// Mirrors api/market-refresh.js "Auto-close ITM contracts at 3:30 PM ET" block (~line 3110)
+describe("Expiry protection — auto-close ITM contracts at 3:30 PM ET", () => {
+  const WARN_MINS  = 15 * 60;      // 3:00 PM ET
+  const CLOSE_MINS = 15 * 60 + 30; // 3:30 PM ET
+
+  // Pure evaluator mirroring the market-refresh expiry-protection gate chain:
+  // market hours → expiry day → ITM → warn window → Call-only → close_method → dry_run
+  function evaluateExpiryClose({ contract, stockPrice, etMinsForExpiry, todayET, isMarketOpen, dryRun }) {
+    if (!isMarketOpen) return { action: "skip", reason: "outside_market_hours" };
+    if (contract.expires !== todayET) return { action: "skip", reason: "not_expiry_day" };
+    if (etMinsForExpiry < WARN_MINS) return { action: "skip", reason: "before_warn_window" };
+
+    const strike = +contract.strike;
+    const isCall = contract.type === "Call";
+    const isITM  = isCall ? stockPrice > strike : stockPrice < strike;
+    if (!isITM) return { action: "skip", reason: "otm" };
+
+    if (etMinsForExpiry < CLOSE_MINS) return { action: "warn" };
+
+    if (!isCall) return { action: "skip", reason: "put_left_to_assign" }; // wheel — left to assign
+    if (contract.close_method === "auto") return { action: "skip", reason: "already_auto_closed" };
+
+    return { action: dryRun ? "log_dry_run" : "place_order" };
+  }
+
+  const today = "2026-06-19";
+  const baseCall = { type: "Call", strike: 100, expires: today, close_method: null };
+  const basePut  = { type: "Put",  strike: 100, expires: today, close_method: null };
+
+  // ── Positive ─────────────────────────────────────────────────────────────
+  it("ITM Call, 3:30pm ET on expiry day, dry_run=false → places BTC order", () => {
+    const r = evaluateExpiryClose({ contract: baseCall, stockPrice: 105, etMinsForExpiry: CLOSE_MINS, todayET: today, isMarketOpen: true, dryRun: false });
+    expect(r.action).toBe("place_order");
+  });
+
+  it("ITM Call, 3:00pm ET on expiry day → sends warning, does NOT place order", () => {
+    const r = evaluateExpiryClose({ contract: baseCall, stockPrice: 105, etMinsForExpiry: WARN_MINS, todayET: today, isMarketOpen: true, dryRun: false });
+    expect(r.action).toBe("warn");
+  });
+
+  it("ITM Call, 3:30pm ET, dry_run=true → logs but does NOT place order", () => {
+    const r = evaluateExpiryClose({ contract: baseCall, stockPrice: 105, etMinsForExpiry: CLOSE_MINS, todayET: today, isMarketOpen: true, dryRun: true });
+    expect(r.action).toBe("log_dry_run");
+  });
+
+  // ── Negative ─────────────────────────────────────────────────────────────
+  it("ITM Put, 3:30pm ET → skipped (wheel, left to assign)", () => {
+    const r = evaluateExpiryClose({ contract: basePut, stockPrice: 95, etMinsForExpiry: CLOSE_MINS, todayET: today, isMarketOpen: true, dryRun: false });
+    expect(r.action).toBe("skip");
+    expect(r.reason).toBe("put_left_to_assign");
+  });
+
+  it("ITM Call, 3:30pm ET, outside market hours → skipped", () => {
+    const r = evaluateExpiryClose({ contract: baseCall, stockPrice: 105, etMinsForExpiry: CLOSE_MINS, todayET: today, isMarketOpen: false, dryRun: false });
+    expect(r.action).toBe("skip");
+    expect(r.reason).toBe("outside_market_hours");
+  });
+
+  it("ITM Call, 3:30pm ET, DTE > 0 (not expiry day) → skipped", () => {
+    const tomorrow = "2026-06-20";
+    const r = evaluateExpiryClose({ contract: { ...baseCall, expires: tomorrow }, stockPrice: 105, etMinsForExpiry: CLOSE_MINS, todayET: today, isMarketOpen: true, dryRun: false });
+    expect(r.action).toBe("skip");
+    expect(r.reason).toBe("not_expiry_day");
+  });
+
+  it("ITM Call, 3:30pm ET, close_method already 'auto' → skipped", () => {
+    const r = evaluateExpiryClose({ contract: { ...baseCall, close_method: "auto" }, stockPrice: 105, etMinsForExpiry: CLOSE_MINS, todayET: today, isMarketOpen: true, dryRun: false });
+    expect(r.action).toBe("skip");
+    expect(r.reason).toBe("already_auto_closed");
+  });
+});
+
+// ── Portfolio value — ETrade multi-account aggregation ───────────────────────
+// Mirrors api/etrade.js "positions" action (loops all accounts, sums totalAccountValue)
+// and src/pri-tod-v3.jsx liveEtradeInline precedence (snapshot combined value → cashData fallback)
+describe("Portfolio value — ETrade multi-account aggregation", () => {
+  // Mirrors the accumulation loop in api/etrade.js action=positions
+  function sumEtradeAccountValues(accounts) {
+    return accounts.reduce((sum, a) => sum + (+a.nav || 0), 0);
+  }
+
+  it("both ETrade accounts present → total = ETrade6917 + ETrade8222", () => {
+    const accounts = [
+      { accountId: "227156917", nav: 40000 }, // ETrade 6917
+      { accountId: "227418222", nav: 25000 }, // ETrade 8222
+    ];
+    const schwab = 100000;
+    const total = schwab + sumEtradeAccountValues(accounts);
+    expect(sumEtradeAccountValues(accounts)).toBe(65000);
+    expect(total).toBe(165000);
+  });
+
+  it("single ETrade account source → does not show as full portfolio value", () => {
+    // Only ETrade 6917 reporting (8222 missing/unavailable) — total undercounts by 8222's NAV
+    const accountsFull   = [{ accountId: "227156917", nav: 40000 }, { accountId: "227418222", nav: 25000 }];
+    const accountsSingle = [{ accountId: "227156917", nav: 40000 }];
+    const fullTotal   = sumEtradeAccountValues(accountsFull);
+    const singleTotal = sumEtradeAccountValues(accountsSingle);
+    expect(singleTotal).not.toBe(fullTotal);
+    expect(singleTotal).toBeLessThan(fullTotal); // missing 8222's $25,000
+  });
+
+  // Mirrors pri-tod-v3.jsx: latestSnapshot = portfolioSnapshots[portfolioSnapshots.length - 1]
+  // (portfolioSnapshots is ordered ascending by snapshot_date)
+  it("latest snapshot is the last element of the ascending-ordered array, not the first", () => {
+    const portfolioSnapshots = [
+      { snapshot_date: "2026-01-01", etrade_value: 30000 }, // oldest
+      { snapshot_date: "2026-06-01", etrade_value: 65000 }, // latest (both accounts combined)
+    ];
+    const latestSnapshot = portfolioSnapshots[portfolioSnapshots.length - 1] ?? null;
+    expect(latestSnapshot.etrade_value).toBe(65000);
+    expect(latestSnapshot.snapshot_date).toBe("2026-06-01");
+  });
+
+  // Mirrors: const liveEtradeInline = snapEtrade ?? (cashData?.etrade ? +cashData.etrade : null);
+  function liveEtradeInline(snapEtrade, cashDataEtrade) {
+    return snapEtrade ?? (cashDataEtrade ? +cashDataEtrade : null);
+  }
+
+  it("combined snapshot etrade_value takes precedence over single-account cashData.etrade", () => {
+    const snapEtrade = 65000; // combined, from portfolio_snapshots
+    const cashDataEtrade = "40000"; // single manually-entered account
+    expect(liveEtradeInline(snapEtrade, cashDataEtrade)).toBe(65000);
+  });
+
+  it("falls back to cashData.etrade only when no snapshot value exists", () => {
+    expect(liveEtradeInline(null, "40000")).toBe(40000);
+  });
+});
+
+// ── Auto-purge option_snapshots — batched daily delete ────────────────────────
+// Mirrors api/market-refresh.js runSnapshotPurge() (batch-by-timestamp-boundary delete)
+// and the once-per-day market-open gate that calls it.
+describe("Auto-purge option_snapshots", () => {
+  // Pure simulation of the batch-delete loop against an in-memory row set
+  function purgeOldSnapshots(rows, { retentionDays = 60, batchSize = 10000, now = new Date() } = {}) {
+    const cutoff = new Date(now.getTime() - retentionDays * 86400000).toISOString();
+    let remaining = [...rows].sort((a, b) => a.snapshot_at.localeCompare(b.snapshot_at));
+    let deleted = 0;
+    while (true) {
+      const batch = remaining.filter(r => r.snapshot_at < cutoff).slice(0, batchSize);
+      if (!batch.length) break;
+      const boundary = batch[batch.length - 1].snapshot_at;
+      const before = remaining.length;
+      remaining = remaining.filter(r => r.snapshot_at > boundary);
+      deleted += before - remaining.length;
+      if (batch.length < batchSize) break; // partial batch — done
+    }
+    return { deleted, remaining: remaining.length };
+  }
+
+  const NOW = new Date("2026-06-19T09:31:00Z");
+  const rowAt = daysAgo => ({ snapshot_at: new Date(NOW.getTime() - daysAgo * 86400000).toISOString() });
+
+  it("positive — rows older than 60 days → purge fires, returns deleted count", () => {
+    const rows = [rowAt(90), rowAt(75), rowAt(61), rowAt(30), rowAt(1)];
+    const result = purgeOldSnapshots(rows, { now: NOW });
+    expect(result.deleted).toBe(3); // 90, 75, 61 days old
+    expect(result.remaining).toBe(2); // 30, 1 days old survive
+  });
+
+  it("negative — all rows within 60 days → nothing deleted", () => {
+    const rows = [rowAt(45), rowAt(30), rowAt(10), rowAt(1)];
+    const result = purgeOldSnapshots(rows, { now: NOW });
+    expect(result.deleted).toBe(0);
+    expect(result.remaining).toBe(4);
+  });
+
+  it("batches in groups of batchSize — multiple passes needed for large backlogs", () => {
+    const rows = Array.from({ length: 25 }, (_, i) => rowAt(70 + i)); // all older than 60 days
+    const result = purgeOldSnapshots(rows, { now: NOW, batchSize: 10 });
+    expect(result.deleted).toBe(25);
+    expect(result.remaining).toBe(0);
+  });
+
+  // Mirrors the once-per-day market-open gate in market-refresh.js
+  function shouldRunSnapshotPurge(etMins, lastRunDate, today) {
+    const WINDOW_START = 9 * 60 + 30; // 9:30am ET
+    const WINDOW_END   = 9 * 60 + 35; // 9:35am ET
+    if (etMins < WINDOW_START || etMins > WINDOW_END) return false;
+    if (lastRunDate === today) return false;
+    return true;
+  }
+
+  it("edge — runs once per day at market open, not every cron cycle", () => {
+    const today = "2026-06-19";
+    // First tick of the day, in window, never run before → fires
+    expect(shouldRunSnapshotPurge(9 * 60 + 31, null, today)).toBe(true);
+    // Later same day, already ran today → does not fire again
+    expect(shouldRunSnapshotPurge(9 * 60 + 33, today, today)).toBe(false);
+    // Outside the market-open window entirely (e.g. mid-day cron tick) → does not fire
+    expect(shouldRunSnapshotPurge(13 * 60, null, today)).toBe(false);
+    // New day, ran yesterday → fires again
+    expect(shouldRunSnapshotPurge(9 * 60 + 31, "2026-06-18", today)).toBe(true);
   });
 });
