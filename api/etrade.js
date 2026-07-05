@@ -16,6 +16,7 @@ const ETRADE_BASE     = "https://api.etrade.com";
 const APP_URL         = "https://options-tracker-five.vercel.app";
 const SUPABASE_URL    = process.env.VITE_SUPABASE_URL;
 const SUPABASE_KEY    = process.env.VITE_SUPABASE_ANON_KEY;
+const SUPABASE_SVC_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 const CONSUMER_KEY    = process.env.ETRADE_CONSUMER_KEY;
 const CONSUMER_SECRET = process.env.ETRADE_CONSUMER_SECRET;
 
@@ -70,7 +71,7 @@ function buildAuthHeader(method, url, oauthToken, oauthTokenSecret, extraParams 
 
 async function etradeGet(path, queryParams = {}) {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.etrade_tokens`, {
-    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+    headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` },
   });
   const t = (await r.json())?.[0]?.cols;
   if (!t?.accessToken || !t?.accessTokenSecret) {
@@ -104,14 +105,14 @@ async function etradeGet(path, queryParams = {}) {
 async function saveTokens(tokens) {
   await fetch(`${SUPABASE_URL}/rest/v1/col_prefs`, {
     method: "POST",
-    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
+    headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
     body: JSON.stringify({ id: "etrade_tokens", cols: { ...tokens, savedAt: new Date().toISOString() }, updated_at: new Date().toISOString() }),
   });
 }
 
 async function supabaseGet(path) {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+    headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` },
   });
   return r.json();
 }
@@ -278,7 +279,7 @@ export default async function handler(req, res) {
       if (!oauthVerifier) return res.status(400).send("<pre>Missing oauth_verifier</pre>");
 
       const r      = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.etrade_tokens`, {
-        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+        headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` },
       });
       const stored = (await r.json())?.[0]?.cols;
       if (!stored?.requestToken || !stored?.requestTokenSecret) {
@@ -328,7 +329,7 @@ export default async function handler(req, res) {
     // ── renew — extend ETrade access token (valid same-day only) ─────────────
     if (action === "renew") {
       const tokenRes = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.etrade_tokens`, {
-        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+        headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` },
       });
       const t = (await tokenRes.json())?.[0]?.cols;
       if (!t?.accessToken) return res.status(500).json({ error: "No ETrade token found — re-authorize first at /api/etrade?action=auth" });
@@ -360,7 +361,7 @@ export default async function handler(req, res) {
 
       await fetch(`${SUPABASE_URL}/rest/v1/col_prefs`, {
         method: "POST",
-        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
+        headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
         body: JSON.stringify({ id: "etrade_tokens", cols: renewed, updated_at: new Date().toISOString() }),
       });
 
@@ -383,7 +384,7 @@ export default async function handler(req, res) {
           // Fetch balance — with realTimeNAV=true, Computed.RealTimeValues.totalAccountValue
           // is the full NAV (equity + cash + options). Use it as primary, fall back to equity+cash sum.
           try {
-            const bal     = await etradeGet(`/v1/accounts/${acct.accountIdKey}/balance`, { instType: "BROKERAGE", realTimeNAV: "true" });
+            const bal     = await etradeGet(`/v1/accounts/${acct.accountIdKey}/balance`, { realTimeNAV: "true" });
             const computed = bal?.BalanceResponse?.Computed ?? {};
             const rtv      = computed?.RealTimeValues ?? {};
 
@@ -520,12 +521,12 @@ export default async function handler(req, res) {
       // Check contracts table
       const existingContractsRes = await fetch(
         `${SUPABASE_URL}/rest/v1/contracts?select=schwab_transaction_id&schwab_transaction_id=not.is.null`,
-        { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+        { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }
       );
       // Check pending_transactions table
       const existingPendingRes = await fetch(
         `${SUPABASE_URL}/rest/v1/pending_transactions?select=schwab_transaction_id`,
-        { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+        { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }
       );
       const existingIds = new Set([
         ...(await existingContractsRes.json()).map(r => String(r.schwab_transaction_id)),
@@ -588,7 +589,7 @@ export default async function handler(req, res) {
       const insertRes = await fetch(`${SUPABASE_URL}/rest/v1/pending_transactions`, {
         method: "POST",
         headers: {
-          apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`,
+          apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`,
           "Content-Type": "application/json", Prefer: "resolution=ignore-duplicates",
         },
         body: JSON.stringify(toInsert),
@@ -637,7 +638,7 @@ export default async function handler(req, res) {
       // Step 3: load all unlinked ETrade contracts from DB
       const contractsRes = await fetch(
         `${SUPABASE_URL}/rest/v1/contracts?select=id,stock,type,opt_type,strike,expires,qty,premium,account,date_exec,schwab_transaction_id&account=like.Etrade*&schwab_transaction_id=is.null`,
-        { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+        { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }
       );
       const unlinked = await contractsRes.json();
 
@@ -716,7 +717,7 @@ export default async function handler(req, res) {
         const r = await fetch(`${SUPABASE_URL}/rest/v1/contracts?id=eq.${m.contractId}`, {
           method: "PATCH",
           headers: {
-            apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`,
+            apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`,
             "Content-Type": "application/json", Prefer: "return=minimal",
           },
           body: JSON.stringify({
