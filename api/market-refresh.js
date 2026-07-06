@@ -2429,7 +2429,7 @@ export default async function handler(req, res) {
                   // ── Write scoring_factor_values for this auto-sto signal ──────────
                   if (sigId) {
                     try {
-                      const liveChainAuto = await fetchLiveChain(token, symbol);
+                      const liveChainAuto = Object.keys(chainData).some(k => k.startsWith(symbol + "|")) ? chainData : await fetchLiveChain(token, symbol);
                       const rsi14  = computeRSI(dailyCandles[symbol] || []);
                       const ivPct  = getAtmIv(liveChainAuto, symbol, stockPrice);
                       const fib    = computeFibFactors(dailyCandles[symbol] || [], stockPrice);

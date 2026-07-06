@@ -1826,3 +1826,44 @@ describe("Auto-purge option_snapshots", () => {
     expect(shouldRunSnapshotPurge(9 * 60 + 31, "2026-06-18", today)).toBe(true);
   });
 });
+
+// ── Auto-STO scoring factors — reuse chainData, avoid redundant Schwab call ──
+// Mirrors api/market-refresh.js liveChainAuto resolution (~line 2432): reuses the
+// in-memory chainData for this symbol if present, only falling back to a live
+// fetchLiveChain call (the one that was blowing past Vercel's 10s timeout for
+// ETrade STOs) when chainData has no entries for the symbol.
+describe("Auto-STO scoring factors — chainData reuse", () => {
+  function resolveLiveChainAuto(chainData, symbol, fetchLiveChainFn) {
+    const hasChainData = Object.keys(chainData).some(k => k.startsWith(symbol + "|"));
+    return hasChainData ? chainData : fetchLiveChainFn(symbol);
+  }
+
+  it("does NOT call fetchLiveChain when chainData already has entries for the symbol", () => {
+    let calls = 0;
+    const fetchLiveChainFn = (symbol) => { calls++; return { [`${symbol}|2026-07-17`]: { calls: [], puts: [] } }; };
+    const chainData = { "AMZN|2026-07-17": { calls: [{ strikePrice: 220, bid: 1, ask: 1.2 }], puts: [] } };
+
+    const result = resolveLiveChainAuto(chainData, "AMZN", fetchLiveChainFn);
+
+    expect(calls).toBe(0);
+    expect(result).toBe(chainData);
+  });
+
+  it("falls back to fetchLiveChain when chainData has no entries for the symbol", () => {
+    let calls = 0;
+    const fetchLiveChainFn = (symbol) => { calls++; return { [`${symbol}|2026-07-17`]: { calls: [], puts: [] } }; };
+    const chainData = { "NVDA|2026-07-17": { calls: [], puts: [] } }; // different symbol only
+
+    const result = resolveLiveChainAuto(chainData, "AMZN", fetchLiveChainFn);
+
+    expect(calls).toBe(1);
+    expect(result).toEqual({ "AMZN|2026-07-17": { calls: [], puts: [] } });
+  });
+
+  it("falls back to fetchLiveChain when chainData is empty", () => {
+    let calls = 0;
+    const fetchLiveChainFn = () => { calls++; return {}; };
+    const result = resolveLiveChainAuto({}, "AMZN", fetchLiveChainFn);
+    expect(calls).toBe(1);
+  });
+});
