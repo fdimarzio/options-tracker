@@ -2558,27 +2558,44 @@ export default async function handler(req, res) {
                           });
                           console.log(`[auto-sto] chase started on order ${tradeOrderId} — ask $${limitPrice} → floor (mid) $${chaseFloor}`);
                         }
-                        // Tag newly created contract with open_method=auto
-                        // The contract was just created by schwab-orders — find it by matching
-                        // stock + strike + expires + account + status=Open, created in last 60s
-                        try {
-                          const recentRes = await fetch(
-                            `${SUPABASE_URL}/rest/v1/contracts?select=id&stock=eq.${symbol}&strike=eq.${bestStrike}&expires=eq.${bestExpiry}&account=eq.${encodeURIComponent(account)}&status=eq.Open&order=id.desc&limit=1`,
-                            { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }
-                          );
-                          const recentRows = await recentRes.json();
-                          if (recentRows?.[0]?.id) {
-                            await fetch(`${SUPABASE_URL}/rest/v1/contracts?id=eq.${recentRows[0].id}`, {
-                              method: "PATCH",
-                              headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
-                              body: JSON.stringify({
-                              open_method: "auto",
-                              stop_loss_multiplier: bestDTE <= 3 ? null : 2.0, // task #15: no stop loss for DTE≤3
-                            }),
-                            });
-                            console.log(`[auto-sto] tagged contract ${recentRows[0].id} open_method=auto stop_loss=${bestDTE<=3?"null (DTE≤3)":"2.0"}`);
+                        if (isEtrade) {
+                          // ETrade contracts don't exist yet — they only get created later by
+                          // auto-import once the fill is detected (unlike Schwab, where preview-new/
+                          // approve-new creates the contract row synchronously). Tag the trade_orders
+                          // row instead so auto-import can hand off open_method=auto on fill.
+                          if (tradeOrderId) {
+                            try {
+                              await fetch(`${SUPABASE_URL}/rest/v1/trade_orders?id=eq.${tradeOrderId}`, {
+                                method: "PATCH",
+                                headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+                                body: JSON.stringify({ approved_by: "skynet_auto_sto" }),
+                              });
+                              console.log(`[auto-sto] tagged trade_order ${tradeOrderId} approved_by=skynet_auto_sto — auto-import will set open_method=auto on fill`);
+                            } catch(e) { console.warn(`[auto-sto] approved_by tag failed:`, e.message); }
                           }
-                        } catch(e) { console.warn(`[auto-sto] open_method tag failed:`, e.message); }
+                        } else {
+                          // Tag newly created contract with open_method=auto
+                          // The contract was just created by schwab-orders — find it by matching
+                          // stock + strike + expires + account + status=Open, created in last 60s
+                          try {
+                            const recentRes = await fetch(
+                              `${SUPABASE_URL}/rest/v1/contracts?select=id&stock=eq.${symbol}&strike=eq.${bestStrike}&expires=eq.${bestExpiry}&account=eq.${encodeURIComponent(account)}&status=eq.Open&order=id.desc&limit=1`,
+                              { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }
+                            );
+                            const recentRows = await recentRes.json();
+                            if (recentRows?.[0]?.id) {
+                              await fetch(`${SUPABASE_URL}/rest/v1/contracts?id=eq.${recentRows[0].id}`, {
+                                method: "PATCH",
+                                headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+                                body: JSON.stringify({
+                                open_method: "auto",
+                                stop_loss_multiplier: bestDTE <= 3 ? null : 2.0, // task #15: no stop loss for DTE≤3
+                              }),
+                              });
+                              console.log(`[auto-sto] tagged contract ${recentRows[0].id} open_method=auto stop_loss=${bestDTE<=3?"null (DTE≤3)":"2.0"}`);
+                            }
+                          } catch(e) { console.warn(`[auto-sto] open_method tag failed:`, e.message); }
+                        }
 
                         await sendPushover(
                           `🤖 Auto-STO PLACED: ${symbol} $${bestStrike} Call`,

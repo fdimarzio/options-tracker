@@ -217,8 +217,12 @@ function parseSchwabTx(tx, stocksData, accountNumber) {
 
   const symbol   = inst.underlyingSymbol || inst.symbol?.slice(0, 6).trim();
   const dateExec = new Date(tx.tradeDate || tx.time).toLocaleString("en-CA", { timeZone: "America/New_York" }).slice(0, 10);
+  const settlementDate = tx.settlementDate
+    ? new Date(tx.settlementDate).toLocaleString("en-CA", { timeZone: "America/New_York" }).slice(0, 10)
+    : null;
   return {
     schwab_transaction_id: String(tx.activityId),
+    order_id: tx.orderId != null ? String(tx.orderId) : null,
     stock:    symbol?.toUpperCase(),
     type:     inst.putCall === "CALL" ? "Call" : "Put",
     opt_type: optType,
@@ -227,6 +231,7 @@ function parseSchwabTx(tx, stocksData, accountNumber) {
     qty:      Math.abs(optItem.amount || 0),
     premium:  Math.round(netAmt * 100) / 100,
     date_exec: dateExec,
+    settlement_date: settlementDate,
     account:  accountNumber ? `Schwab ${String(accountNumber).slice(-4)}` : "Schwab",
     price_at_execution: stocksData?.[symbol?.toUpperCase()]?.currentPrice || null,
     raw: tx,
@@ -255,6 +260,7 @@ function parseEtradeTx(tx, stocksData) {
   const account  = ETRADE_ACCOUNTS[String(tx.accountId)] || `ETrade ${String(tx.accountId).slice(-4)}`;
   return {
     schwab_transaction_id: `etrade_${tx.transactionId}`,
+    order_id: null, // ETrade fills don't share a comparable parent-order id in this payload
     stock:    symbol,
     type:     prod.callPut === "CALL" ? "Call" : "Put",
     opt_type: optType,
@@ -267,6 +273,111 @@ function parseEtradeTx(tx, stocksData) {
     exercised: optType === "ASSIGNED" ? "Yes" : "No",
     price_at_execution: stocksData?.[symbol]?.currentPrice || null,
     raw: tx,
+  };
+}
+
+// ── Equity / non-option parsers ───────────────────────────────────────────────
+
+// Maps Schwab transaction types to stock_transactions.transaction_type values
+const SCHWAB_EQUITY_TYPE_MAP = {
+  DIVIDEND:            "DIVIDEND",
+  INTEREST:            "INTEREST",
+  TRANSFER:            "TRANSFER",
+  JOURNAL:             "TRANSFER",
+  WIRE_IN:             "TRANSFER",
+  WIRE_OUT:            "TRANSFER",
+  ACH_RECEIPT:         "TRANSFER",
+  ACH_DISBURSEMENT:    "TRANSFER",
+  MARGIN_INTEREST:     "INTEREST",
+  OTHER:               "OTHER",
+};
+
+function parseSchwabEquityTx(tx, accountNumber) {
+  const items   = tx.transferItems || [];
+  // Skip options — already handled by parseSchwabTx
+  if (items.find(i => i.instrument?.assetType === "OPTION")) return null;
+
+  const netAmt   = tx.netAmount || 0;
+  const type     = tx.type || "";
+  const desc     = tx.description || "";
+  const dateExec = new Date(tx.tradeDate || tx.time).toLocaleString("en-CA", { timeZone: "America/New_York" }).slice(0, 10);
+  const settlementDate = tx.settlementDate
+    ? new Date(tx.settlementDate).toLocaleString("en-CA", { timeZone: "America/New_York" }).slice(0, 10)
+    : null;
+
+  let txType;
+  if (type === "TRADE") {
+    // Equity buy or sell — must have a recognisable equity item
+    const equityItem = items.find(i => ["EQUITY","ETF","MUTUAL_FUND"].includes(i.instrument?.assetType));
+    if (!equityItem) return null;
+    txType = netAmt < 0 ? "BUY" : "SELL";
+  } else {
+    txType = SCHWAB_EQUITY_TYPE_MAP[type] ?? "OTHER";
+  }
+
+  const equityItem = items.find(i => i.instrument?.symbol);
+  const symbol     = equityItem?.instrument?.symbol?.trim().toUpperCase() || null;
+  const quantity   = equityItem ? Math.abs(equityItem.amount || 0) || null : null;
+  const price      = equityItem?.price || (quantity && netAmt ? Math.round(Math.abs(netAmt / quantity) * 10000) / 10000 : null);
+
+  return {
+    schwab_transaction_id: String(tx.activityId),
+    symbol,
+    transaction_type: txType,
+    asset_type:       type === "TRADE" ? "EQUITY" : type,
+    quantity:         quantity || null,
+    price:            price    || null,
+    net_amount:       Math.round(netAmt * 100) / 100,
+    trade_date:       new Date(tx.tradeDate || tx.time).toISOString(),
+    settlement_date:  settlementDate,
+    account:          accountNumber ? `Schwab ${String(accountNumber).slice(-4)}` : "Schwab",
+    description:      desc,
+  };
+}
+
+// ETrade transaction types that are NOT options
+const ETRADE_EQUITY_TYPE_MAP = {
+  "Bought":        "BUY",
+  "Sold":          "SELL",
+  "Dividend":      "DIVIDEND",
+  "Interest":      "INTEREST",
+  "Transfer":      "TRANSFER",
+  "Journal":       "TRANSFER",
+  "Wire":          "TRANSFER",
+  "Contribution":  "TRANSFER",
+  "Distribution":  "TRANSFER",
+  "Fee":           "FEE",
+  "Tax":           "FEE",
+  "Other":         "OTHER",
+};
+
+function parseEtradeEquityTx(tx) {
+  const br   = tx.brokerage;
+  const prod = br?.product;
+  // Skip options — already handled by parseEtradeTx
+  if (prod?.securityType === "OPTN") return null;
+
+  const txType = ETRADE_EQUITY_TYPE_MAP[tx.transactionType];
+  if (!txType) return null;
+
+  const symbol   = prod?.symbol?.toUpperCase() || null;
+  const dateExec = new Date(tx.transactionDate).toLocaleString("en-CA", { timeZone: "America/New_York" }).slice(0, 10);
+  const account  = ETRADE_ACCOUNTS[String(tx.accountId)] || `ETrade ${String(tx.accountId).slice(-4)}`;
+  const qty      = br?.quantity ? Math.abs(br.quantity) : null;
+  const price    = br?.price    ? Math.round(Math.abs(br.price) * 10000) / 10000 : null;
+
+  return {
+    schwab_transaction_id: `etrade_${tx.transactionId}`,
+    symbol,
+    transaction_type: txType,
+    asset_type:       prod?.securityType || (["DIVIDEND","INTEREST"].includes(txType) ? txType : "EQUITY"),
+    quantity:         qty   || null,
+    price:            price || null,
+    net_amount:       Math.round((tx.amount || 0) * 100) / 100,
+    trade_date:       new Date(tx.transactionDate).toISOString(),
+    settlement_date:  null, // ETrade doesn't provide settlement date
+    account,
+    description:      tx.description || "",
   };
 }
 
@@ -398,20 +509,20 @@ function matchToOpen(parsed, openContracts) {
     c.expires === parsed.expires
   );
   if (!candidates.length) return { matchId: null, matchConfidence: "unmatched" };
-  // Prefer same account + exact qty
-  const sameAcctExact = candidates.find(c => c.account === parsed.account && +c.qty === +parsed.qty);
-  if (sameAcctExact) return { matchId: sameAcctExact.id, matchConfidence: "exact" };
-  // Exact qty any account (only if unique)
-  const exactQty = candidates.filter(c => +c.qty === +parsed.qty);
-  if (exactQty.length === 1) return { matchId: exactQty[0].id, matchConfidence: "exact" };
-  // Same account any qty
+
+  // Always filter to same account — NEVER match across accounts
   const sameAcct = candidates.filter(c => c.account === parsed.account);
-  if (sameAcct.length) {
-    const best = sameAcct.reduce((a,b) => Math.abs(+a.qty - +parsed.qty) < Math.abs(+b.qty - +parsed.qty) ? a : b);
-    return { matchId: best.id, matchConfidence: "partial" };
+  if (!sameAcct.length) {
+    console.warn(`[matchToOpen] no same-account match for ${parsed.opt_type} ${parsed.stock} $${parsed.strike} ${parsed.expires} (${parsed.account}) — candidates are in: ${candidates.map(c=>c.account).join(", ")}`);
+    return { matchId: null, matchConfidence: "unmatched" };
   }
-  // Fallback closest qty
-  const best = candidates.reduce((a,b) => Math.abs(+a.qty - +parsed.qty) < Math.abs(+b.qty - +parsed.qty) ? a : b);
+
+  // Prefer exact qty
+  const sameAcctExact = sameAcct.find(c => +c.qty === +parsed.qty);
+  if (sameAcctExact) return { matchId: sameAcctExact.id, matchConfidence: "exact" };
+
+  // Closest qty within same account
+  const best = sameAcct.reduce((a,b) => Math.abs(+a.qty - +parsed.qty) < Math.abs(+b.qty - +parsed.qty) ? a : b);
   return { matchId: best.id, matchConfidence: "partial" };
 }
 
@@ -430,15 +541,15 @@ async function alreadyHandledByTradeOrder(parsed) {
       Math.abs(new Date(o.filled_at || o.created_at) - new Date(parsed.date_exec)) < 2 * 86400000
     );
     if (match) {
-      console.log(`[auto-import] skipping orphan BTC — already handled by trade_order ${match.id}`);
-      return true;
+      console.log(`[auto-import] BTC already handled by trade_order ${match.id} — will create BTC row but skip re-closing parent`);
+      return { skip: false, skipParentClose: true, tradeOrderId: match.id };
     }
   } catch(e) { console.warn("[auto-import] alreadyHandledByTradeOrder check failed:", e.message); }
   return false;
 }
 
 // ── Commit a transaction to contracts table ───────────────────────────────────
-async function commitTx(parsed, matchId, openContracts, stocksData, committedClosers = {}) {
+async function commitTx(parsed, matchId, openContracts, stocksData, committedClosers = {}, opts = {}) {
 
   // ── BTC/STC split fill merge: if a same-day closer for same stock/strike/expires/account
   // already exists in this batch (in-memory), merge into it instead of inserting a new row.
@@ -466,11 +577,12 @@ async function commitTx(parsed, matchId, openContracts, stocksData, committedClo
         ...(profit    != null ? { profit }     : {}),
         ...(profitPct != null ? { profit_pct: profitPct } : {}),
         ...(daysHeld  != null ? { days_held: daysHeld }  : {}),
-        notes: `Split fill merged: +${parsed.qty} @ $${parsed.premium} (tx: ${parsed.schwab_transaction_id})`,
+        notes: `${existingCloser.notes ? existingCloser.notes + "\n" : ""}Split fill merged: +${parsed.qty} @ $${parsed.premium} (tx: ${parsed.schwab_transaction_id})`,
       });
       // Update in-memory tracker
       existingCloser.qty     = newQty;
       existingCloser.premium = newPremium;
+      existingCloser.notes   = `${existingCloser.notes ? existingCloser.notes + "\n" : ""}Split fill merged: +${parsed.qty} @ $${parsed.premium} (tx: ${parsed.schwab_transaction_id})`;
       // Also update parent cost_to_close on STO row
       if (existingCloser.parent) {
         await sbPatch("contracts", existingCloser.parent.id, {
@@ -503,31 +615,82 @@ async function commitTx(parsed, matchId, openContracts, stocksData, committedClo
       c.status                  === "Open"
     );
     if (existing) {
-      // Guard: don't merge if this transaction was already merged into this contract
-      const alreadyMerged = existing.notes?.includes(String(parsed.schwab_transaction_id));
+      // ── Idempotency: never merge the exact same leg twice ──────────────────
+      // (upstream schwab_transaction_id/fingerprint dedup should already prevent
+      // this from reaching commitTx, but this is a cheap last-line safety check)
+      const alreadyMerged = existing.notes?.includes(`tx: ${parsed.schwab_transaction_id}`);
       if (alreadyMerged) {
-        console.log(`[auto-import] skipping already-merged tx ${parsed.schwab_transaction_id} into contract ${existing.id}`);
-        return;
+        console.log(`[auto-import] partial-fill: leg tx ${parsed.schwab_transaction_id} already merged into contract ${existing.id} — skipping duplicate`);
+        return true;
       }
-      // Guard: if existing contract qty >= incoming qty on ETrade, this is a re-issued
-      // partial fill already counted — skip to avoid inflating qty.
-      // Schwab never re-issues partials so this guard does NOT apply there.
-      const isEtrade = parsed.account?.toLowerCase().startsWith("etrade");
-      if (isEtrade && +existing.qty >= +parsed.qty) {
-        console.log(`[auto-import] skipping re-issued ETrade partial: ${parsed.stock} ${parsed.opt_type} $${parsed.strike} ${parsed.expires} ${parsed.account} — existing qty ${existing.qty} >= incoming qty ${parsed.qty}`);
-        return;
+
+      // ── Partial-fill merge safety: prefer order_id match (same parent Schwab
+      // order, multiple fill legs — e.g. one manual market order filled across
+      // several counterparties). This is the common, legitimate case and does
+      // NOT require a trade_orders row, since manual trades placed directly at
+      // the broker never create one.
+      //
+      // Falls back to the older trade_orders.fill_qty guard only when order_id
+      // is unavailable or doesn't match — this preserves protection against the
+      // 2026-06-18 incident pattern (multiple distinct orders coincidentally
+      // matching on stock/strike/expiry/account/date) without blocking the much
+      // more common manual-fill case.
+      const orderIdMatch = parsed.order_id != null && existing.order_id != null && parsed.order_id === existing.order_id;
+
+      const guard = async () => {
+        if (orderIdMatch) {
+          console.log(`[auto-import] partial-fill guard: order_id match (${parsed.order_id}) for ${parsed.stock} $${parsed.strike} ${parsed.expires} — merge approved`);
+          return true;
+        }
+        try {
+          const toRes = await fetch(
+            `${SUPABASE_URL}/rest/v1/trade_orders?select=fill_qty,qty&ticker=eq.${encodeURIComponent(parsed.stock)}&strike=eq.${encodeURIComponent(parsed.strike)}&expires=eq.${encodeURIComponent(parsed.expires)}&account=eq.${encodeURIComponent(parsed.account)}&side=eq.SELL&status=eq.filled&order=submitted_at.desc&limit=1`,
+            { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }
+          );
+          const toRows = await toRes.json();
+          const filledQty = toRows?.[0]?.fill_qty ?? toRows?.[0]?.qty ?? null;
+          if (filledQty == null) {
+            console.log(`[auto-import] partial-fill guard: no order_id match and no matching trade_order found for ${parsed.stock} $${parsed.strike} ${parsed.expires} ${parsed.account} — routing to anomalies`);
+            return false;
+          }
+          const mergedQty = (+existing.qty || 0) + (+parsed.qty || 0);
+          if (mergedQty > filledQty) {
+            console.log(`[auto-import] partial-fill guard: merge would exceed fill_qty (${existing.qty}+${parsed.qty}=${mergedQty} > ${filledQty}) for ${parsed.stock} $${parsed.strike} — routing to anomalies`);
+            return false;
+          }
+          console.log(`[auto-import] partial-fill guard: merge validated via trade_orders (${existing.qty}+${parsed.qty}=${mergedQty} ≤ fill_qty ${filledQty}) for ${parsed.stock} $${parsed.strike}`);
+          return true;
+        } catch(e) {
+          console.warn(`[auto-import] partial-fill guard lookup failed:`, e.message);
+          return false; // conservative: route to anomalies on error
+        }
+      };
+      const mergeOk = await guard();
+      if (!mergeOk) {
+        return {
+          needsReview: true,
+          anomalyData: {
+            ...parsed,
+            anomaly_type: "partial_fill_needs_review",
+            notes: `Potential partial fill for open ${parsed.opt_type} ${parsed.stock} $${parsed.strike} ${parsed.expires} (${parsed.account}) — matches existing open contract ${existing.id} (current qty ${existing.qty}, premium $${existing.premium}). order_id ${parsed.order_id ?? "missing"} did not match existing order_id ${existing.order_id ?? "missing"}, and no matching trade_orders fill found — review against actual broker position size before merging manually.`,
+            raw: parsed.raw,
+          },
+        };
       }
+      // Merge validated — safe to apply
       const newQty     = (+existing.qty || 0) + (+parsed.qty || 0);
       const newPremium = Math.round(((+existing.premium || 0) + (+parsed.premium || 0)) * 100) / 100;
+      const mergedNote = `${existing.notes ? existing.notes + "\n" : ""}Partial fill merged: ${parsed.qty} @ $${parsed.premium} on ${parsed.date_exec} (tx: ${parsed.schwab_transaction_id})`;
       await sbPatch("contracts", existing.id, {
         qty:                    newQty,
         premium:                newPremium,
         schwab_transaction_id:  existing.schwab_transaction_id, // keep original
-        notes:                  `Partial fill merged: ${parsed.qty} @ $${parsed.premium} on ${parsed.date_exec} (tx: ${parsed.schwab_transaction_id})`,
+        order_id:               existing.order_id ?? parsed.order_id ?? null, // preserve/backfill parent order id
+        notes:                  mergedNote,
       });
-      // Update in-memory openContracts so subsequent logic sees the merged state
       existing.qty     = newQty;
       existing.premium = newPremium;
+      existing.notes   = mergedNote;
       console.log(`[auto-import] partial fill merged: ${parsed.stock} ${parsed.opt_type} $${parsed.strike} ${parsed.expires} qty ${existing.qty - (+parsed.qty||0)}+${parsed.qty}=${newQty}`);
       return true;
     }
@@ -547,8 +710,25 @@ async function commitTx(parsed, matchId, openContracts, stocksData, committedClo
   }
 
   // Insert the transaction
+  // ── Detect if this STO/BTO was placed by Skynet (has a matching trade_order) ──
+  let openMethod = null;
+  if (["STO","BTO"].includes(parsed.opt_type) && parsed.stock && parsed.strike && parsed.expires && parsed.account) {
+    try {
+      const toCheck = await fetch(
+        `${SUPABASE_URL}/rest/v1/trade_orders?ticker=eq.${encodeURIComponent(parsed.stock)}&strike=eq.${parsed.strike}&expires=eq.${parsed.expires}&account=eq.${encodeURIComponent(parsed.account)}&opt_type=eq.${parsed.opt_type}&status=in.(filled,submitted)&approved_by=eq.skynet_auto_sto&select=id,auto_execute&limit=1`,
+        { headers: svcHeaders }
+      );
+      const toRows = toCheck.ok ? await toCheck.json() : [];
+      if (toRows?.length > 0) {
+        openMethod = 'auto';
+        console.log(`[auto-import] detected Skynet STO for ${parsed.stock} $${parsed.strike} — setting open_method=auto (trade_order ${toRows[0].id})`);
+      }
+    } catch(e) { console.warn('[auto-import] open_method trade_order check failed:', e.message); }
+  }
+
   const row = {
     schwab_transaction_id: parsed.schwab_transaction_id,
+    order_id: parsed.order_id ?? null,
     stock:    parsed.stock,
     type:     parsed.type,
     opt_type: parsed.opt_type === "ASSIGNED" ? "BTC" : parsed.opt_type,
@@ -560,6 +740,7 @@ async function commitTx(parsed, matchId, openContracts, stocksData, committedClo
             : ["STO","STC"].includes(parsed.opt_type) ?  Math.abs(parsed.premium || 0)
             : parsed.premium,
     date_exec: parsed.date_exec,
+    settlement_date: parsed.settlement_date || null,
     account:  parsed.account,
     status:   ["BTC","STC","ASSIGNED"].includes(parsed.opt_type) ? "Closed" : "Open",
     price_at_execution: parsed.price_at_execution,
@@ -567,7 +748,47 @@ async function commitTx(parsed, matchId, openContracts, stocksData, committedClo
     created_via: "Auto Import",
     parent_id: matchId || null,
     strategy:  inferStrategy(parsed.opt_type, parsed.type, parsed.stock, stocksData),
+    open_method: openMethod,
   };
+
+  // Pre-check: if this transaction ID already exists in DB (any status), skip
+  if (parsed.schwab_transaction_id) {
+    const existCheck = await fetch(
+      `${SUPABASE_URL}/rest/v1/contracts?schwab_transaction_id=eq.${encodeURIComponent(parsed.schwab_transaction_id)}&select=id&limit=1`,
+      { headers: sbHeaders }
+    );
+    const existRows = existCheck.ok ? await existCheck.json() : [];
+    if (existRows?.length > 0) {
+      console.log(`[auto-import] skipping already-imported tx ${parsed.schwab_transaction_id} (id ${existRows[0].id})`);
+      return;
+    }
+  }
+
+  // ETrade composite fingerprint dedup: same trade can appear with different transaction IDs
+  // Fingerprint = stock + opt_type + strike + expires + account + date_exec + premium (±$0.10)
+  if (parsed.schwab_transaction_id?.startsWith('etrade_') && parsed.opt_type && parsed.expires) {
+    try {
+      const premiumLow  = (Math.abs(parseFloat(parsed.premium) || 0) - 0.10).toFixed(2);
+      const premiumHigh = (Math.abs(parseFloat(parsed.premium) || 0) + 0.10).toFixed(2);
+      const sign = ['STO','STC'].includes(parsed.opt_type) ? 'gte' : 'lte';
+      const fpCheck = await fetch(
+        `${SUPABASE_URL}/rest/v1/contracts?stock=eq.${encodeURIComponent(parsed.stock)}&opt_type=eq.${parsed.opt_type}&strike=eq.${parsed.strike}&expires=eq.${parsed.expires}&account=eq.${encodeURIComponent(parsed.account)}&date_exec=eq.${parsed.date_exec}&select=id,schwab_transaction_id,premium&limit=5`,
+        { headers: sbHeaders }
+      );
+      const fpRows = fpCheck.ok ? await fpCheck.json() : [];
+      const fpMatch = fpRows.find(r => Math.abs(Math.abs(parseFloat(r.premium)) - Math.abs(parseFloat(parsed.premium))) <= 0.10);
+      if (fpMatch) {
+        console.log(`[auto-import] skipping ETrade re-issued tx ${parsed.schwab_transaction_id} — fingerprint matches existing contract ${fpMatch.id} (tx: ${fpMatch.schwab_transaction_id}, premium: ${fpMatch.premium})`);
+        // Tag the duplicate tx ID on the existing row so future pre-checks catch it faster
+        await fetch(`${SUPABASE_URL}/rest/v1/contracts?id=eq.${fpMatch.id}`, {
+          method: 'PATCH',
+          headers: { ...sbHeaders, Prefer: 'return=minimal' },
+          body: JSON.stringify({ schwab_transaction_id: parsed.schwab_transaction_id }),
+        }).catch(() => {});
+        return;
+      }
+    } catch(e) { console.warn('[auto-import] ETrade fingerprint check failed:', e.message); }
+  }
 
   let inserted;
   try {
@@ -614,8 +835,9 @@ async function commitTx(parsed, matchId, openContracts, stocksData, committedClo
       status:    "Open",
       notes:     null,
       schwab_transaction_id: parsed.schwab_transaction_id,
+      order_id:  parsed.order_id ?? null,
     });
-    console.log(`[auto-import] new open added to in-memory list: ${parsed.stock} ${parsed.opt_type} $${parsed.strike} qty ${parsed.qty} @ ${parsed.account}`);
+    console.log(`[auto-import] new open added to in-memory list: ${parsed.stock} ${parsed.opt_type} $${parsed.strike} qty ${parsed.qty} @ ${parsed.account} order_id=${parsed.order_id ?? "none"}`);
   }
 
   // ── Track newly inserted BTC/STC so subsequent split fills can merge into it
@@ -906,7 +1128,8 @@ export default async function handler(req, res) {
     const openContracts = await sbGet(`contracts?select=id,stock,type,opt_type,strike,expires,qty,account,premium,date_exec,trade_rule,notes,status,schwab_transaction_id&status=eq.Open`);
 
     // ── Fetch Schwab ──────────────────────────────────────────────────────────
-    const schwabTxs = [];
+    const schwabTxs       = [];
+    const schwabEquityTxs = [];
     try {
       const token    = await getValidToken();
       const accts    = await fetch(`${SCHWAB_BASE}/trader/v1/accounts/accountNumbers`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } }).then(r => r.json());
@@ -914,20 +1137,24 @@ export default async function handler(req, res) {
       const endUTC   = new Date(new Date(today + "T05:00:00.000Z").getTime() + 86400000).toISOString();
       for (const acct of (Array.isArray(accts) ? accts : [])) {
         if (!acct.hashValue) continue;
-        const txData = await fetch(`${SCHWAB_BASE}/trader/v1/accounts/${acct.hashValue}/transactions?types=TRADE&startDate=${startUTC}&endDate=${endUTC}`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } }).then(r => r.json());
+        // Fetch all transaction types — parsers split options vs equity downstream
+        const txData = await fetch(`${SCHWAB_BASE}/trader/v1/accounts/${acct.hashValue}/transactions?startDate=${startUTC}&endDate=${endUTC}`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } }).then(r => r.json());
         const txList = Array.isArray(txData) ? txData : (txData?.transactions ?? []);
         txList.forEach(tx => {
           const p = parseSchwabTx(tx, stocksData, acct.accountNumber);
-          if (p) schwabTxs.push(p);
-          else if ((tx.description || "").toUpperCase().includes("EXPIR")) {
+          if (p) { schwabTxs.push(p); return; }
+          if ((tx.description || "").toUpperCase().includes("EXPIR")) {
             console.log("[auto-import] Schwab EXPIRY raw:", JSON.stringify({ type: tx.type, desc: tx.description, netAmount: tx.netAmount, items: tx.transferItems?.map(i => ({ effect: i.positionEffect, assetType: i.instrument?.assetType, symbol: i.instrument?.underlyingSymbol })) }));
           }
+          const eq = parseSchwabEquityTx(tx, acct.accountNumber);
+          if (eq) schwabEquityTxs.push(eq);
         });
       }
     } catch(e) { console.warn("[auto-import] Schwab fetch failed:", e.message); }
 
     // ── Fetch ETrade ──────────────────────────────────────────────────────────
-    const etradeTxs = [];
+    const etradeTxs       = [];
+    const etradeEquityTxs = [];
     try {
       const acctData = await etradeGet("/v1/accounts/list");
       const eAccts   = acctData?.AccountListResponse?.Accounts?.Account || [];
@@ -940,7 +1167,12 @@ export default async function handler(req, res) {
             endDate:   fmtD(new Date()),
           });
           const txList = data?.TransactionListResponse?.Transaction || [];
-          txList.forEach(tx => { const p = parseEtradeTx(tx, stocksData); if (p) etradeTxs.push(p); });
+          txList.forEach(tx => {
+            const p = parseEtradeTx(tx, stocksData);
+            if (p) { etradeTxs.push(p); return; }
+            const eq = parseEtradeEquityTx(tx);
+            if (eq) etradeEquityTxs.push(eq);
+          });
         } catch(e) { if (!e.message?.includes("204")) console.warn(`[auto-import] ETrade ${acct.accountIdKey}:`, e.message); }
       }
     } catch(e) { console.warn("[auto-import] ETrade fetch failed:", e.message); }
@@ -1043,7 +1275,20 @@ export default async function handler(req, res) {
       if (matchConfidence === "unmatched") {
         // Check if this BTC was already handled by a Skynet trade_order — skip if so
         const handled = await alreadyHandledByTradeOrder(tx);
-        if (handled) continue;
+        if (handled === true) continue;
+        if (handled?.skip) continue;
+        // handled?.skipParentClose = true means: create BTC row but don't re-close the STO
+        // (fill detection already closed it; auto-import just needs to create the audit trail row)
+        const skipParentClose = handled?.skipParentClose === true;
+        if (skipParentClose) {
+          // Create the BTC contract row for audit trail, but skip closing parent STO
+          try {
+            const wasCommitted = await commitTx(tx, null, openContracts, stocksData, committedClosers, { skipParentClose: true });
+            if (wasCommitted) committed.push(tx);
+            console.log(`[auto-import] created BTC audit row for ${tx.stock} $${tx.strike} ${tx.expires} (parent already closed by fill detection)`);
+          } catch(e) { console.warn(`[auto-import] BTC audit row failed:`, e.message); }
+          continue;
+        }
         // Unmatched closer — log as anomaly
         anomalies.push({ ...tx, anomaly_type: "unmatched_close", notes: `No matching open contract found for ${tx.opt_type} ${tx.stock} $${tx.strike} ${tx.type} ${tx.expires}`, raw: tx.raw });
         continue;
@@ -1052,7 +1297,11 @@ export default async function handler(req, res) {
       // Auto-commit exact and partial matches, and all opens
       try {
         const wasCommitted = await commitTx(tx, matchId, openContracts, stocksData, committedClosers);
-        if (wasCommitted) committed.push(tx);
+        if (wasCommitted === true) {
+          committed.push(tx);
+        } else if (wasCommitted && wasCommitted.needsReview) {
+          anomalies.push(wasCommitted.anomalyData);
+        }
         // Update openContracts in memory so subsequent matches see updated state
         if (matchId && !["STO","BTO"].includes(tx.opt_type)) {
           const idx = openContracts.findIndex(c => c.id === matchId);
@@ -1093,19 +1342,36 @@ export default async function handler(req, res) {
       const anomalyFingerprint = a => `${a.stock}|${a.opt_type}|${a.strike}|${a.expires}|${a.account}|${Math.round(Math.abs(+a.premium)*100)}|${a.qty}|${a.date_exec}|${a.anomaly_type}`;
 
       // Load existing anomalies (including dismissed/resolved) to build fingerprint set
-      const existingAnomalies = await sbGet(`import_anomalies?select=stock,opt_type,strike,expires,account,premium,qty,date_exec,anomaly_type,schwab_transaction_id`);
+      const existingAnomalies = await sbGet(`import_anomalies?select=stock,opt_type,strike,expires,account,premium,qty,date_exec,anomaly_type,schwab_transaction_id,notes,dismissed,resolved`);
       const existingIds = new Set(existingAnomalies.map(r => r.schwab_transaction_id));
       const existingFingerprints = new Set(existingAnomalies.map(anomalyFingerprint));
 
-      const trulyNewAnomalies = anomalyRows.filter(a =>
-        !existingIds.has(a.schwab_transaction_id) &&
-        !existingFingerprints.has(anomalyFingerprint(a))
+      // partial_fill_needs_review: Schwab can reissue a new transaction ID (and a slightly
+      // different qty/premium fragment) for the same already-flagged position on every poll —
+      // see 2026-06-18 incident. Fingerprint/ID dedup doesn't catch that, so for this anomaly
+      // type, dedupe instead by the matched contract id embedded in the notes text, and only
+      // against anomalies that are still active (not dismissed/resolved) so a genuinely new
+      // partial fill can still be flagged later if this one gets cleared.
+      const extractMatchedContractId = notes => notes?.match(/matches existing open contract (\d+)/)?.[1] || null;
+      const existingActivePartialFillContractIds = new Set(
+        existingAnomalies
+          .filter(r => r.anomaly_type === "partial_fill_needs_review" && !r.dismissed && !r.resolved)
+          .map(r => extractMatchedContractId(r.notes))
+          .filter(Boolean)
       );
+      const isDupeAnomaly = a => {
+        if (a.anomaly_type === "partial_fill_needs_review") {
+          const cid = extractMatchedContractId(a.notes);
+          return !!(cid && existingActivePartialFillContractIds.has(cid));
+        }
+        return existingIds.has(a.schwab_transaction_id) || existingFingerprints.has(anomalyFingerprint(a));
+      };
+
+      const trulyNewAnomalies = anomalyRows.filter(a => !isDupeAnomaly(a));
 
       // Save — ignore dupes via unique constraint
       for (const row of anomalyRows) {
-        // Skip if already exists by fingerprint (even if ID differs)
-        if (existingFingerprints.has(anomalyFingerprint(row))) continue;
+        if (isDupeAnomaly(row)) continue;
         try {
           await sbPost("import_anomalies", row, "resolution=ignore-duplicates");
         } catch(e) {
@@ -1158,19 +1424,80 @@ export default async function handler(req, res) {
       await sendPushover(title, msg, `${APP_URL}/?tab=contracts`, 0, sound);
     }
 
+    // ── Import equity transactions ────────────────────────────────────────────
+    let equityImported    = 0;
+    const equityImportedRows = [];
+    const allEquityTxs   = [...schwabEquityTxs, ...etradeEquityTxs];
+    if (allEquityTxs.length) {
+      try {
+        // Load existing stock_transaction IDs + composite fingerprints for dedup
+        const existingStockTxs = await sbGet(
+          `stock_transactions?select=schwab_transaction_id,symbol,transaction_type,trade_date,net_amount,account&trade_date=gte.${CUTOVER_DATE}T00:00:00Z`
+        );
+        const existingStockIds = new Set(
+          (Array.isArray(existingStockTxs) ? existingStockTxs : [])
+            .map(r => String(r.schwab_transaction_id))
+            .filter(Boolean)
+        );
+        // Composite fingerprint: symbol|type|YYYY-MM-DD|rounded_cents_amount|account
+        const makeEquityFP = r => {
+          const dateStr = r.trade_date
+            ? new Date(r.trade_date).toLocaleString("en-CA", { timeZone: "America/New_York" }).slice(0, 10)
+            : "";
+          return `${r.symbol || ""}|${r.transaction_type}|${dateStr}|${Math.round(Math.abs(+(r.net_amount || 0)) * 100)}|${r.account}`;
+        };
+        const existingEquityFPs = new Set(
+          (Array.isArray(existingStockTxs) ? existingStockTxs : []).map(makeEquityFP)
+        );
+
+        for (const eq of allEquityTxs) {
+          const idStr = String(eq.schwab_transaction_id);
+          if (existingStockIds.has(idStr)) continue;   // skip silently — already imported
+          if (existingEquityFPs.has(makeEquityFP(eq))) continue; // skip silently — fingerprint match
+          try {
+            await sbPost("stock_transactions", eq, "resolution=ignore-duplicates");
+            equityImported++;
+            equityImportedRows.push(eq);
+            existingStockIds.add(idStr);
+            existingEquityFPs.add(makeEquityFP(eq));
+            console.log(`[auto-import] equity imported: ${eq.transaction_type} ${eq.symbol || "(no symbol)"} $${eq.net_amount} (${eq.account})`);
+          } catch(e) {
+            console.warn(`[auto-import] equity insert failed for ${idStr}:`, e.message);
+          }
+        }
+
+        // Daily summary Pushover — one notification per run if anything was imported
+        if (equityImported > 0) {
+          const preview = equityImportedRows.slice(0, 5)
+            .map(eq => `${eq.transaction_type}${eq.symbol ? " " + eq.symbol : ""}: $${Math.abs(eq.net_amount).toFixed(2)} (${eq.account})`)
+            .join("\n");
+          const suffix = equityImported > 5 ? `\n…+${equityImported - 5} more` : "";
+          await sendPushover(
+            `📊 ${equityImported} equity transaction${equityImported > 1 ? "s" : ""} imported`,
+            preview + suffix,
+            `${APP_URL}/?tab=import`,
+            0
+          );
+        }
+      } catch(e) {
+        console.warn("[auto-import] equity import block failed:", e.message);
+      }
+    }
+
     // ── Ecosystem heartbeat ──────────────────────────────────────────────────────
     const now = new Date().toISOString();
     await fetch(`${SUPABASE_URL}/rest/v1/ecosystem_heartbeat`, {
       method: "POST",
       headers: { ...sbHeaders, Prefer: "resolution=merge-duplicates,return=minimal" },
-      body: JSON.stringify({ agent_name: "auto-import", last_run_at: now, status: "ok", notes: `${committed.length} committed, ${anomalies.length} anomalies`, updated_at: now }),
+      body: JSON.stringify({ agent_name: "auto-import", last_run_at: now, status: "ok", notes: `${committed.length} committed, ${anomalies.length} anomalies, ${equityImported} equity`, updated_at: now }),
     }).catch(e => console.warn("[heartbeat] write failed:", e.message));
 
     return res.status(200).json({
       ok: true,
       committed: committed.length,
       anomalies: anomalies.length,
-      debug: { schwabTxs: schwabTxs.length, etradeTxs: etradeTxs.length, allTxs: allTxs.length, existingIds: existingIds.size },
+      equityImported,
+      debug: { schwabTxs: schwabTxs.length, etradeTxs: etradeTxs.length, allTxs: allTxs.length, existingIds: existingIds.size, equityTxs: allEquityTxs.length },
       time: now,
     });
 
