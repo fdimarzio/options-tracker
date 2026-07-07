@@ -5569,7 +5569,7 @@ export default function App() {
     });
   };
 
-  const [profitDateMode,setProfitDateMode] = useState("close"); // "exec" | "close"
+  const [profitDateMode,setProfitDateMode] = useState("accounting"); // "exec" | "close" | "accounting"
   const [chainTradeOrder, setChainTradeOrder] = useState(null);
   const [orderPreview,   setOrderPreview]   = useState(null);
   const [orderControls,  setOrderControls]  = useState({orderType:"LIMIT",duration:"DAY",specialInstruction:"NONE",limitPrice:null,qty:null});

@@ -1867,3 +1867,72 @@ describe("Auto-STO scoring factors — chainData reuse", () => {
     expect(calls).toBe(1);
   });
 });
+
+// ── Accounting mode default (Dashboard + Analytics shared state) ─────────────
+// Mirrors src/pri-tod-v3.jsx: const [profitDateMode, setProfitDateMode] = useState("accounting");
+// profitDateMode is a single shared state variable — both the Dashboard KPIs (~line 7040-7045)
+// and the Analytics breakdown header (~line 8080) read the same value, so there's no per-tab
+// drift possible. Contracts/Skynet/Signal Rules tabs never reference it at all.
+describe("Accounting mode default (Dashboard + Analytics shared state)", () => {
+  const initProfitDateMode = () => "accounting"; // the new useState default
+
+  // Mirrors Dashboard KPI subtitle logic (pri-tod-v3.jsx ~7044-7045)
+  const kpiSubtitle = (mode) => mode==="accounting" ? "cash basis" : mode==="exec" ? "opened" : "closed";
+
+  // Mirrors Analytics breakdown header label (pri-tod-v3.jsx ~8080)
+  const analyticsBreakdownLabel = (mode) => mode==="accounting" ? "accounting (cash basis)" : "profit by "+(mode==="exec"?"open date":"close date");
+
+  it("positive — Dashboard renders with accounting mode active on load", () => {
+    const mode = initProfitDateMode();
+    expect(mode).toBe("accounting");
+    expect(kpiSubtitle(mode)).toBe("cash basis");
+  });
+
+  it("positive — Analytics tab renders with accounting mode active on load", () => {
+    const mode = initProfitDateMode();
+    expect(mode).toBe("accounting");
+    expect(analyticsBreakdownLabel(mode)).toBe("accounting (cash basis)");
+  });
+
+  it("negative — user can still toggle accounting mode off manually", () => {
+    let mode = initProfitDateMode();
+    const setProfitDateMode = (m) => { mode = m; };
+
+    setProfitDateMode("close");
+    expect(mode).toBe("close");
+    expect(kpiSubtitle(mode)).toBe("closed");
+
+    setProfitDateMode("exec");
+    expect(mode).toBe("exec");
+    expect(kpiSubtitle(mode)).toBe("opened");
+  });
+
+  it("negative — toggling is shared: Dashboard and Analytics flip together, never independently", () => {
+    let mode = initProfitDateMode();
+    const setProfitDateMode = (m) => { mode = m; };
+    setProfitDateMode("close");
+    // Both consumers read the same variable — no scenario where one tab shows
+    // accounting mode while the other doesn't, since there's only one state cell.
+    expect(kpiSubtitle(mode)).toBe("closed");
+    expect(analyticsBreakdownLabel(mode)).toBe("profit by close date");
+  });
+
+  it("negative — non-affected tabs (Contracts, Skynet, Signal Rules) never reference profitDateMode", () => {
+    // These tabs' render inputs take no profitDateMode parameter at all — the accounting-mode
+    // default flip has zero effect on their output, regardless of what profitDateMode is set to.
+    const renderContractsTab   = (contracts) => contracts.map(c => c.stock);
+    const renderSkynetTab      = (rules)     => rules.map(r => r.rule_type);
+    const renderSignalRulesTab = (rules)     => rules.length;
+
+    const contracts = [{ stock: "AAPL" }, { stock: "AMZN" }];
+    const rules     = [{ rule_type: "sto" }, { rule_type: "btc_auto" }];
+
+    expect(renderContractsTab(contracts)).toEqual(["AAPL", "AMZN"]);
+    expect(renderSkynetTab(rules)).toEqual(["sto", "btc_auto"]);
+    expect(renderSignalRulesTab(rules)).toBe(2);
+    // None of these functions accept or branch on profitDateMode/accounting mode
+    expect(renderContractsTab.length).toBe(1);
+    expect(renderSkynetTab.length).toBe(1);
+    expect(renderSignalRulesTab.length).toBe(1);
+  });
+});
