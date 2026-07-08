@@ -5645,6 +5645,24 @@ export default function App() {
     : closedC.filter(c=>profitDateField(c)?.startsWith(todayKey)).reduce((s,c)=>s+(c.profit||0),0);
   const premToday   = allF.filter(c=>c.dateExec?.startsWith(todayKey)).reduce((s,c)=>s+(c.premium||0),0);
   const periodData = mkPeriodData(allF, analyticsView, profitDateMode);
+
+  // ── Per-broker profit — same date-filter logic as the combined Profit/Profit YTD,
+  // just pre-filtered to one broker's contracts. Schwab and ETrade are mutually
+  // exclusive and exhaustive over allF, so schwabProfit + etradeProfit === combined profit.
+  const isSchwabAcct = a => a?.startsWith("Schwab");
+  const isEtradeAcct = a => a?.startsWith("ETrade") || a?.startsWith("Etrade");
+  const schwabF = allF.filter(c => isSchwabAcct(c.account));
+  const etradeF = allF.filter(c => isEtradeAcct(c.account));
+  const periodDataSchwab = mkPeriodData(schwabF, analyticsView, profitDateMode);
+  const periodDataEtrade = mkPeriodData(etradeF, analyticsView, profitDateMode);
+  const schwabProfitByKey = Object.fromEntries(periodDataSchwab.map(v => [v.key, v.profit]));
+  const etradeProfitByKey = Object.fromEntries(periodDataEtrade.map(v => [v.key, v.profit]));
+  const profitYTDSchwab = profitDateMode === "accounting"
+    ? accountingByPeriod(schwabF, thisYear)
+    : closedC.filter(c=>isSchwabAcct(c.account)&&profitDateField(c)?.startsWith(thisYear)).reduce((s,c)=>s+(c.profit||0),0);
+  const profitYTDEtrade = profitDateMode === "accounting"
+    ? accountingByPeriod(etradeF, thisYear)
+    : closedC.filter(c=>isEtradeAcct(c.account)&&profitDateField(c)?.startsWith(thisYear)).reduce((s,c)=>s+(c.profit||0),0);
   // Realized P/L — accounting mode uses cash-basis (premium received vs cost to close paid),
   // same formula as Profit MTD/YTD. Open/Close date mode show the same all-time total either way,
   // since a closed position's profit doesn't change based on which date field you attribute it to.
@@ -7043,6 +7061,8 @@ ${JSON.stringify(summary, null, 1)}`;
               <KPI label="Avg Profit"    value={fSign0(avgProfit)}    sub="per close" color={avgProfit>=0?"#58a6ff":"#ff4560"}/>
               <KPI label="Profit MTD"    value={fSign0(profitMTD)}    sub={mLabel+" · "+(profitDateMode==="accounting"?"cash basis":profitDateMode==="exec"?"opened":"closed")} color={profitMTD>=0?"#00ff88":"#ff4560"}/>
               <KPI label="Profit YTD"    value={fSign0(profitYTD)}    sub={thisYear+" · "+(profitDateMode==="accounting"?"cash basis":profitDateMode==="exec"?"opened":"closed")} color={profitYTD>=0?"#00ff88":"#ff4560"}/>
+              <KPI label="Schwab YTD"    value={fSign0(profitYTDSchwab)} sub={thisYear+" · Schwab"} color={profitYTDSchwab>=0?"#00ff88":"#ff4560"}/>
+              <KPI label="ETrade YTD"    value={fSign0(profitYTDEtrade)} sub={thisYear+" · ETrade"} color={profitYTDEtrade>=0?"#00ff88":"#ff4560"}/>
               <KPI label="Premium MTD"   value={f$0(premMTD)}         sub={mLabel} color="#58a6ff"/>
               <KPI label="Premium YTD"   value={f$0(premYTD)}         sub={thisYear} color="#58a6ff"/>
             </div>
@@ -8089,6 +8109,8 @@ ${JSON.stringify(summary, null, 1)}`;
                   <th style={{padding:"5px 8px",textAlign:"left",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Period</th>
                   <th style={{padding:"5px 8px",textAlign:"right",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Premium</th>
                   <th style={{padding:"5px 8px",textAlign:"right",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Profit</th>
+                  <th style={{padding:"5px 8px",textAlign:"right",color:"#58a6ff",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Schwab Profit</th>
+                  <th style={{padding:"5px 8px",textAlign:"right",color:"#ffd166",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>ETrade Profit</th>
                   <th style={{padding:"5px 8px",textAlign:"right",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Margin</th>
                   <th style={{padding:"5px 8px",textAlign:"right",color:th("#3a4050","#8a7e74"),fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Contracts</th>
                   {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#58a6ff",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Schwab $</th>}
@@ -8108,6 +8130,14 @@ ${JSON.stringify(summary, null, 1)}`;
                         <td style={{padding:"5px 8px",fontFamily:"monospace",color:th("#c9d1d9","#1a1a18"),fontSize:12}}>{m.label}</td>
                         <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#58a6ff"}}>{f$(m.premium)}</td>
                         <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:m.profit>=0?"#00ff88":"#ff4560"}}>{fSign(m.profit)}</td>
+                        {(() => {
+                          const schwabProfit = schwabProfitByKey[m.key] || 0;
+                          const etradeProfit = etradeProfitByKey[m.key] || 0;
+                          return (<>
+                            <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:schwabProfit>0?"#00ff88":schwabProfit<0?"#ff4560":th("#3a4050","#8a7e74")}}>{schwabProfit!==0?fSign(schwabProfit):"—"}</td>
+                            <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:etradeProfit>0?"#00ff88":etradeProfit<0?"#ff4560":th("#3a4050","#8a7e74")}}>{etradeProfit!==0?fSign(etradeProfit):"—"}</td>
+                          </>);
+                        })()}
                         <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:pp<0?"#ff4560":pp>=0.6?"#00ff88":pp>=0.3?"#ffd166":"#58a6ff"}}>{(pp*100).toFixed(1)}%</td>
                         <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:th("#2a3040","#6b5f55")}}>{m.contracts}</td>
                         {analyticsView==="monthly" && showBalCols && (() => {
@@ -8198,7 +8228,7 @@ ${JSON.stringify(summary, null, 1)}`;
                       </tr>
                     );
                   })}
-                  {periodData.length===0 && <tr><td colSpan={analyticsView!=="daily"?6:5} style={{padding:18,textAlign:"center",color:th("#3a4050","#8a7e74"),fontSize:11,fontFamily:"monospace"}}>No data — import history first</td></tr>}
+                  {periodData.length===0 && <tr><td colSpan={analyticsView!=="daily"?8:7} style={{padding:18,textAlign:"center",color:th("#3a4050","#8a7e74"),fontSize:11,fontFamily:"monospace"}}>No data — import history first</td></tr>}
                 </tbody>
               </table>
             </div>

@@ -1936,3 +1936,74 @@ describe("Accounting mode default (Dashboard + Analytics shared state)", () => {
     expect(renderSignalRulesTab.length).toBe(1);
   });
 });
+
+// ── Analytics monthly breakdown — Schwab Profit / ETrade Profit columns ──────
+// Mirrors src/pri-tod-v3.jsx: mkPeriodData(schwabF/etradeF, view, profitDateMode) and
+// accountingByPeriod(schwabF/etradeF, periodPrefix) for the YTD KPI cards. Schwab and
+// ETrade account filters are mutually exclusive and exhaustive over all contracts, so
+// schwabProfit + etradeProfit always equals the combined Profit/Profit YTD figure.
+describe("Analytics — Schwab Profit / ETrade Profit columns", () => {
+  const isSchwabAcct = a => a?.startsWith("Schwab");
+  const isEtradeAcct = a => a?.startsWith("ETrade") || a?.startsWith("Etrade");
+
+  // Mirrors accountingByPeriod (pri-tod-v3.jsx ~5615): open leg → dateExec, close leg → closeDate
+  function accountingByPeriod(contracts, periodPrefix) {
+    let total = 0;
+    for (const c of contracts) {
+      if (!["STO","BTO"].includes(c.optType)) continue;
+      if (c.dateExec?.startsWith(periodPrefix)) total += (c.premium || 0);
+      if (c.status === "Closed" && c.costToClose != null) {
+        const cd = c.closeDate || c.dateExec;
+        if (cd?.startsWith(periodPrefix)) {
+          if (c.optType === "STO") total -= (c.costToClose || 0);
+          else                     total += (c.costToClose || 0);
+        }
+      }
+    }
+    return total;
+  }
+
+  const contracts = [
+    { account: "Schwab 3866", optType: "STO", dateExec: "2026-01-05", premium: 500, status: "Closed", closeDate: "2026-01-20", costToClose: 100 },
+    { account: "ETrade 6917", optType: "STO", dateExec: "2026-01-10", premium: 300, status: "Closed", closeDate: "2026-02-05", costToClose: 50 },
+    { account: "ETrade 8222", optType: "STO", dateExec: "2026-02-01", premium: 200, status: "Open" },
+  ];
+
+  it("positive — monthly row with only Schwab contracts shows ETrade Profit = $0", () => {
+    const schwabOnlyMonth = [contracts[0]]; // Jan row has only the Schwab contract's open leg
+    const etradeF = schwabOnlyMonth.filter(c => isEtradeAcct(c.account));
+    expect(accountingByPeriod(etradeF, "2026-01")).toBe(0);
+  });
+
+  it("positive — YTD Schwab + YTD ETrade = YTD Profit total", () => {
+    const schwabF = contracts.filter(c => isSchwabAcct(c.account));
+    const etradeF = contracts.filter(c => isEtradeAcct(c.account));
+    const schwabYTD = accountingByPeriod(schwabF, "2026");
+    const etradeYTD = accountingByPeriod(etradeF, "2026");
+    const totalYTD  = accountingByPeriod(contracts, "2026");
+    expect(schwabYTD + etradeYTD).toBeCloseTo(totalYTD, 5);
+  });
+
+  it("negative — accounting mode off: exec-mode profit still splits correctly by account (consistent, not hidden)", () => {
+    const closed = [
+      { account: "Schwab 3866", status: "Closed", profit: 400, dateExec: "2026-01-05" },
+      { account: "ETrade 6917", status: "Closed", profit: 250, dateExec: "2026-01-08" },
+    ];
+    const schwabProfit = closed.filter(c => isSchwabAcct(c.account)).reduce((s,c) => s+(c.profit||0), 0);
+    const etradeProfit = closed.filter(c => isEtradeAcct(c.account)).reduce((s,c) => s+(c.profit||0), 0);
+    expect(schwabProfit).toBe(400);
+    expect(etradeProfit).toBe(250);
+    // Same account-split logic applies regardless of profitDateMode — columns stay
+    // populated (not hidden) and remain consistent with the combined Profit column.
+    expect(schwabProfit + etradeProfit).toBe(closed.reduce((s,c) => s+(c.profit||0), 0));
+  });
+
+  it("negative — no cross-contamination between broker accounts", () => {
+    const schwabF = contracts.filter(c => isSchwabAcct(c.account));
+    const etradeF = contracts.filter(c => isEtradeAcct(c.account));
+    expect(schwabF.every(c => c.account === "Schwab 3866")).toBe(true);
+    expect(etradeF.every(c => c.account.startsWith("ETrade"))).toBe(true);
+    expect(etradeF.find(c => c.account === "Schwab 3866")).toBeUndefined();
+    expect(schwabF.find(c => c.account.startsWith("ETrade"))).toBeUndefined();
+  });
+});
