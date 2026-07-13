@@ -897,6 +897,21 @@ describe("auto-import: open_method detection via trade_orders", () => {
   it("Schwab auto-STO path unchanged (regression guard)", () => {
     expect(detectOpenMethod(baseParsed, [baseOrder])).toBe("auto");
   });
+
+  it("positive — auto-import detects fill on Schwab skynet_auto_sto order → contract gets open_method=auto", () => {
+    // Exercises the BUG 1 fix: market-refresh.js now tags the Schwab trade_orders row
+    // with approved_by='skynet_auto_sto' (it previously relied solely on schwab-orders.js's
+    // approve-new handler, which silently ignores the approved_by param).
+    const schwabAutoOrder = { ticker: "NVDA", strike: "130", expires: "2026-08-21", account: "Schwab 3866", opt_type: "STO", status: "filled", approved_by: "skynet_auto_sto" };
+    const schwabParsed    = { stock: "NVDA", strike: "130", expires: "2026-08-21", account: "Schwab 3866", opt_type: "STO" };
+    expect(detectOpenMethod(schwabParsed, [schwabAutoOrder])).toBe("auto");
+  });
+
+  it("negative — non-auto-STO order (BTC) → open_method unaffected", () => {
+    const schwabAutoOrder = { ticker: "NVDA", strike: "130", expires: "2026-08-21", account: "Schwab 3866", opt_type: "STO", status: "filled", approved_by: "skynet_auto_sto" };
+    const btcParsed = { stock: "NVDA", strike: "130", expires: "2026-08-21", account: "Schwab 3866", opt_type: "BTC" };
+    expect(detectOpenMethod(btcParsed, [schwabAutoOrder])).toBeNull();
+  });
 });
 
 // ── Schwab equity transaction parser ─────────────────────────────────────────

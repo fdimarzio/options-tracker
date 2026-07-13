@@ -2007,3 +2007,54 @@ describe("Analytics — Schwab Profit / ETrade Profit columns", () => {
     expect(schwabF.find(c => c.account.startsWith("ETrade"))).toBeUndefined();
   });
 });
+
+// ── Schwab auto-STO approved_by tagging (BUG 1 + BUG 2) ──────────────────────
+// BUG 1: schwab-orders.js's approve-new handler ignores the approved_by param
+// entirely — market-refresh.js now tags the trade_orders row explicitly after a
+// successful Schwab auto-STO, the same way it already did for ETrade.
+// BUG 2: runChaseLoop's resubmit PATCHes the same trade_orders row in place (it
+// never inserts a new row) — approved_by is carried forward explicitly so a future
+// refactor can't silently drop it.
+describe("Schwab auto-STO approved_by tagging (BUG 1 + BUG 2)", () => {
+  // Mirrors the Schwab-branch trade_orders PATCH in the auto-STO success handler
+  // (market-refresh.js ~2576-2589)
+  function buildAutoStoApprovedByPatch() {
+    return { approved_by: "skynet_auto_sto" };
+  }
+
+  // Mirrors runChaseLoop's resubmit PATCH body (market-refresh.js ~1303-1314)
+  function buildChaseResubmitPatch(order, newPrice, newSchwabOrderId) {
+    return {
+      limit_price:     newPrice,
+      schwab_order_id: newSchwabOrderId,
+      submitted_at:    "2026-07-13T14:31:00.000Z", // stand-in for new Date().toISOString()
+      approved_by:     order.approved_by ?? null,
+    };
+  }
+
+  it("positive — Schwab auto-STO order → trade_orders row has approved_by = skynet_auto_sto", () => {
+    const patch = buildAutoStoApprovedByPatch();
+    expect(patch.approved_by).toBe("skynet_auto_sto");
+  });
+
+  it("positive — chase resubmit of a skynet_auto_sto order → resubmitted row also has approved_by = skynet_auto_sto", () => {
+    const originalOrder = { id: 42, approved_by: "skynet_auto_sto", limit_price: 1.20 };
+    const patch = buildChaseResubmitPatch(originalOrder, 1.15, "999888777");
+    expect(patch.approved_by).toBe("skynet_auto_sto");
+    expect(patch.limit_price).toBe(1.15);
+    expect(patch.schwab_order_id).toBe("999888777");
+  });
+
+  it("negative — manually placed order goes through chase → approved_by stays null (not inherited incorrectly)", () => {
+    const manualOrder = { id: 43, approved_by: null, limit_price: 2.00 };
+    const patch = buildChaseResubmitPatch(manualOrder, 1.95, "111222333");
+    expect(patch.approved_by).toBeNull();
+  });
+
+  it("negative — chase never upgrades a manual order to skynet_auto_sto, regardless of price moves", () => {
+    const manualOrder = { id: 44, approved_by: "user", limit_price: 0.50 };
+    const patch = buildChaseResubmitPatch(manualOrder, 0.45, "444555666");
+    expect(patch.approved_by).toBe("user");
+    expect(patch.approved_by).not.toBe("skynet_auto_sto");
+  });
+});

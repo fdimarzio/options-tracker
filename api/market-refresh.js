@@ -1300,6 +1300,10 @@ async function runChaseLoop(token, sbHeaders) {
         }
 
         // Update DB with new price + new Schwab order ID
+        // BUG FIX: explicitly carry approved_by forward from the order we just fetched —
+        // cancel+resubmit updates this same trade_orders row in place, but without this
+        // it's easy for a future refactor (e.g. switching to insert-a-new-row) to silently
+        // drop it, which would break auto-import's open_method=auto detection on fill.
         await fetch(`${SUPABASE_URL}/rest/v1/trade_orders?id=eq.${order.id}`, {
           method: "PATCH",
           headers: { ...sbHeaders, Prefer: "return=minimal" },
@@ -1307,6 +1311,7 @@ async function runChaseLoop(token, sbHeaders) {
             limit_price:     newPrice,
             schwab_order_id: newSchwabOrderId,
             submitted_at:    new Date().toISOString(),
+            approved_by:     order.approved_by ?? null,
           }),
         });
         console.log(`[chase] order ${order.id} resubmitted at $${newPrice.toFixed(2)}, new Schwab ID: ${newSchwabOrderId}`);
@@ -2574,6 +2579,21 @@ export default async function handler(req, res) {
                             } catch(e) { console.warn(`[auto-sto] approved_by tag failed:`, e.message); }
                           }
                         } else {
+                          // BUG FIX: schwab-orders.js's approve-new handler ignores the approved_by
+                          // param entirely (never persists it), unlike the contract tag below which
+                          // works fine. Tag the trade_orders row explicitly here — the same way it's
+                          // done for ETrade — so auto-import can also detect this as skynet-placed
+                          // if the contract-tag-by-query below ever misses (race, retry, backfill).
+                          if (tradeOrderId) {
+                            try {
+                              await fetch(`${SUPABASE_URL}/rest/v1/trade_orders?id=eq.${tradeOrderId}`, {
+                                method: "PATCH",
+                                headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+                                body: JSON.stringify({ approved_by: "skynet_auto_sto" }),
+                              });
+                              console.log(`[auto-sto] tagged trade_order ${tradeOrderId} approved_by=skynet_auto_sto`);
+                            } catch(e) { console.warn(`[auto-sto] approved_by tag failed:`, e.message); }
+                          }
                           // Tag newly created contract with open_method=auto
                           // The contract was just created by schwab-orders — find it by matching
                           // stock + strike + expires + account + status=Open, created in last 60s
