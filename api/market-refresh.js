@@ -2944,9 +2944,11 @@ export default async function handler(req, res) {
     // ── Portfolio snapshot (once per day) ──────────────────────────────────
     try {
       const snapDate = today;
-      const existing = await fetch(`${SUPABASE_URL}/rest/v1/portfolio_snapshots?snapshot_date=eq.${snapDate}&select=id`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }).then(r => r.json());
+      const existingRows = await fetch(`${SUPABASE_URL}/rest/v1/portfolio_snapshots?snapshot_date=eq.${snapDate}&select=id,etrade_value`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }).then(r => r.json());
+      const existingRow = existingRows?.[0];
+      const etradeLooksStale = existingRow && +existingRow.etrade_value <= 150000;
 
-      if (!existing?.length) {
+      if (!existingRow || etradeLooksStale) {
         // Schwab account value
         let schwabValue = null, schwabCash = null;
         try {

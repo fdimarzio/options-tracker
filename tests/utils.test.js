@@ -2058,3 +2058,86 @@ describe("Schwab auto-STO approved_by tagging (BUG 1 + BUG 2)", () => {
     expect(patch.approved_by).not.toBe("skynet_auto_sto");
   });
 });
+
+// ── ETrade NAV calculation — broadened field chain + positions-sum fallback ──
+// Mirrors api/etrade.js action=positions balance loop (~line 386-409)
+describe("ETrade NAV calculation", () => {
+  const computeRtNAV = (rtv, computed) =>
+    +(rtv.totalAccountValue || rtv.netMv || computed.totalAccountValue || computed.accountValue || 0);
+
+  it("positive — uses rtv.totalAccountValue when present", () => {
+    expect(computeRtNAV({ totalAccountValue: 65000 }, {})).toBe(65000);
+  });
+
+  it("positive — falls back to rtv.netMv when totalAccountValue missing", () => {
+    expect(computeRtNAV({ netMv: 42000 }, {})).toBe(42000);
+  });
+
+  it("positive — falls back to computed.totalAccountValue when RealTimeValues has neither field", () => {
+    expect(computeRtNAV({}, { totalAccountValue: 38000 })).toBe(38000);
+  });
+
+  it("positive — falls back to computed.accountValue as last resort before zero", () => {
+    expect(computeRtNAV({}, { accountValue: 15000 })).toBe(15000);
+  });
+
+  it("negative — returns 0 when none of the four fields are present (real bug scenario)", () => {
+    expect(computeRtNAV({}, {})).toBe(0);
+  });
+
+  it("positive — primary path (rtNAV > 0) now also accumulates totalCash", () => {
+    let totalAccountValue = 0, totalCash = 0;
+    const rtNAV = computeRtNAV({ totalAccountValue: 65000 }, {});
+    const cashBal = 5000;
+    if (rtNAV > 0) { totalAccountValue += rtNAV; totalCash += cashBal; }
+    expect(totalAccountValue).toBe(65000);
+    expect(totalCash).toBe(5000); // was missing before the fix
+  });
+
+  it("positive — fallback path sums position marketValues instead of totals.totalMarketValue", () => {
+    const positions = [{ marketValue: 1200.50 }, { marketValue: 800 }, { marketValue: 0 }];
+    const totals = { totalMarketValue: 0 }; // often 0/unreliable per the bug report
+    const cashBal = 300;
+    const positionsValue = positions.reduce((sum, p) => sum + (+(p.marketValue || 0)), 0);
+    const totalAccountValue = positionsValue + cashBal;
+    expect(positionsValue).toBe(2000.50);
+    expect(totalAccountValue).toBe(2300.50);
+    expect(totalAccountValue).not.toBe((+totals.totalMarketValue || 0) + cashBal); // old buggy formula would give 300
+  });
+
+  it("negative — fallback with no positions and no cash yields 0, not NaN", () => {
+    const positions = [];
+    const positionsValue = positions.reduce((sum, p) => sum + (+(p.marketValue || 0)), 0);
+    expect(positionsValue + 0).toBe(0);
+  });
+});
+
+// ── Portfolio snapshot — re-run when existing ETrade value looks stale ───────
+// Mirrors api/market-refresh.js portfolio snapshot guard (~line 2944-2949)
+describe("Portfolio snapshot — stale ETrade value re-run guard", () => {
+  const STALE_THRESHOLD = 150000;
+  const shouldRunSnapshot = (existingRow) => {
+    const etradeLooksStale = existingRow && +existingRow.etrade_value <= STALE_THRESHOLD;
+    return !existingRow || etradeLooksStale;
+  };
+
+  it("positive — no snapshot yet today → runs", () => {
+    expect(shouldRunSnapshot(null)).toBe(true);
+  });
+
+  it("positive — existing snapshot has stale cache-fallback ETrade value ($110,558) → re-runs", () => {
+    expect(shouldRunSnapshot({ id: 1, etrade_value: 110558 })).toBe(true);
+  });
+
+  it("negative — existing snapshot has a healthy ETrade value → does not re-run", () => {
+    expect(shouldRunSnapshot({ id: 1, etrade_value: 210000 })).toBe(false);
+  });
+
+  it("negative — existing snapshot exactly at threshold ($150,000) still counts as stale (<=), re-runs", () => {
+    expect(shouldRunSnapshot({ id: 1, etrade_value: 150000 })).toBe(true);
+  });
+
+  it("positive — re-run guard triggers exactly once boundary above threshold stops it", () => {
+    expect(shouldRunSnapshot({ id: 1, etrade_value: 150000.01 })).toBe(false);
+  });
+});

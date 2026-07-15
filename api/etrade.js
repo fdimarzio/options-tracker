@@ -394,18 +394,19 @@ export default async function handler(req, res) {
             console.log(`[etrade balance] account ${acct.accountId} Totals (portfolio):`, JSON.stringify(totals));
 
             // Prefer full NAV from RealTimeValues, fall back to equity market value + cash
-            const rtNAV   = +(rtv.totalAccountValue || rtv.netMv || 0);
+            const rtNAV   = +(rtv.totalAccountValue || rtv.netMv || computed.totalAccountValue || computed.accountValue || 0);
             const cashBal = +(computed.cashAvailableForInvestment || computed.cashBalance || 0);
 
             if (rtNAV > 0) {
               totalAccountValue += rtNAV;
+              totalCash         += cashBal;
               console.log(`[etrade balance] account ${acct.accountId} NAV (RealTimeValues): $${rtNAV}`);
             } else {
-              // Fallback: equity market value + cash (may undercount options/other assets)
-              const equityVal = +(totals.totalMarketValue || 0);
-              totalAccountValue += equityVal + cashBal;
+              // Fallback: sum of position market values + cash (totals.totalMarketValue is often 0)
+              const positionsValue = positions.reduce((sum, p) => sum + (+(p.marketValue || 0)), 0);
+              totalAccountValue += positionsValue + cashBal;
               totalCash        += cashBal;
-              console.log(`[etrade balance] account ${acct.accountId} NAV (fallback equity+cash): $${equityVal + cashBal}`);
+              console.log(`[etrade balance] account ${acct.accountId} NAV (fallback positions sum): $${positionsValue + cashBal} (positions:${positionsValue} cash:${cashBal})`);
             }
           } catch(e) { console.warn(`[etrade balance] ${acct.accountIdKey}:`, e.message); }
 
