@@ -16,6 +16,23 @@ function isMarketHours() {
   return mins >= 570 && mins < 960;
 }
 
+// Fire-and-forget: fires the chase_started repository_dispatch event so the
+// chase-runner GitHub Actions workflow starts polling /api/chase-step immediately
+// instead of waiting for its */5 safety-net schedule. Requires a GITHUB_DISPATCH_TOKEN
+// env var (a GitHub PAT with repo dispatch permission) — silently no-ops without it,
+// since the */5 schedule still covers the order regardless.
+async function triggerChaseRunner() {
+  const ghToken = process.env.GITHUB_DISPATCH_TOKEN;
+  if (!ghToken) return;
+  try {
+    await fetch("https://api.github.com/repos/fdimarzio/options-tracker/dispatches", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${ghToken}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" },
+      body: JSON.stringify({ event_type: "chase_started" }),
+    });
+  } catch (e) { console.warn("[chase] repository_dispatch trigger failed:", e.message); }
+}
+
 async function getValidToken() {
   const res  = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.schwab_tokens`, {
     headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` },
@@ -1156,171 +1173,6 @@ async function runSnapshotPurge(sbHeaders) {
   }
 }
 
-// ── Chase loop — step down limit price on active chase orders ─────────────────
-async function runChaseLoop(token, sbHeaders) {
-  try {
-    // Load all active chase orders that are submitted (not yet filled/cancelled)
-    const chaseRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/trade_orders?chase_active=eq.true&status=in.(submitted,pending_approval,dry_run_approved)&order=created_at.desc`,
-      { headers: sbHeaders }
-    );
-    const chaseOrders = await chaseRes.json();
-    if (!chaseOrders?.length) return;
-
-    console.log(`[market-refresh] chase loop: ${chaseOrders.length} active chase order(s)`);
-
-    for (const order of chaseOrders) {
-      try {
-        // Fetch live bid/ask for this option
-        const osi = `${order.ticker?.toUpperCase().padEnd(6)}${order.expires?.replace(/-/g,"").slice(2)}${order.type === "Call" ? "C" : "P"}${String(Math.round((+order.strike) * 1000)).padStart(8,"0")}`;
-        const qRes  = await fetch(
-          `${SCHWAB_BASE}/marketdata/v1/quotes?symbols=${encodeURIComponent(osi)}&fields=quote&indicative=false`,
-          { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } }
-        );
-        const qData = qRes.ok ? await qRes.json() : {};
-        const q     = qData?.[osi]?.quote;
-        if (!q) { console.warn(`[chase] no quote for ${osi}`); continue; }
-
-        const bid = q.bidPrice ?? 0;
-        const ask = q.askPrice ?? 0;
-
-        // If Schwab shows the order as filled, stop chasing and mark accordingly
-        if (order.schwab_order_id) {
-          const hash = order.account?.includes("ETrade") ? null : "757F62A9417DA1B75005EAC7370D033ABF819061E60384AA3B0F68A0AAE94961 /* TODO: fetch dynamically via getAccountHash() instead of hardcoding */";
-          if (hash) {
-            const statusRes = await fetch(
-              `${SCHWAB_BASE}/trader/v1/accounts/${hash}/orders/${order.schwab_order_id}`,
-              { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } }
-            ).catch(() => null);
-            if (statusRes?.ok) {
-              const schwabOrder = await statusRes.json().catch(() => null);
-              if (schwabOrder?.status === "FILLED") {
-                const leg = schwabOrder.orderActivityCollection?.[0];
-                await fetch(`${SUPABASE_URL}/rest/v1/trade_orders?id=eq.${order.id}`, {
-                  method: "PATCH",
-                  headers: { ...sbHeaders, Prefer: "return=minimal" },
-                  body: JSON.stringify({
-                    status:       "filled",
-                    chase_active: false,
-                    filled_at:    new Date().toISOString(),
-                    fill_price:   leg?.executionLegs?.[0]?.price ?? null,
-                    fill_qty:     schwabOrder.filledQuantity ?? order.qty,
-                  }),
-                });
-                console.log(`[chase] order ${order.id} already FILLED at Schwab — chase stopped`);
-                continue;
-              }
-            }
-          }
-        }
-
-        // Chase: step down by one step per cycle (time-based), bounded by floor and ask/bid
-        // For STO: step down from current price toward floor each cycle
-        // For BTC: step up from current price toward floor each cycle
-        const isSell      = ["STO","STC"].includes(order.opt_type);
-        const step        = +(order.chase_step || 0.05);
-        const floor       = +(order.chase_floor || 0);
-        const currentAsk  = ask;
-        const currentBid  = bid;
-        const currentPrice = +(order.limit_price || 0);
-
-        // Step one increment toward floor each cycle
-        const steppedPrice = isSell
-          ? Math.round((currentPrice - step) / step) * step   // STO: step down
-          : Math.round((currentPrice + step) / step) * step;  // BTC: step up
-
-        // Also cap at market: STO can't exceed ask, BTC can't go below bid
-        const marketCap = isSell ? currentAsk : currentBid;
-        const rawTarget = isSell
-          ? Math.min(steppedPrice, marketCap - 0.01)
-          : Math.max(steppedPrice, marketCap + 0.01);
-
-        const newPrice = Math.round(rawTarget / step) * step;
-
-        // Floor hit — stop chasing
-        if ((isSell && newPrice <= floor) || (!isSell && newPrice >= floor)) {
-          await fetch(`${SUPABASE_URL}/rest/v1/trade_orders?id=eq.${order.id}`, {
-            method: "PATCH",
-            headers: { ...sbHeaders, Prefer: "return=minimal" },
-            body: JSON.stringify({ chase_active: false }),
-          });
-          await sendPushover(
-            `🛑 Chase Floor Hit: ${order.ticker}`,
-            `${order.opt_type} ${order.ticker} $${order.strike} ${order.type} ${order.expires} · Floor $${floor.toFixed(2)} reached · Chase stopped`,
-            `${APP_URL}/?tab=contracts`, "View Orders", 1
-          );
-          console.log(`[chase] floor hit for order ${order.id} — chase stopped`);
-          continue;
-        }
-
-        // No change needed — already at or better than target
-        if (Math.abs(newPrice - currentPrice) < 0.005) {
-          console.log(`[chase] order ${order.id} already at target $${newPrice.toFixed(2)}`);
-          continue;
-        }
-
-        console.log(`[chase] order ${order.id} ${order.ticker}: ${currentPrice.toFixed(2)} → ${newPrice.toFixed(2)} (bid=${bid} ask=${ask})`);
-
-        // Cancel existing Schwab order if submitted
-        if (order.schwab_order_id && order.status === "submitted") {
-          const hash = order.account?.includes("ETrade") ? null : "757F62A9417DA1B75005EAC7370D033ABF819061E60384AA3B0F68A0AAE94961 /* TODO: fetch dynamically via getAccountHash() instead of hardcoding */";
-          if (hash) {
-            const cancelRes = await fetch(
-              `${SCHWAB_BASE}/trader/v1/accounts/${hash}/orders/${order.schwab_order_id}`,
-              { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }
-            );
-            if (cancelRes.status !== 200 && cancelRes.status !== 204) {
-              console.warn(`[chase] cancel failed for order ${order.id}: HTTP ${cancelRes.status}`);
-              continue;
-            }
-          }
-        }
-
-        // Resubmit at new price
-        const instruction = { STO:"SELL_TO_OPEN", BTO:"BUY_TO_OPEN", STC:"SELL_TO_CLOSE", BTC:"BUY_TO_CLOSE" }[order.opt_type];
-        const payload = {
-          orderType: "LIMIT", session: "NORMAL", duration: "DAY",
-          price: newPrice.toFixed(2),
-          orderLegCollection: [{
-            instruction,
-            quantity: order.qty,
-            instrument: { symbol: osi, assetType: "OPTION" },
-          }],
-        };
-        const hash = "757F62A9417DA1B75005EAC7370D033ABF819061E60384AA3B0F68A0AAE94961 /* TODO: fetch dynamically via getAccountHash() instead of hardcoding */";
-        const submitRes = await fetch(
-          `${SCHWAB_BASE}/trader/v1/accounts/${hash}/orders`,
-          { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(payload) }
-        );
-        const newSchwabOrderId = submitRes.headers.get("Location")?.split("/").pop() ?? null;
-        if (submitRes.status !== 201) {
-          const body = await submitRes.text().catch(()=>"");
-          console.warn(`[chase] resubmit failed for order ${order.id}: ${body}`);
-          continue;
-        }
-
-        // Update DB with new price + new Schwab order ID
-        // BUG FIX: explicitly carry approved_by forward from the order we just fetched —
-        // cancel+resubmit updates this same trade_orders row in place, but without this
-        // it's easy for a future refactor (e.g. switching to insert-a-new-row) to silently
-        // drop it, which would break auto-import's open_method=auto detection on fill.
-        await fetch(`${SUPABASE_URL}/rest/v1/trade_orders?id=eq.${order.id}`, {
-          method: "PATCH",
-          headers: { ...sbHeaders, Prefer: "return=minimal" },
-          body: JSON.stringify({
-            limit_price:     newPrice,
-            schwab_order_id: newSchwabOrderId,
-            submitted_at:    new Date().toISOString(),
-            approved_by:     order.approved_by ?? null,
-          }),
-        });
-        console.log(`[chase] order ${order.id} resubmitted at $${newPrice.toFixed(2)}, new Schwab ID: ${newSchwabOrderId}`);
-
-      } catch(e) { console.warn(`[chase] error on order ${order.id}:`, e.message); }
-    }
-  } catch(e) { console.warn("[chase] runChaseLoop failed:", e.message); }
-}
-
 // ── Main handler ──────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -1384,7 +1236,7 @@ export default async function handler(req, res) {
     const token = await getValidToken();
 
     // ── Load everything in parallel ─────────────────────────────────────────
-    const [contractsRes, chainRes, notifRes, matrixRes, allPositions, signalRulesRes, momentumConfigRes, priceHistoryRes, watchlistRes] = await Promise.all([
+    const [contractsRes, chainRes, notifRes, matrixRes, allPositions, signalRulesRes, momentumConfigRes, priceHistoryRes, watchlistRes, chaseRuleRes] = await Promise.all([
       fetch(`${SUPABASE_URL}/rest/v1/contracts?select=id,stock,type,opt_type,strike,expires,premium,qty,account,stop_loss_multiplier,time_stop_dte,delta_stop,last_exit_alert_at&status=eq.Open`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }),
       fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.last_chain_refresh`,   { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }),
       fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.notifications_sent`,   { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }),
@@ -1396,6 +1248,10 @@ export default async function handler(req, res) {
       fetch(`${SUPABASE_URL}/rest/v1/price_snapshots?captured_at=gte.${new Date(Date.now()-35*60000).toISOString()}&order=captured_at.desc`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }),
       // Load watchlist tickers so they get snapshots + DANI history
       fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.watchlist`,            { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }),
+      // Chase governance row — fetched regardless of enabled so the bound resolver can
+      // read chase_params even while the master switch is off (the engine itself gates
+      // stepping on enabled/dry_run separately, in chase-step.js).
+      fetch(`${SUPABASE_URL}/rest/v1/signal_rules?rule_type=eq.chase&limit=1`,          { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }),
     ]);
 
     const contracts      = await contractsRes.json();
@@ -1405,6 +1261,8 @@ export default async function handler(req, res) {
     const momentumConfig = (await momentumConfigRes.json())?.[0] || null;
     const priceHistory   = await priceHistoryRes.json();
     const watchlistTickers = ((await watchlistRes.json())?.[0]?.cols?.tickers || []).map(t => t.toUpperCase());
+    const chaseRule      = (await chaseRuleRes.json())?.[0] || null;
+    const chaseParams    = chaseRule?.chase_params || {};
 
     // Load Skynet controls
     let skynetControls = { max_order_value: 10000, max_bid_ask_deviation_pct: 15, block_if_loss: true, enabled: true };
@@ -2552,16 +2410,31 @@ export default async function handler(req, res) {
                       }
 
                       if (orderResult?.ok) {
-                        // Auto-start chase: placed at ask, chase down to mid
+                        // Chase bound resolver: floor = the rule's min_premium converted to a
+                        // per-contract price. chase_expires_at / chase_on_bound come from the
+                        // chase governance rule's chase_params (fetched once above, regardless of
+                        // whether the master switch is enabled — /api/chase-step is what actually
+                        // gates stepping on enabled/dry_run).
                         const tradeOrderId = orderResult?.order?.id;
                         if (tradeOrderId) {
-                          const chaseFloor = Math.round(bestPremium * 100) / 100; // mid = floor
+                          const chaseBound     = Math.round((minPrem / (uncovered * 100)) * 100) / 100; // floor, per-contract price
+                          const lifetimeSecs   = +(chaseParams.lifetime_secs ?? 1800);
+                          const chaseExpiresAt = new Date(Date.now() + lifetimeSecs * 1000).toISOString();
+                          const chaseOnBound   = chaseParams.default_on_bound || "rest";
                           await fetch(`${SUPABASE_URL}/rest/v1/trade_orders?id=eq.${tradeOrderId}`, {
                             method: "PATCH",
                             headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
-                            body: JSON.stringify({ chase_active: true, chase_floor: chaseFloor, chase_step: 0.05 }),
+                            body: JSON.stringify({
+                              chase_status:     "active",
+                              chase_bound:      chaseBound,
+                              chase_rule_id:    stoRuleAuto?.id ?? null,
+                              chase_expires_at: chaseExpiresAt,
+                              chase_on_bound:   chaseOnBound,
+                              price_history:    [{ ts: new Date().toISOString(), reason: "chase_started", underlying_price: stockPrice, from_price: null, to_price: limitPrice, bid: null, ask: null, mid: null }],
+                            }),
                           });
-                          console.log(`[auto-sto] chase started on order ${tradeOrderId} — ask $${limitPrice} → floor (mid) $${chaseFloor}`);
+                          console.log(`[auto-sto] chase started on order ${tradeOrderId} — ask $${limitPrice} → bound (floor) $${chaseBound}, expires ${chaseExpiresAt}`);
+                          triggerChaseRunner();
                         }
                         if (isEtrade) {
                           // ETrade contracts don't exist yet — they only get created later by
@@ -3118,7 +2991,7 @@ export default async function handler(req, res) {
                     const leg = schwabOrder.orderActivityCollection?.[0];
                     Object.assign(patch, {
                       status:       "filled",
-                      chase_active: false,
+                      chase_status: "filled",
                       filled_at:    lastRefresh,
                       fill_price:   leg?.executionLegs?.[0]?.price ?? null,
                       fill_qty:     schwabOrder.filledQuantity ?? order.qty,
@@ -3174,11 +3047,11 @@ export default async function handler(req, res) {
                       }
                     } catch(e) { console.warn(`[fill] contract tag failed:`, e.message); }
                   } else if (["CANCELED","REJECTED","EXPIRED","REPLACED"].includes(schwabOrder.status)) {
-                    Object.assign(patch, { status: "cancelled", cancelled_at: lastRefresh, chase_active: false });
+                    Object.assign(patch, { status: "cancelled", cancelled_at: lastRefresh, chase_status: "cancelled" });
                     cancelledCount++;
                     // Only alert if this wasn't an internal chase cancel/resubmit cycle
                     // Chase cancels are expected — only alert on hard rejections or non-chase orders
-                    const isChaseCancel = order.chase_active && schwabOrder.status === "CANCELED";
+                    const isChaseCancel = order.chase_status === "active" && schwabOrder.status === "CANCELED";
                     if (!isChaseCancel) {
                       sendPushover(
                         `❌ Order ${schwabOrder.status}: ${order.ticker}`,
@@ -3318,8 +3191,8 @@ export default async function handler(req, res) {
       }
     } catch(e) { console.warn("[market-refresh] ITM expiry check failed:", e.message); }
 
-    // ── Run chase loop on every market refresh ──────────────────────────────
-    await runChaseLoop(token, { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json" });
+    // Chase lifecycle is now owned by /api/chase-step (driven by chase-runner GitHub
+    // Actions + the browser fast-path poll) — see chase_expires_at, not this cron.
 
     res.status(200).json({
       ok: true, time: lastRefresh,

@@ -1,0 +1,38 @@
+name: Chase Runner
+
+on:
+  # Fired the instant an order enters chase (from the bound resolver / chase-start),
+  # so the runner starts immediately instead of waiting for the schedule.
+  repository_dispatch:
+    types: [chase_started]
+  # Safety net — nothing is ever orphaned even if the dispatch never fires.
+  schedule:
+    - cron: '*/5 13-20 * * 1-5'   # every 5 min, 9:30-16:00 ET (13:30-20:00 UTC), Mon-Fri
+  workflow_dispatch: # allow manual trigger
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+
+    steps:
+      - name: Poll /api/chase-step every 20s for ~5 minutes
+        run: |
+          BASE_URL="https://options-tracker-five.vercel.app"
+          SECRET="${{ secrets.CRON_SECRET }}"
+          END=$((SECONDS + 300))
+
+          while [ $SECONDS -lt $END ]; do
+            RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+              "$BASE_URL/api/chase-step" \
+              -H "x-cron-secret: $SECRET")
+
+            HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS" | cut -d: -f2)
+            BODY=$(echo "$RESPONSE" | grep -v "HTTP_STATUS")
+
+            echo "--- chase-step @ ${SECONDS}s ---"
+            echo "Status: $HTTP_STATUS"
+            echo "Response: $BODY"
+
+            sleep 20
+          done

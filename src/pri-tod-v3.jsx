@@ -4906,6 +4906,18 @@ export default function App() {
       }).subscribe();
     return () => { clearInterval(interval); supabase.removeChannel(channel); };
   }, [dbReady]);
+
+  // Browser fast-path: while the app is open, poll /api/chase-step every ~15s so
+  // active chase orders get tighter re-pricing than the GitHub Actions runner's 20s
+  // cadence alone. Purely additive — same idempotent endpoint, no duplicated logic.
+  useEffect(() => {
+    if (!dbReady) return;
+    const poll = () => { fetch(`/api/chase-step?secret=${encodeURIComponent("CronSecret2026!")}`).catch(() => {}); };
+    poll();
+    const chaseInterval = setInterval(poll, 15000);
+    return () => clearInterval(chaseInterval);
+  }, [dbReady]);
+
   const tickerDefaults = ticker => {
     if (!ticker) return {};
     const t = ticker.toUpperCase();
@@ -6672,7 +6684,7 @@ ${JSON.stringify(summary, null, 1)}`;
               </div>
             </div>
             <div style={{display:"flex",gap:8}}>
-              {chaseModal.order.chase_active ? (
+              {chaseModal.order.chase_status === "active" ? (
                 <button onClick={async()=>{
                   setChaseModal(p=>({...p,saving:true}));
                   try {
@@ -7959,9 +7971,9 @@ ${JSON.stringify(summary, null, 1)}`;
                                       </button>
                                     )}
                                     {["submitted","pending_approval","dry_run_approved"].includes(o.status) && (
-                                      <button onClick={e=>{e.stopPropagation();setChaseModal({order:o,floor:o.chase_floor??"",step:o.chase_step??0.05,saving:false});}}
-                                        style={{background:o.chase_active?"#ffd16620":"#ffd16610",color:o.chase_active?"#ffd166":"#ffd16688",border:`1px solid ${o.chase_active?"#ffd16650":"#ffd16620"}`,borderRadius:3,padding:"2px 7px",fontSize:9,cursor:"pointer"}}>
-                                        {o.chase_active?"🎯 Chasing":"🎯 Chase"}
+                                      <button onClick={e=>{e.stopPropagation();setChaseModal({order:o,floor:o.chase_bound??"",step:o.chase_step??0.05,saving:false});}}
+                                        style={{background:o.chase_status==="active"?"#ffd16620":"#ffd16610",color:o.chase_status==="active"?"#ffd166":"#ffd16688",border:`1px solid ${o.chase_status==="active"?"#ffd16650":"#ffd16620"}`,borderRadius:3,padding:"2px 7px",fontSize:9,cursor:"pointer"}}>
+                                        {o.chase_status==="active"?"🎯 Chasing":"🎯 Chase"}
                                       </button>
                                     )}
                                     <button onClick={()=>cancelTradeOrder(o.id)}
