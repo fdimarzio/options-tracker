@@ -796,6 +796,10 @@ describe("auto-import: ETrade composite fingerprint dedup", () => {
 // This is also the ETrade fix: market-refresh.js tags the trade_orders row with
 // approved_by='skynet_auto_sto' immediately (the contract itself doesn't exist yet
 // for ETrade — it only arrives later via this same auto-import path on fill).
+//
+// status filter removed (AMZN fix, 2026-07-14): the trade_order's status can lag or
+// diverge from the actual broker fill state (e.g. mid-chase resubmit), which caused
+// real skynet_auto_sto orders to be missed. approved_by alone is now the sole signal.
 function detectOpenMethod(parsed, tradeOrders) {
   if (!["STO","BTO"].includes(parsed.opt_type)) return null;
   if (!parsed.stock || !parsed.strike || !parsed.expires || !parsed.account) return null;
@@ -805,7 +809,6 @@ function detectOpenMethod(parsed, tradeOrders) {
     to.expires === parsed.expires &&
     to.account === parsed.account &&
     to.opt_type === parsed.opt_type &&
-    ["filled","submitted"].includes(to.status) &&
     to.approved_by === "skynet_auto_sto"
   );
   return match ? "auto" : null;
@@ -839,8 +842,9 @@ describe("auto-import: open_method detection via trade_orders", () => {
     expect(detectOpenMethod(baseParsed, [])).toBeNull();
   });
 
-  it("negative — returns null when trade_order is cancelled", () => {
-    expect(detectOpenMethod(baseParsed, [{ ...baseOrder, status: "cancelled" }])).toBeNull();
+  it("positive — status no longer gates the match (AMZN fix) — a cancelled row still matches on approved_by", () => {
+    // Status can lag/diverge from the real fill state, so approved_by alone is authoritative now.
+    expect(detectOpenMethod(baseParsed, [{ ...baseOrder, status: "cancelled" }])).toBe("auto");
   });
 
   it("negative — returns null when account does not match", () => {

@@ -715,7 +715,7 @@ async function commitTx(parsed, matchId, openContracts, stocksData, committedClo
   if (["STO","BTO"].includes(parsed.opt_type) && parsed.stock && parsed.strike && parsed.expires && parsed.account) {
     try {
       const toCheck = await fetch(
-        `${SUPABASE_URL}/rest/v1/trade_orders?ticker=eq.${encodeURIComponent(parsed.stock)}&strike=eq.${parsed.strike}&expires=eq.${parsed.expires}&account=eq.${encodeURIComponent(parsed.account)}&opt_type=eq.${parsed.opt_type}&status=in.(filled,submitted)&approved_by=eq.skynet_auto_sto&select=id,auto_execute&limit=1`,
+        `${SUPABASE_URL}/rest/v1/trade_orders?ticker=eq.${encodeURIComponent(parsed.stock)}&strike=eq.${parsed.strike}&expires=eq.${parsed.expires}&account=eq.${encodeURIComponent(parsed.account)}&opt_type=eq.${parsed.opt_type}&approved_by=eq.skynet_auto_sto&select=id,auto_execute&limit=1`,
         { headers: svcHeaders }
       );
       const toRows = toCheck.ok ? await toCheck.json() : [];
