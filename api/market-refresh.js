@@ -8,6 +8,10 @@ const SUPABASE_SVC_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SU
 const SCHWAB_BASE  = "https://api.schwabapi.com";
 const APP_URL      = "https://options-tracker-five.vercel.app";
 
+// Portfolio snapshot outlier guard — if a fresh pull implies a day-over-day change bigger than
+// this, don't trust it silently; carry forward the last known-good value instead and flag stale.
+const SNAPSHOT_OUTLIER_PCT = 15;
+
 function isMarketHours() {
   const et   = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
   const day  = et.getDay();
@@ -2815,55 +2819,67 @@ export default async function handler(req, res) {
     } catch(e) { console.warn("[market-refresh] btc_auto scanner failed:", e.message); }
 
     // ── Portfolio snapshot (once per day) ──────────────────────────────────
+    // ETrade/Schwab values are never carried forward as a frozen constant silently — either the
+    // live pull succeeds, or we explicitly carry forward the last known-good snapshot value and
+    // mark the row stale (etrade_stale/schwab_stale) so it's visible, not indistinguishable from
+    // a real update. See fix for the 28-day $110,558 placeholder bug (2026-07-15).
     try {
       const snapDate = today;
-      const existingRows = await fetch(`${SUPABASE_URL}/rest/v1/portfolio_snapshots?snapshot_date=eq.${snapDate}&select=id,etrade_value`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }).then(r => r.json());
+      const existingRows = await fetch(`${SUPABASE_URL}/rest/v1/portfolio_snapshots?snapshot_date=eq.${snapDate}&select=id,etrade_value,etrade_stale`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }).then(r => r.json());
       const existingRow = existingRows?.[0];
-      const etradeLooksStale = existingRow && +existingRow.etrade_value <= 150000;
+      const etradeLooksStale = existingRow && (existingRow.etrade_stale === true || +existingRow.etrade_value <= 150000);
 
       if (!existingRow || etradeLooksStale) {
+        // Helper: last known-good (non-stale) value for a field, from prior snapshot history
+        const carryForward = async (field, cashField) => {
+          const rows = await fetch(
+            `${SUPABASE_URL}/rest/v1/portfolio_snapshots?${field}_stale=eq.false&${field}=not.is.null&order=snapshot_date.desc&limit=1&select=${field},${cashField}`,
+            { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }
+          ).then(r => r.json()).catch(() => []);
+          const row = rows?.[0];
+          return { value: row?.[field] != null ? +row[field] : null, cash: row?.[cashField] != null ? +row[cashField] : null };
+        };
+
         // Schwab account value
-        let schwabValue = null, schwabCash = null;
+        let schwabValue = null, schwabCash = null, schwabStale = false;
         try {
           const acctRes  = await fetch(`${SCHWAB_BASE}/trader/v1/accounts/accountNumbers`, { headers: { Authorization: `Bearer ${token}` } });
           const accounts = await acctRes.json();
+          if (!Array.isArray(accounts) || !accounts.length) throw new Error("no Schwab accounts returned");
           schwabValue = 0; schwabCash = 0;
-          for (const acct of (Array.isArray(accounts) ? accounts : [])) {
+          for (const acct of accounts) {
             const d = await fetch(`${SCHWAB_BASE}/trader/v1/accounts/${acct.hashValue}?fields=positions`, { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json());
-            schwabValue += d?.securitiesAccount?.currentBalances?.liquidationValue || 0;
+            const liq = d?.securitiesAccount?.currentBalances?.liquidationValue;
+            if (liq == null) throw new Error(`account ${acct.hashValue} missing liquidationValue`);
+            schwabValue += liq || 0;
             schwabCash  += d?.securitiesAccount?.currentBalances?.cashBalance || 0;
           }
-        } catch(e) { console.warn("[snapshot] Schwab value failed:", e.message); }
+        } catch(e) {
+          console.warn("[snapshot] Schwab value failed, carrying forward:", e.message);
+          const cf = await carryForward("schwab_value", "schwab_cash");
+          schwabValue = cf.value; schwabCash = cf.cash; schwabStale = true;
+        }
 
-        // ETrade account value — try live API first, fall back to cached value in stocks_data
-        let etradeValue = null, etradeCash = null;
+        // ETrade account value — per-account balance fetch with explicit ok/error per account.
+        // Any account failure means the combined total is untrustworthy (missing part of the
+        // picture), so we carry forward the whole ETrade side rather than write a partial sum.
+        let etradeValue = null, etradeCash = null, etradeStale = false;
         try {
-          const etRes  = await fetch(`${APP_URL}/api/etrade?action=positions&secret=${process.env.CRON_SECRET}`);
-          if (etRes.ok) {
-            const etData = await etRes.json();
-            // accountValue = equity market value, cash = cash balance — sum for full NAV
-            const etNAV = (etData?.accountValue || 0) + (etData?.cash || 0);
-            if (etNAV > 0) {
-              etradeValue = etNAV;
-              etradeCash  = etData?.cash || 0;
-              console.log(`[snapshot] ETrade NAV from live API: $${etradeValue} (equity:${etData?.accountValue} cash:${etData?.cash})`);
-            } else {
-              console.warn(`[snapshot] ETrade live API returned zero NAV — will try cache`);
-            }
-          } else {
-            console.warn(`[snapshot] ETrade positions API returned HTTP ${etRes.status} — will try cache`);
-          }
-        } catch(e) { console.warn("[snapshot] ETrade live API failed:", e.message); }
+          const etRes  = await fetch(`${APP_URL}/api/etrade?action=balance&secret=${process.env.CRON_SECRET}`);
+          const etData = etRes.ok ? await etRes.json() : null;
+          const accts  = Array.isArray(etData?.accounts) ? etData.accounts : [];
+          const failed = accts.filter(a => !a.ok);
+          if (!etRes.ok) throw new Error(`balance API returned HTTP ${etRes.status}`);
+          if (!accts.length) throw new Error("balance API returned no accounts");
+          if (failed.length) throw new Error(`account(s) failed: ${failed.map(a => `${a.account}: ${a.error}`).join("; ")}`);
 
-        // Fallback: use the ETrade NAV cached by the frontend (updated when user clicks Live Data)
-        if (!etradeValue) {
-          const cachedEtrade = updatedSD["__cash__"]?.etrade;
-          if (cachedEtrade && +cachedEtrade > 0) {
-            etradeValue = +cachedEtrade;
-            console.log(`[snapshot] ETrade NAV from cached stocks_data: $${etradeValue}`);
-          } else {
-            console.warn("[snapshot] ETrade value unavailable — live API failed and no cached value. etrade_value will be null.");
-          }
+          etradeValue = accts.reduce((s, a) => s + (+a.value || 0), 0);
+          etradeCash  = accts.reduce((s, a) => s + (+a.cash  || 0), 0);
+          console.log(`[snapshot] ETrade NAV from live balance API: $${etradeValue} (${accts.map(a => `${a.account}:$${a.value}`).join(", ")})`);
+        } catch(e) {
+          console.warn("[snapshot] ETrade balance fetch failed, carrying forward:", e.message);
+          const cf = await carryForward("etrade_value", "etrade_cash");
+          etradeValue = cf.value; etradeCash = cf.cash; etradeStale = true;
         }
 
         // Open contracts value (sum of premiums on open STOs — money we'd owe to close)
@@ -2871,14 +2887,27 @@ export default async function handler(req, res) {
           .filter(c => c.opt_type === "STO")
           .reduce((s, c) => s + Math.abs(+c.premium || 0), 0);
 
-        const totalCash  = (schwabCash || 0) + (etradeCash || 0);
-        const totalValue = (schwabValue || 0) + (etradeValue || 0);
+        let totalCash  = (schwabCash || 0) + (etradeCash || 0);
+        let totalValue = (schwabValue || 0) + (etradeValue || 0);
 
-        // Get yesterday's snapshot for daily change
+        // Get prior snapshot for daily change
         const yest = await fetch(`${SUPABASE_URL}/rest/v1/portfolio_snapshots?order=snapshot_date.desc&limit=1&select=total_value`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }).then(r => r.json());
-        const prevValue    = yest?.[0]?.total_value ? +yest[0].total_value : null;
-        const dailyChange  = prevValue ? Math.round((totalValue - prevValue) * 100) / 100 : null;
-        const dailyChangePct = prevValue ? Math.round((dailyChange / prevValue) * 10000) / 100 : null;
+        const prevValue = yest?.[0]?.total_value ? +yest[0].total_value : null;
+        let dailyChange  = prevValue ? Math.round((totalValue - prevValue) * 100) / 100 : null;
+        let dailyChangePct = prevValue ? Math.round((dailyChange / prevValue) * 10000) / 100 : null;
+
+        // Outlier guard — a fresh (non-carried-forward) ETrade pull implying a huge swing is
+        // more likely a bad pull than a real move. Don't persist it silently: carry forward
+        // ETrade instead and flag stale, so one bad pull can't poison the graph again.
+        if (!etradeStale && prevValue && Math.abs(dailyChangePct) > SNAPSHOT_OUTLIER_PCT) {
+          console.warn(`[snapshot] outlier guard tripped: |Δ%|=${Math.abs(dailyChangePct)} > ${SNAPSHOT_OUTLIER_PCT}% — carrying forward ETrade value instead of writing fresh pull`);
+          const cf = await carryForward("etrade_value", "etrade_cash");
+          etradeValue = cf.value; etradeCash = cf.cash; etradeStale = true;
+          totalCash  = (schwabCash || 0) + (etradeCash || 0);
+          totalValue = (schwabValue || 0) + (etradeValue || 0);
+          dailyChange    = prevValue ? Math.round((totalValue - prevValue) * 100) / 100 : null;
+          dailyChangePct = prevValue ? Math.round((dailyChange / prevValue) * 10000) / 100 : null;
+        }
 
         await fetch(`${SUPABASE_URL}/rest/v1/portfolio_snapshots`, {
           method: "POST",
@@ -2895,9 +2924,11 @@ export default async function handler(req, res) {
             total_value:          totalValue,
             daily_change:         dailyChange,
             daily_change_pct:     dailyChangePct,
+            schwab_stale:         schwabStale,
+            etrade_stale:         etradeStale,
           }),
         });
-        console.log(`[snapshot] saved for ${snapDate}: total=${totalValue}`);
+        console.log(`[snapshot] saved for ${snapDate}: total=${totalValue} (schwab_stale=${schwabStale}, etrade_stale=${etradeStale})`);
       }
     } catch(e) { console.warn("[snapshot] failed:", e.message); }
 

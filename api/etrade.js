@@ -431,6 +431,43 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true, positions: allPositions, accountValue: totalAccountValue, cash: totalCash });
     }
 
+    // ── balance — per-account NAV with explicit success/failure, for the portfolio
+    // snapshot writer. Unlike action=positions (which silently sums whatever succeeds
+    // and gives no signal on partial failure), this surfaces each account's ok/error
+    // so the caller can decide whether to trust the combined total or carry forward.
+    if (action === "balance") {
+      const acctData = await etradeGet("/v1/accounts/list");
+      const accounts = acctData?.AccountListResponse?.Accounts?.Account || [];
+      const results  = [];
+
+      for (const acct of accounts) {
+        const accountName = ACCOUNT_NAMES[String(acct.accountId)] || `ETrade ${String(acct.accountId).slice(-4)}`;
+        try {
+          const bal      = await etradeGet(`/v1/accounts/${acct.accountIdKey}/balance`, { instType: "BROKERAGE", realTimeNAV: "true" });
+          const computed = bal?.BalanceResponse?.Computed ?? {};
+          const rtv      = computed?.RealTimeValues ?? {};
+
+          console.log(`[etrade balance] ${accountName} Computed keys:`, Object.keys(computed));
+          console.log(`[etrade balance] ${accountName} RealTimeValues:`, JSON.stringify(rtv));
+
+          // Prefer full NAV from RealTimeValues; fall back through several observed field names —
+          // do not assume a single field name is stable across account types/API versions.
+          const value = +(rtv.totalAccountValue || rtv.netMv || computed.totalAccountValue || computed.accountBalance || computed.accountValue || 0);
+          const cash  = +(computed.cashBalance || computed.netCash || computed.cashAvailableForInvestment || 0);
+
+          if (!(value > 0)) throw new Error(`balance response had no usable NAV field (Computed keys: ${Object.keys(computed).join(",")})`);
+
+          results.push({ accountId: acct.accountId, accountIdKey: acct.accountIdKey, account: accountName, ok: true, value, cash });
+        } catch (e) {
+          console.warn(`[etrade balance] ${accountName} (${acct.accountIdKey}) failed:`, e.message);
+          results.push({ accountId: acct.accountId, accountIdKey: acct.accountIdKey, account: accountName, ok: false, error: e.message });
+        }
+      }
+
+      const allOk = results.length > 0 && results.every(r => r.ok);
+      return res.status(200).json({ ok: allOk, accounts: results });
+    }
+
     if (action === "accounts") {
       const data     = await etradeGet("/v1/accounts/list");
       const accounts = data?.AccountListResponse?.Accounts?.Account || [];
