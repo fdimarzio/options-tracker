@@ -4494,6 +4494,12 @@ export default function App() {
 
   // Storage/UI
   const [storageMsg,setStorageMsg] = useState("");
+  // Global Skynet master kill-switch — surfaced in the top bar so it's reachable from every tab
+  const [masterCtrl,setMasterCtrl] = useState(null);
+  useEffect(() => {
+    supabase.from("skynet_controls").select("id,master_enabled").limit(1).maybeSingle()
+      .then(({data}) => { if (data) setMasterCtrl(data); });
+  }, []);
 
 
 
@@ -6965,6 +6971,23 @@ ${JSON.stringify(summary, null, 1)}`;
           </div>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:5,flexShrink:0,marginLeft:"auto"}}>
+          {masterCtrl && (() => {
+            const on = masterCtrl.master_enabled !== false;
+            return (
+              <button
+                onClick={async () => {
+                  const v = !on;
+                  if (!v || window.confirm("Re-enable ALL Skynet automation (auto-STO, auto-BTC, expiry protection, chase)?")) {
+                    await supabase.from("skynet_controls").update({ master_enabled: v, updated_at: new Date().toISOString() }).eq("id", masterCtrl.id);
+                    setMasterCtrl(p => ({ ...p, master_enabled: v }));
+                  }
+                }}
+                title={on ? "Skynet automation ON — click to KILL all auto-trading" : "Skynet automation OFF — click to re-enable"}
+                style={{background:on?"#00ff8814":"#ff456022",border:`1px solid ${on?"#00ff8840":"#ff4560"}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontWeight:700,color:on?"#00ff88":"#ff4560",fontFamily:"monospace",lineHeight:1.5,whiteSpace:"nowrap",cursor:"pointer",flexShrink:0}}>
+                {on ? "🟢 AUTO ON" : "🔴 AUTO OFF"}
+              </button>
+            );
+          })()}
           <div onClick={()=>setShowProfile(true)} style={{width:26,height:26,borderRadius:"50%",background:`${authUser.color}20`,border:`2px solid ${authUser.color}50`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"monospace",fontWeight:700,color:authUser.color,fontSize:9,flexShrink:0,cursor:"pointer"}} title={authUser.name}>{authUser.initials}</div>
           <button className="hm" onClick={()=>window.open("/api/schwab-auth","_blank")} title="Re-authenticate Schwab (refresh token expires every 7 days)" style={{background:"transparent",border:"1px solid #1c2128",borderRadius:4,padding:"2px 5px",fontSize:8,color:"#555",fontFamily:"monospace",lineHeight:1.5,whiteSpace:"nowrap"}}>SCH⟳</button>
           <button className="hm" onClick={()=>window.open("/api/etrade?action=auth","_blank")} title="Re-authenticate ETrade" style={{background:"transparent",border:"1px solid #1c2128",borderRadius:4,padding:"2px 5px",fontSize:8,color:"#555",fontFamily:"monospace",lineHeight:1.5,whiteSpace:"nowrap"}}>ET⟳</button>
