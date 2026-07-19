@@ -806,6 +806,62 @@ function checkSkynetControls({ controls, limitPrice, qty, bid, ask, projectedPro
   return { ok: true };
 }
 
+// ── Settled funds check (WARN-ONLY) ───────────────────────────────────────────
+// Never blocks an order — auto-BTC/auto-STO orders still place regardless of the
+// outcome here. Source is always a live broker balance field, never hardcoded:
+// Schwab exposes currentBalances.cashAvailableForTrading; ETrade's Balance API
+// (via api/etrade.js action=balance) exposes cashAvailableForInvestment. If
+// neither resolves, the check is skipped rather than guessed at.
+async function getAccountSettledCash(token, account) {
+  const isSchwab = account?.startsWith("Schwab");
+  const isEtrade = account?.startsWith("ETrade") || account?.startsWith("Etrade");
+  try {
+    if (isSchwab) {
+      const hash = await getAccountHash(token, account);
+      const d = await fetch(`${SCHWAB_BASE}/trader/v1/accounts/${hash}`, { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json());
+      const cash = d?.securitiesAccount?.currentBalances?.cashAvailableForTrading;
+      return cash != null ? { ok: true, cash: +cash, source: "schwab_cashAvailableForTrading" } : { ok: false, reason: "cashAvailableForTrading field missing from Schwab balance response" };
+    }
+    if (isEtrade) {
+      const etRes  = await fetch(`${APP_URL}/api/etrade?action=balance&secret=${process.env.CRON_SECRET}`);
+      const etData = etRes.ok ? await etRes.json() : null;
+      const acct   = (etData?.accounts || []).find(a => a.account === account);
+      if (!acct?.ok) return { ok: false, reason: acct?.error || "ETrade account balance unavailable" };
+      return { ok: true, cash: +acct.cash, source: "etrade_cashAvailableForInvestment" };
+    }
+    return { ok: false, reason: `unrecognized account "${account}"` };
+  } catch (e) {
+    return { ok: false, reason: e.message };
+  }
+}
+
+async function checkSettledFunds({ token, account, requiredCash, contractLabel, contractId }) {
+  if (!requiredCash || requiredCash <= 0) return;
+  const result = await getAccountSettledCash(token, account);
+  if (!result.ok) {
+    console.warn(`[settled-funds] could not resolve settled cash for ${account}: ${result.reason} — skipping check (order proceeds either way)`);
+    return;
+  }
+  if (requiredCash <= result.cash) return; // within settled cash — no warning needed
+
+  console.warn(`[settled-funds] WARNING — ${account} order requires $${requiredCash.toFixed(2)}, settled cash available $${result.cash.toFixed(2)} (${result.source})`);
+  await sendPushover(
+    `⚠️ Settled Funds Warning`,
+    `${contractLabel}\nAccount: ${account}\nOrder requires: $${requiredCash.toFixed(2)}\nSettled cash available: $${result.cash.toFixed(2)} (source: ${result.source})\nOrder is proceeding anyway — this is a WARN-ONLY check, not a block.`,
+    `${APP_URL}/?tab=contracts`, "View Contracts", 1
+  );
+  await fetch(`${SUPABASE_URL}/rest/v1/decision_log`, {
+    method: "POST",
+    headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+    body: JSON.stringify({
+      contract_id: contractId ?? null,
+      decision: "settled_funds_warning",
+      notes: `${account}: order required $${requiredCash.toFixed(2)} > settled cash $${result.cash.toFixed(2)} (${result.source}) — ${contractLabel}`,
+      created_at: new Date().toISOString(),
+    }),
+  }).catch(e => console.warn("[settled-funds] decision_log write failed:", e.message));
+}
+
 // ── Log signal to signal_log table ───────────────────────────────────────────
 async function logSignal(fields) {
   try {
@@ -1122,61 +1178,6 @@ async function handleSimulate(req, res) {
   return res.status(400).json({ error: `Unknown action: ${action}` });
 }
 
-// ── Auto-purge option_snapshots — batched daily delete to keep the table bounded ──
-// option_snapshots grows fast (every strike/ticker snapshotted ~every minute during
-// market hours), so a single unbounded DELETE can time out on a multi-GB table.
-// Batches by finding the Nth-oldest surviving row's timestamp and deleting up to it,
-// which avoids building a giant id=in.(...) URL for the delete itself.
-async function runSnapshotPurge(sbHeaders) {
-  const RETENTION_DAYS = 60;
-  const BATCH_SIZE = 10000;
-  const cutoff = new Date(Date.now() - RETENTION_DAYS * 86400000).toISOString();
-  let deleted = 0;
-
-  try {
-    while (true) {
-      const batchRes = await fetch(
-        `${SUPABASE_URL}/rest/v1/option_snapshots?select=snapshot_at&snapshot_at=lt.${cutoff}&order=snapshot_at.asc&limit=${BATCH_SIZE}`,
-        { headers: sbHeaders }
-      );
-      const batch = await batchRes.json();
-      if (!Array.isArray(batch) || !batch.length) break;
-
-      const boundary = batch[batch.length - 1].snapshot_at;
-      const delRes = await fetch(
-        `${SUPABASE_URL}/rest/v1/option_snapshots?snapshot_at=lte.${boundary}`,
-        { method: "DELETE", headers: { ...sbHeaders, Prefer: "count=exact" } }
-      );
-      const rangeTotal = delRes.headers.get("content-range")?.split("/")[1];
-      deleted += rangeTotal && rangeTotal !== "*" ? +rangeTotal : batch.length;
-
-      if (batch.length < BATCH_SIZE) break; // last (partial) batch — done
-    }
-
-    const remainRes = await fetch(`${SUPABASE_URL}/rest/v1/option_snapshots?select=id&limit=1`, {
-      headers: { ...sbHeaders, Prefer: "count=exact" },
-    });
-    const remainRange = remainRes.headers.get("content-range")?.split("/")[1];
-    const remaining = remainRange && remainRange !== "*" ? +remainRange : null;
-
-    console.log(`[snapshot_purge] deleted ${deleted} rows, ${remaining ?? "?"} remain`);
-    await fetch(`${SUPABASE_URL}/rest/v1/ecosystem_heartbeat`, {
-      method: "POST",
-      headers: { ...sbHeaders, Prefer: "resolution=merge-duplicates,return=minimal" },
-      body: JSON.stringify({ agent_name: "snapshot_purge", last_run_at: new Date().toISOString(), status: "ok", notes: `deleted ${deleted} rows, ${remaining ?? "?"} remain`, updated_at: new Date().toISOString() }),
-    });
-    return { deleted, remaining };
-  } catch (e) {
-    console.warn("[snapshot_purge] failed:", e.message);
-    await fetch(`${SUPABASE_URL}/rest/v1/ecosystem_heartbeat`, {
-      method: "POST",
-      headers: { ...sbHeaders, Prefer: "resolution=merge-duplicates,return=minimal" },
-      body: JSON.stringify({ agent_name: "snapshot_purge", last_run_at: new Date().toISOString(), status: "error", notes: e.message, updated_at: new Date().toISOString() }),
-    }).catch(() => {});
-    return { deleted, error: e.message };
-  }
-}
-
 // ── Main handler ──────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -1268,13 +1269,25 @@ export default async function handler(req, res) {
     const chaseRule      = (await chaseRuleRes.json())?.[0] || null;
     const chaseParams    = chaseRule?.chase_params || {};
 
-    // Load Skynet controls
-    let skynetControls = { max_order_value: 10000, max_bid_ask_deviation_pct: 15, block_if_loss: true, enabled: true };
+    // Load Skynet controls — fetched WITHOUT an enabled=eq.true filter (that filter used to
+    // hide the row entirely whenever enabled was flipped false, so the code silently kept
+    // using the true-default below instead of ever seeing the flip).
+    let skynetControls = { max_order_value: 10000, max_bid_ask_deviation_pct: 15, block_if_loss: true, enabled: true, master_enabled: true };
     try {
-      const scRes = await fetch(`${SUPABASE_URL}/rest/v1/skynet_controls?enabled=eq.true&limit=1`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } });
+      const scRes = await fetch(`${SUPABASE_URL}/rest/v1/skynet_controls?limit=1`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } });
       const scRows = await scRes.json();
       if (Array.isArray(scRows) && scRows.length) skynetControls = scRows[0];
     } catch(e) { console.warn("[market-refresh] skynet_controls load failed:", e.message); }
+
+    // ── Global Skynet master kill-switch ─────────────────────────────────────
+    // ONE flag gates every automated order-placing rule (auto-STO, auto-BTC, expiry
+    // protection, and — via its own fetch — chase). Read fresh every cycle from the DB,
+    // so flipping it off takes effect on the next 5-min run with no redeploy. Imports,
+    // snapshots, reconciliation, and Pushover notifications are NOT gated by this — they
+    // keep running so visibility into the account never goes dark just because trading
+    // automation is paused.
+    const skynetMasterEnabled = skynetControls.master_enabled !== false;
+    if (!skynetMasterEnabled) console.log("[market-refresh] SKYNET MASTER SWITCH OFF — all automated order placement suppressed this cycle");
 
     if (!contracts.length && !allPositions.length && !watchlistTickers.length) return res.status(200).json({ ok: true, tickers: 0 });
 
@@ -1532,8 +1545,13 @@ export default async function handler(req, res) {
           console.log(`[option-snapshot] wrote ${optionSnapshotRows.length} rows for ${finalSnapTickers.join(", ")}`);
         }
 
-        // Purging is now handled once/day at market open by runSnapshotPurge() (batched, 60-day retention)
-        // — see the daily gate below, replacing the old unbatched every-cycle DELETE that could time out.
+        // Purging is handled by the standalone option-snapshot-purge GitHub Actions job
+        // (scripts/option-snapshot-purge.js), not here — that job is config-driven
+        // (DB-size threshold + retention + active-ticker protection) and runs on its own
+        // schedule, independent of this fragile "narrow intraday window" approach, which
+        // is why the old in-handler runSnapshotPurge() was retired (P6, 2026-07-19: it
+        // silently stopped firing for 10+ days whenever the market-open cron tick landed
+        // even a couple minutes outside its 9:30-9:35am ET window).
 
       } catch(e) { console.warn("[option-snapshot] write failed:", e.message); }
     }
@@ -1605,24 +1623,11 @@ export default async function handler(req, res) {
       console.log(`[market-refresh] outside market hours (${etForGate.toTimeString().slice(0,5)} ET) — skipping all signal notifications`);
     }
 
-    // ── Daily option_snapshots purge — once per day at market open (~9:31am ET) ──
-    try {
-      const PURGE_WINDOW_START = 9 * 60 + 30; // 9:30am ET
-      const PURGE_WINDOW_END   = 9 * 60 + 35; // 9:35am ET — covers the first few 1-min cron ticks
-      if (etGateMins >= PURGE_WINDOW_START && etGateMins <= PURGE_WINDOW_END) {
-        const hbRes = await fetch(
-          `${SUPABASE_URL}/rest/v1/ecosystem_heartbeat?agent_name=eq.snapshot_purge&select=last_run_at`,
-          { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }
-        );
-        const hb = await hbRes.json();
-        const lastRunDate = hb?.[0]?.last_run_at?.slice(0, 10);
-        if (lastRunDate !== today) {
-          await runSnapshotPurge({ apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json" });
-        } else {
-          console.log("[snapshot_purge] already ran today — skipping");
-        }
-      }
-    } catch (e) { console.warn("[snapshot_purge] gate check failed:", e.message); }
+    // option_snapshots purging is handled by the standalone option-snapshot-purge
+    // GitHub Actions job (scripts/option-snapshot-purge.js) on its own daily schedule —
+    // see P6, 2026-07-19. Removed from here: the old 9:30-9:35am ET window gate silently
+    // stopped firing whenever a cron tick landed even slightly outside it (confirmed via
+    // ecosystem_heartbeat — last successful run was 2026-07-09, 10 days before this fix).
 
     // ── Hoist etNow and vix to top-level scope — used by all scanner blocks ──
     const etNow = etForGate; // same timestamp, reuse
@@ -2041,6 +2046,8 @@ export default async function handler(req, res) {
     // MARKET HOURS GATE — never place orders outside 9:30 AM–4:00 PM ET Mon-Fri
     if (!isMarketOpen) {
       console.log("[auto-sto] outside market hours — skipping order placement");
+    } else if (!skynetMasterEnabled) {
+      console.log("[auto-sto] Skynet master switch off — skipping order placement");
     } else
     try {
       const stoRuleAuto = (Array.isArray(signalRules) ? signalRules : [])
@@ -2533,11 +2540,21 @@ export default async function handler(req, res) {
     // MARKET HOURS GATE — never place orders outside 9:30 AM–4:00 PM ET Mon-Fri
     if (!isMarketOpen) {
       console.log("[btc_auto] outside market hours — skipping order placement");
+    } else if (!skynetMasterEnabled) {
+      console.log("[btc_auto] Skynet master switch off — skipping order placement");
     } else
     try {
       const btcRules = (Array.isArray(signalRules) ? signalRules : [])
         .filter(r => r.rule_type === "btc_auto" && r.enabled)
         .sort((a, b) => (b.priority || 0) - (a.priority || 0)); // highest priority first
+
+      // DB-gated skip-at-expiry rule (P12, 2026-07-19) — was previously a hardcoded 2%
+      // threshold ("Task #10"). Defaults preserve that exact prior behavior (enabled,
+      // 2% OTM) if the config row doesn't exist yet, so behavior doesn't change until
+      // Frank runs the SQL — but the threshold is never hardcoded going forward.
+      const btcExpirySkipRule = (Array.isArray(signalRules) ? signalRules : []).find(r => r.rule_type === "btc_expiry_skip");
+      const btcExpirySkipEnabled = btcExpirySkipRule ? btcExpirySkipRule.enabled !== false : true;
+      const btcExpirySkipOtmPct  = +(btcExpirySkipRule?.min_otm_pct ?? 2);
 
       if (btcRules.length) {
         // Pick the best matching rule for current ET time
@@ -2593,12 +2610,32 @@ export default async function handler(req, res) {
 
         const token = await getValidToken();
 
-        for (const contract of callSTOs) {
+        // ── Group same-position STO rows so we fire ONE BTC for the combined
+        // quantity instead of one order per row (P9, 2026-07-19). Rows are grouped
+        // by the attributes that define "the same underlying position": stock,
+        // strike, expiry, and account — rows differing on any of those still get
+        // separate orders, since they're genuinely different positions/accounts.
+        const stoGroups = new Map();
+        for (const c of callSTOs) {
+          const key = `${String(c.stock).toUpperCase()}|${c.strike}|${String(c.expires).slice(0,10)}|${c.account}`;
+          if (!stoGroups.has(key)) stoGroups.set(key, []);
+          stoGroups.get(key).push(c);
+        }
+
+        for (const group of stoGroups.values()) {
+          const contract  = group[0]; // primary row — order + notifications reference this one
+          const groupIds  = group.map(c => c.id);
+          const groupQty     = group.reduce((s, c) => s + (+c.qty || 0), 0);
+          const groupPremium = group.reduce((s, c) => s + (+c.premium || 0), 0);
           try {
-            // Skip if already has a pending order
-            if (pendingContractIds.has(String(contract.id))) {
-              console.log(`[btc_auto] Skipping ${contract.stock} — pending order exists`);
+            // Skip the whole group if ANY member already has a pending order — safest,
+            // avoids double-ordering part of a position that's already being closed.
+            if (group.some(c => pendingContractIds.has(String(c.id)))) {
+              console.log(`[btc_auto] Skipping ${contract.stock} — a member of this ${group.length}-row group has a pending order`);
               continue;
+            }
+            if (group.length > 1) {
+              console.log(`[btc_auto] ${contract.stock} $${contract.strike} — ${group.length} STO rows share this position (ids ${groupIds.join(",")}), combined qty ${groupQty} — will fire ONE order`);
             }
 
             const ticker  = String(contract.stock || "").toUpperCase();
@@ -2636,11 +2673,15 @@ export default async function handler(req, res) {
             const contractDryRun    = contractRule.dry_run !== false;
             const contractMinProfit = +(contractRule.min_profit_pct ?? 70);
 
-            // Task #10: skip BTC if expires today and stock is 2%+ below strike (let it expire worthless)
-            if (contractDte === 0) {
+            // P12 (was "Task #10"): skip BTC if expires today and stock is min_otm_pct%+ OTM
+            // (below strike, for these covered calls) — let it expire worthless instead of
+            // paying to close a contract that's about to be worth $0 anyway. DB-gated via
+            // the btc_expiry_skip signal_rules row, not a hardcoded percentage.
+            if (contractDte === 0 && btcExpirySkipEnabled) {
               const liveStockPrice = quotes[ticker]?.lastPrice;
-              if (liveStockPrice != null && liveStockPrice < +contract.strike * 0.98) {
-                console.log(`[BTC] Skipping ${ticker} — expires today, stock $${liveStockPrice.toFixed(2)} vs strike $${contract.strike}, letting expire worthless`);
+              const otmThresholdMult = 1 - (btcExpirySkipOtmPct / 100);
+              if (liveStockPrice != null && liveStockPrice < +contract.strike * otmThresholdMult) {
+                console.log(`[BTC] Skipping ${ticker} — expires today, stock $${liveStockPrice.toFixed(2)} vs strike $${contract.strike} (≥${btcExpirySkipOtmPct}% OTM), letting expire worthless`);
                 continue;
               }
             }
@@ -2679,14 +2720,16 @@ export default async function handler(req, res) {
             const ask = optData.ask ?? 0;
             const mid = ask > 0 && bid > 0 ? (bid + ask) / 2 : bid;
 
-            // Calculate current profit %
-            const premium    = +contract.premium;
+            // Calculate current profit % across the WHOLE group (summed premium/qty) — a
+            // group of N rows is closed with one order at one price, so profit must be
+            // evaluated on the combined position, not any single row's premium/qty.
+            const premium    = groupPremium;
             if (!premium) continue;
-            const currentVal = mid * contract.qty * 100;
+            const currentVal = mid * groupQty * 100;
             const openedVal  = premium; // premium already stored as total (e.g. $1000)
             const profitPct  = ((openedVal - currentVal) / openedVal) * 100;
 
-            console.log(`[btc_auto] ${ticker} $${contract.strike} ${contract.type} — bid:${bid} mid:${mid.toFixed(3)} profit:${profitPct.toFixed(1)}% — rule:"${contractRule.name}" threshold:${contractMinProfit}%`);
+            console.log(`[btc_auto] ${ticker} $${contract.strike} ${contract.type} — bid:${bid} mid:${mid.toFixed(3)} profit:${profitPct.toFixed(1)}% (qty ${groupQty}) — rule:"${contractRule.name}" threshold:${contractMinProfit}%`);
 
             if (profitPct < contractMinProfit) continue;
 
@@ -2723,14 +2766,25 @@ export default async function handler(req, res) {
               time_of_day:          etNowForBtc.getHours() * 60 + etNowForBtc.getMinutes(),
             }, lastRefresh);
 
-            // ── Place order via internal API ───────────────────────────────
+            // ── Settled funds check (WARN-ONLY) — never blocks, just alerts+logs ───
+            if (!contractDryRun) {
+              await checkSettledFunds({
+                token, account: contract.account,
+                requiredCash: limitPrice * groupQty * 100,
+                contractLabel: `BTC ${ticker} $${contract.strike} ${contract.type} ${expires}${group.length > 1 ? ` (${group.length} rows combined)` : ""}`,
+                contractId: contract.id,
+              }).catch(e => console.warn("[settled-funds] check failed:", e.message));
+            }
+
+            // ── Place order via internal API — qty is the GROUP total, one order for
+            // however many rows share this position, referencing the primary contract ──
             let orderResult = null;
             if (isSchwab) {
               // Step 1: preview (creates trade_order row)
               const previewRes = await fetch(`${APP_URL}/api/schwab-orders?action=preview&secret=${process.env.CRON_SECRET}`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ contract_id: contract.id, limit_price: limitPrice, order_type: "LIMIT", duration: "DAY", auto_close: true }),
+                body: JSON.stringify({ contract_id: contract.id, qty: groupQty, limit_price: limitPrice, order_type: "LIMIT", duration: "DAY", auto_close: true }),
               }).then(r => r.json());
 
               if (!previewRes?.ok) {
@@ -2755,7 +2809,7 @@ export default async function handler(req, res) {
               const previewRes = await fetch(`${APP_URL}/api/schwab-orders?action=order-preview&secret=${process.env.CRON_SECRET}`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ contract_id: contract.id, limit_price: limitPrice, order_type: "LIMIT", duration: "DAY" }),
+                body: JSON.stringify({ contract_id: contract.id, qty: groupQty, limit_price: limitPrice, order_type: "LIMIT", duration: "DAY" }),
               }).then(r => r.json());
 
               if (!previewRes?.ok) {
@@ -2776,12 +2830,14 @@ export default async function handler(req, res) {
               orderResult = placeRes;
             }
 
-            // ── Update contract close_method ───────────────────────────────
-            console.log(`[btc_auto] orderResult for ${contract.stock}:`, JSON.stringify(orderResult));
+            // ── Update contract close_method on EVERY row in the group ─────────
+            // One order was placed for all of them — mark all of them, not just the
+            // primary, or the other rows would look untouched and could re-fire next scan.
+            console.log(`[btc_auto] orderResult for ${contract.stock} (group ids ${groupIds.join(",")}):`, JSON.stringify(orderResult));
             if (!contractDryRun) {
               // Mark close_method=auto regardless of orderResult.ok — order may have
               // succeeded even if the response parsing failed
-              await fetch(`${SUPABASE_URL}/rest/v1/contracts?id=eq.${contract.id}`, {
+              await fetch(`${SUPABASE_URL}/rest/v1/contracts?id=in.(${groupIds.join(",")})`, {
                 method: "PATCH",
                 headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
                 body: JSON.stringify({ close_method: "auto" }),
@@ -2790,10 +2846,11 @@ export default async function handler(req, res) {
 
             // ── Log decision ───────────────────────────────────────────────
             if (sigId) {
+              const groupNote = group.length > 1 ? ` — consolidated ${group.length} rows (ids ${groupIds.join(",")}), qty ${groupQty}` : "";
               await fetch(`${SUPABASE_URL}/rest/v1/decision_log`, {
                 method: "POST",
                 headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
-                body: JSON.stringify({ signal_id: sigId, decision: contractDryRun ? "dry_run" : "traded", notes: `auto-btc @ $${limitPrice.toFixed(2)}`, created_at: new Date().toISOString() }),
+                body: JSON.stringify({ signal_id: sigId, decision: contractDryRun ? "dry_run" : "traded", notes: `auto-btc @ $${limitPrice.toFixed(2)}${groupNote}`, created_at: new Date().toISOString() }),
               });
             }
 
@@ -2802,17 +2859,18 @@ export default async function handler(req, res) {
             const profitStr = profitPct.toFixed(1);
             const profitDollar = Math.round((openedVal - currentVal) * 100) / 100;
             const profitDollarStr = (profitDollar >= 0 ? "+" : "-") + "$" + Math.abs(profitDollar).toFixed(2);
-            const costStr   = `$${(limitPrice * contract.qty * 100).toFixed(2)}`;
-            const jsonPreview = contractDryRun ? `\n\nOrder JSON:\n${JSON.stringify({ contract_id: contract.id, ticker, strike: contract.strike, type: contract.type, expires, qty: contract.qty, limit_price: limitPrice, order_type: "LIMIT", duration: "DAY", account: contract.account, approved_by: "auto" }, null, 2)}` : "";
+            const costStr   = `$${(limitPrice * groupQty * 100).toFixed(2)}`;
+            const groupLine = group.length > 1 ? `\nConsolidated ${group.length} STO rows (qty ${group.map(c=>c.qty).join("+")} = ${groupQty}) into one order` : "";
+            const jsonPreview = contractDryRun ? `\n\nOrder JSON:\n${JSON.stringify({ contract_id: contract.id, ticker, strike: contract.strike, type: contract.type, expires, qty: groupQty, limit_price: limitPrice, order_type: "LIMIT", duration: "DAY", account: contract.account, approved_by: "auto" }, null, 2)}` : "";
             await sendPushover(
               `🤖 ${dryTag}Auto-BTC: ${ticker} ${contract.type}`,
-              `${dryTag}Bought back ${ticker} $${contract.strike} ${contract.type} ${expires}\nLimit: $${limitPrice.toFixed(2)} · Cost: ${costStr} · Profit: ${profitDollarStr} (${profitStr}%)\nAccount: ${contract.account}${jsonPreview}`,
+              `${dryTag}Bought back ${ticker} $${contract.strike} ${contract.type} ${expires} × ${groupQty}\nLimit: $${limitPrice.toFixed(2)} · Cost: ${costStr} · Profit: ${profitDollarStr} (${profitStr}%)\nAccount: ${contract.account}${groupLine}${jsonPreview}`,
               sigId ? `${APP_URL}/?action=close&id=${contract.id}&signal_id=${sigId}` : `${APP_URL}/?tab=contracts`,
               "View Contract",
               contractDryRun ? 0 : 1
             );
 
-          } catch(e) { console.warn(`[btc_auto] Error on contract ${contract.id}:`, e.message); }
+          } catch(e) { console.warn(`[btc_auto] Error on group ${groupIds.join(",")}:`, e.message); }
         }
         } // end if (rule)
       }
@@ -2830,13 +2888,17 @@ export default async function handler(req, res) {
       const etradeLooksStale = existingRow && (existingRow.etrade_stale === true || +existingRow.etrade_value <= 150000);
 
       if (!existingRow || etradeLooksStale) {
-        // Helper: last known-good (non-stale) value for a field, from prior snapshot history
+        // Helper: last known-good (non-stale) value for a field, from prior snapshot history.
+        // staleField is the actual DB column (schwab_stale / etrade_stale) — NOT `${field}_stale`,
+        // which doesn't exist and silently 400s (PostgREST unknown-column error), making this
+        // "fallback" always resolve to null instead of the last real value. See regression test.
         const carryForward = async (field, cashField) => {
+          const staleField = field.replace(/_value$/, "_stale");
           const rows = await fetch(
-            `${SUPABASE_URL}/rest/v1/portfolio_snapshots?${field}_stale=eq.false&${field}=not.is.null&order=snapshot_date.desc&limit=1&select=${field},${cashField}`,
+            `${SUPABASE_URL}/rest/v1/portfolio_snapshots?${staleField}=eq.false&${field}=not.is.null&order=snapshot_date.desc&limit=1&select=${field},${cashField}`,
             { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }
           ).then(r => r.json()).catch(() => []);
-          const row = rows?.[0];
+          const row = Array.isArray(rows) ? rows[0] : null;
           return { value: row?.[field] != null ? +row[field] : null, cash: row?.[cashField] != null ? +row[cashField] : null };
         };
 
@@ -2909,26 +2971,61 @@ export default async function handler(req, res) {
           dailyChangePct = prevValue ? Math.round((dailyChange / prevValue) * 10000) / 100 : null;
         }
 
-        await fetch(`${SUPABASE_URL}/rest/v1/portfolio_snapshots`, {
-          method: "POST",
-          headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
-          body: JSON.stringify({
-            snapshot_date:        snapDate,
-            schwab_value:         schwabValue,
-            etrade_value:         etradeValue,
-            schwab_cash:          schwabCash,
-            etrade_cash:          etradeCash,
-            total_cash:           totalCash,
-            total_positions:      (schwabValue || 0) + (etradeValue || 0) - totalCash,
-            open_contracts_value: Math.round(openContractValue * 100) / 100,
-            total_value:          totalValue,
-            daily_change:         dailyChange,
-            daily_change_pct:     dailyChangePct,
-            schwab_stale:         schwabStale,
-            etrade_stale:         etradeStale,
-          }),
-        });
-        console.log(`[snapshot] saved for ${snapDate}: total=${totalValue} (schwab_stale=${schwabStale}, etrade_stale=${etradeStale})`);
+        // Never write a snapshot that's silently missing a whole broker's side — a null ETrade
+        // value (live pull failed AND no prior non-stale row to carry forward from) would still
+        // sum to a real-looking total_value that's actually just the Schwab half. Skip the write
+        // entirely and alert instead of caching a bad number.
+        if (etradeValue == null || schwabValue == null) {
+          const missing = etradeValue == null ? "ETrade" : "Schwab";
+          console.warn(`[snapshot] skipping write for ${snapDate} — ${missing} value unavailable (no live pull, no carry-forward history)`);
+          await sendPushover(
+            `🚨 Portfolio snapshot skipped`,
+            `${missing} NAV unavailable (no live pull, no prior known-good value to carry forward) — snapshot for ${snapDate} was NOT written to avoid caching a bad total.`,
+            `${APP_URL}/?tab=analytics`, "Check Analytics", 1
+          );
+        } else {
+          await fetch(`${SUPABASE_URL}/rest/v1/portfolio_snapshots`, {
+            method: "POST",
+            headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
+            body: JSON.stringify({
+              snapshot_date:        snapDate,
+              schwab_value:         schwabValue,
+              etrade_value:         etradeValue,
+              schwab_cash:          schwabCash,
+              etrade_cash:          etradeCash,
+              total_cash:           totalCash,
+              total_positions:      (schwabValue || 0) + (etradeValue || 0) - totalCash,
+              open_contracts_value: Math.round(openContractValue * 100) / 100,
+              total_value:          totalValue,
+              daily_change:         dailyChange,
+              daily_change_pct:     dailyChangePct,
+              schwab_stale:         schwabStale,
+              etrade_stale:         etradeStale,
+            }),
+          });
+          console.log(`[snapshot] saved for ${snapDate}: total=${totalValue} (schwab_stale=${schwabStale}, etrade_stale=${etradeStale})`);
+
+          // Once-per-day alert when either side is stale (carried forward), so a live-pull
+          // failure (e.g. expired ETrade OAuth token) can't go unnoticed for weeks like the
+          // $110,558 freeze did — that bug was invisible because nothing ever alerted on it.
+          if (schwabStale || etradeStale) {
+            const alertKey = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.portfolio_stale_alert`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }).then(r => r.json()).catch(() => []);
+            const lastAlertedDate = alertKey?.[0]?.cols?.date;
+            if (lastAlertedDate !== snapDate) {
+              const which = [schwabStale && "Schwab", etradeStale && "ETrade"].filter(Boolean).join(" + ");
+              await sendPushover(
+                `⚠️ Portfolio snapshot stale`,
+                `${which} value carried forward from a prior day's snapshot (live pull failed) for ${snapDate}. Check broker auth (ETrade tokens need same-day renewal, Schwab may need re-auth).`,
+                `${APP_URL}/?tab=analytics`, "Check Analytics", 0
+              );
+              await fetch(`${SUPABASE_URL}/rest/v1/col_prefs`, {
+                method: "POST",
+                headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
+                body: JSON.stringify({ id: "portfolio_stale_alert", cols: { date: snapDate }, updated_at: new Date().toISOString() }),
+              }).catch(() => {});
+            }
+          }
+        }
       }
     } catch(e) { console.warn("[snapshot] failed:", e.message); }
 
@@ -3125,6 +3222,8 @@ export default async function handler(req, res) {
     // MARKET HOURS GATE — only runs during market hours
     if (!isMarketOpen) {
       console.log("[expiry] outside market hours — skipping expiry protection checks");
+    } else if (!skynetMasterEnabled) {
+      console.log("[expiry] Skynet master switch off — skipping expiry protection checks");
     } else
     try {
       const etForExpiry = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));

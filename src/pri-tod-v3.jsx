@@ -761,7 +761,10 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
   const [autoStats,     setAutoStats]     = useState(null); // Skynet auto performance
 
   useEffect(() => {
-    supabase.from("skynet_controls").select("*").eq("enabled",true).limit(1).maybeSingle()
+    // No .eq("enabled",true) filter here — that used to hide the row (and its master_enabled
+    // toggle) entirely whenever `enabled` was flipped false, making the switch un-flippable
+    // from the UI once tripped off.
+    supabase.from("skynet_controls").select("*").limit(1).maybeSingle()
       .then(({data}) => { if (data) setSkynetCtrl(data); });
     supabase.from("ticker_risk_config").select("*").order("symbol")
       .then(({data}) => { if (data) setTickerRiskCfg(data); });
@@ -1366,6 +1369,20 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
           return (
             <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #ffd16625",borderRadius:8,padding:"12px 14px",marginTop:16}}>
               <div style={{fontFamily:"monospace",fontSize:9,color:"#ffd166",letterSpacing:"0.08em",marginBottom:10}}>🛡 SKYNET CONTROLS</div>
+              {/* Global master kill-switch — gates every automated order-placing rule (auto-STO,
+                  auto-BTC, expiry protection, chase) in one flip. Imports/snapshots/recon/Pushover
+                  keep running regardless. Read fresh from the DB every cron cycle — no redeploy. */}
+              <div style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",marginBottom:12,background:sc.master_enabled===false?"#ff456014":"#00ff8810",border:`1px solid ${sc.master_enabled===false?"#ff456040":"#00ff8830"}`,borderRadius:6}}>
+                <input type="checkbox" checked={sc.master_enabled!==false}
+                  onChange={async e=>{
+                    const v=e.target.checked;
+                    await supabase.from("skynet_controls").update({master_enabled:v,updated_at:new Date().toISOString()}).eq("id",sc.id);
+                    setSkynetCtrl(p=>({...p,master_enabled:v}));
+                  }} id="sc-master" style={{width:16,height:16,cursor:"pointer"}}/>
+                <label htmlFor="sc-master" style={{fontSize:11,fontWeight:700,fontFamily:"monospace",cursor:"pointer",color:sc.master_enabled===false?"#ff4560":"#00ff88"}}>
+                  {sc.master_enabled===false ? "🔴 ALL AUTOMATION OFF (master switch)" : "🟢 SKYNET AUTOMATION ENABLED (master switch)"}
+                </label>
+              </div>
               <div style={{display:"flex",gap:16,flexWrap:"wrap",alignItems:"flex-end"}}>
                 <div><div style={{fontSize:7,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",marginBottom:3}}>MAX ORDER VALUE $</div>
                   <input defaultValue={sc.max_order_value} onBlur={async e=>{const v=parseFloat(e.target.value);if(!isNaN(v)){await supabase.from("skynet_controls").update({max_order_value:v,updated_at:new Date().toISOString()}).eq("id",sc.id);setSkynetCtrl(p=>({...p,max_order_value:v}));}}} style={inp}/>
@@ -9337,10 +9354,10 @@ ${JSON.stringify(summary, null, 1)}`;
                 <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #58a6ff30",borderRadius:8,padding:"8px 12px",minWidth:120,display:"flex",flexDirection:"column",gap:4}}>
                   <div style={{display:"flex",alignItems:"center",gap:5}}>
                     <span style={{fontSize:7,color:"#58a6ff",fontFamily:"monospace",letterSpacing:"0.08em"}}>SCHWAB ACCT</span>
-                    {cashData.schwab && <span style={{fontSize:7,color:"#00ff8870",fontFamily:"monospace"}}>live</span>}
+                    {liveSchwabInline!=null && <span style={{fontSize:7,color:"#00ff8870",fontFamily:"monospace"}}>live</span>}
                   </div>
                   <div style={{fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:"#58a6ff"}}>
-                    {cashData.schwab ? f$(+cashData.schwab) : <span style={{color:th("#2a3040","#6b5f55"),fontSize:11}}>—</span>}
+                    {liveSchwabInline!=null ? f$(liveSchwabInline) : <span style={{color:th("#2a3040","#6b5f55"),fontSize:11}}>—</span>}
                   </div>
                 </div>
                 {/* E*TRADE cash — manual entry, falls back for accounts not yet synced via live snapshot (6917 + 8222 combined) */}
@@ -9353,10 +9370,14 @@ ${JSON.stringify(summary, null, 1)}`;
                     onBlur={e=>updateCash("etrade",e.target.value)}
                     style={{width:"100%",fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:"#ffd166",background:"transparent",border:"none",borderBottom:"1px solid #ffd16630",padding:"2px 0",outline:"none"}}/>
                 </div>
-                {/* Total — prefers combined live ETrade value (both accounts) over the single manual entry */}
+                {/* Total — netLiquidation across both brokers: live > daily snapshot > manual cash entry.
+                    Must never read the raw manual cashData field directly as primary source — that
+                    field can hold a stale/placeholder number (this is the $6k-vs-$900k bug: the total
+                    was reading +cashData.schwab directly instead of this prioritized chain). */}
                 {(() => {
+                  const schwabCombined = liveSchwabInline ?? (+cashData.schwab || 0);
                   const etradeCombined = liveEtradeInline ?? (+cashData.etrade || 0);
-                  const totalAcct = (+cashData.schwab||0) + etradeCombined;
+                  const totalAcct = schwabCombined + etradeCombined;
                   return totalAcct>0 && (
                     <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #00ff8830",borderRadius:8,padding:"8px 12px",minWidth:120,display:"flex",flexDirection:"column",gap:4}}>
                       <div style={{fontSize:7,color:"#00ff88",fontFamily:"monospace",letterSpacing:"0.08em"}}>TOTAL ACCT</div>
@@ -9366,18 +9387,19 @@ ${JSON.stringify(summary, null, 1)}`;
                 })()}
                 {/* Committed funds + available to write puts */}
                 {(() => {
+                  const schwabCombined = liveSchwabInline ?? (+cashData.schwab || 0);
                   const etradeCombined = liveEtradeInline ?? (+cashData.etrade || 0);
                   const schwabCommitted = openC.filter(c=>c.optType==="STO"&&c.type==="Put"&&c.account==="Schwab").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
                   const schwabBTOAssets = openC.filter(c=>c.optType==="BTO"&&c.account==="Schwab").reduce((s,c)=>{const lo=findOptionForContract(etradeChains,c);return s+((lo?.bid!=null&&lo?.ask!=null)?(lo.bid+lo.ask)/2*(c.qty||1)*100:lo?.mark!=null?lo.mark*(c.qty||1)*100:Math.abs(c.premium||0));},0);
                   const etradeCommitted = openC.filter(c=>c.optType==="STO"&&c.type==="Put"&&c.account==="Etrade").reduce((s,c)=>s+(Math.abs(c.strike||0)*(c.qty||0)*100),0);
                   const etradeBTOAssets = openC.filter(c=>c.optType==="BTO"&&c.account==="Etrade").reduce((s,c)=>{const lo=findOptionForContract(etradeChains,c);return s+((lo?.bid!=null&&lo?.ask!=null)?(lo.bid+lo.ask)/2*(c.qty||1)*100:lo?.mark!=null?lo.mark*(c.qty||1)*100:Math.abs(c.premium||0));},0);
-                  const schwabAvail = (+cashData.schwab||0) - schwabCommitted + schwabBTOAssets;
+                  const schwabAvail = schwabCombined - schwabCommitted + schwabBTOAssets;
                   const etradeAvail = etradeCombined - etradeCommitted + etradeBTOAssets;
                   return (<>
                     <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #c084fc30",borderRadius:8,padding:"8px 12px",minWidth:140,display:"flex",flexDirection:"column",gap:3}}>
                       <div style={{fontSize:7,color:"#c084fc",fontFamily:"monospace",letterSpacing:"0.08em"}}>SCHWAB AVAILABLE</div>
                       <div style={{fontSize:14,fontWeight:700,fontFamily:"'JetBrains Mono',monospace",color:schwabAvail>=0?"#00ff88":"#ff4560"}}>{f$(schwabAvail)}</div>
-                      <div style={{fontSize:8,color:th("#3a4050","#8a7e74"),fontFamily:"monospace"}}>acct {f$(+cashData.schwab||0)} − STO {f$(schwabCommitted)} + BTO {f$(schwabBTOAssets)}</div>
+                      <div style={{fontSize:8,color:th("#3a4050","#8a7e74"),fontFamily:"monospace"}}>acct {f$(schwabCombined)} − STO {f$(schwabCommitted)} + BTO {f$(schwabBTOAssets)}</div>
                     </div>
                     <div style={{background:th("#0a0e14","#f8f3eb"),border:"1px solid #c084fc30",borderRadius:8,padding:"8px 12px",minWidth:140,display:"flex",flexDirection:"column",gap:3}}>
                       <div style={{fontSize:7,color:"#c084fc",fontFamily:"monospace",letterSpacing:"0.08em"}}>ETRADE AVAILABLE</div>

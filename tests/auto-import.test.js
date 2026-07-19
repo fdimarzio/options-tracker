@@ -1114,3 +1114,37 @@ describe("parseEtradeEquityTx", () => {
     expect(result.symbol).toBeNull();
   });
 });
+
+// ── P11: stock_transactions import — Schwab only, ETrade excluded ────────────
+// Mirrors api/auto-import.js's equity-import aggregation (~line 1430):
+// `allEquityTxs = [...schwabEquityTxs]` — ETrade equity is parsed (parseEtradeEquityTx
+// still exists, e.g. for future debugging) but never included in what gets inserted
+// into stock_transactions, since both ETrade accounts are IRAs (tax-deferred) and mixing
+// them with Schwab's taxable equity activity in one table would corrupt tax reporting.
+describe("stock_transactions import — Schwab only (P11)", () => {
+  function buildEquityImportList(schwabEquityTxs, etradeEquityTxs) {
+    // Deliberately does NOT spread etradeEquityTxs — this is the actual production line.
+    return [...schwabEquityTxs];
+  }
+
+  it("positive — a Schwab equity transaction is included in the import list", () => {
+    const schwabTx = { schwab_transaction_id: "1", symbol: "AAPL", transaction_type: "BUY", account: "Schwab 3866" };
+    const result = buildEquityImportList([schwabTx], []);
+    expect(result).toContainEqual(schwabTx);
+    expect(result.length).toBe(1);
+  });
+
+  it("negative — an ETrade equity transaction is NOT included, even when present in the parsed list", () => {
+    const schwabTx = { schwab_transaction_id: "1", symbol: "AAPL", transaction_type: "BUY", account: "Schwab 3866" };
+    const etradeTx = { schwab_transaction_id: "etrade_2", symbol: "NVDA", transaction_type: "SELL", account: "ETrade 6917" };
+    const result = buildEquityImportList([schwabTx], [etradeTx]);
+    expect(result).toContainEqual(schwabTx);
+    expect(result).not.toContainEqual(etradeTx);
+    expect(result.find(r => r.account?.startsWith("ETrade"))).toBeUndefined();
+  });
+
+  it("negative — an all-ETrade batch results in an empty import list", () => {
+    const etradeTx = { schwab_transaction_id: "etrade_3", symbol: "TSLA", transaction_type: "BUY", account: "ETrade 8222" };
+    expect(buildEquityImportList([], [etradeTx])).toEqual([]);
+  });
+});

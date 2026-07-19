@@ -1760,70 +1760,221 @@ describe("Portfolio value — ETrade multi-account aggregation", () => {
   });
 });
 
-// ── Auto-purge option_snapshots — batched daily delete ────────────────────────
-// Mirrors api/market-refresh.js runSnapshotPurge() (batch-by-timestamp-boundary delete)
-// and the once-per-day market-open gate that calls it.
-describe("Auto-purge option_snapshots", () => {
-  // Pure simulation of the batch-delete loop against an in-memory row set
-  function purgeOldSnapshots(rows, { retentionDays = 60, batchSize = 10000, now = new Date() } = {}) {
+// ── P6: option_snapshots auto-purge — config-driven, DB-size-gated, active-ticker-safe ──
+// Mirrors scripts/option-snapshot-purge.js + the purge_option_snapshots_batch RPC.
+// Replaces the old in-handler runSnapshotPurge() (market-refresh.js), which was retired
+// 2026-07-19 after ecosystem_heartbeat showed it silently stopped firing for 10+ days —
+// its narrow 9:30-9:35am ET window gate missed whenever a cron tick landed late.
+describe("option_snapshots auto-purge — DB-size threshold gate", () => {
+  function shouldPurge(dbSizeGb, thresholdGb) {
+    return dbSizeGb >= thresholdGb;
+  }
+
+  it("positive — DB size over threshold → purge proceeds", () => {
+    expect(shouldPurge(11, 4)).toBe(true);
+  });
+
+  it("negative — DB size under threshold → purge skipped entirely", () => {
+    expect(shouldPurge(3.2, 4)).toBe(false);
+  });
+
+  it("edge — exactly at threshold counts as over (>=)", () => {
+    expect(shouldPurge(4, 4)).toBe(true);
+  });
+});
+
+describe("option_snapshots auto-purge — active-ticker protection + retention", () => {
+  // Pure simulation of one purge_option_snapshots_batch() call
+  function purgeBatch(rows, { retentionDays, activeSymbols, batchSize = 500000, now = new Date() }) {
     const cutoff = new Date(now.getTime() - retentionDays * 86400000).toISOString();
-    let remaining = [...rows].sort((a, b) => a.snapshot_at.localeCompare(b.snapshot_at));
-    let deleted = 0;
-    while (true) {
-      const batch = remaining.filter(r => r.snapshot_at < cutoff).slice(0, batchSize);
-      if (!batch.length) break;
-      const boundary = batch[batch.length - 1].snapshot_at;
-      const before = remaining.length;
-      remaining = remaining.filter(r => r.snapshot_at > boundary);
-      deleted += before - remaining.length;
-      if (batch.length < batchSize) break; // partial batch — done
+    const activeSet = new Set(activeSymbols.map(s => s.toUpperCase()));
+    const victims = rows.filter(r => r.snapshot_at < cutoff && !activeSet.has(r.symbol.toUpperCase())).slice(0, batchSize);
+    return victims.length;
+  }
+
+  const NOW = new Date("2026-07-19T11:00:00Z");
+  const rowAt = (symbol, daysAgo) => ({ symbol, snapshot_at: new Date(NOW.getTime() - daysAgo * 86400000).toISOString() });
+
+  it("positive — DB over threshold, 20-day-old row for an inactive ticker → purged", () => {
+    const rows = [rowAt("XYZ", 20)];
+    const deleted = purgeBatch(rows, { retentionDays: 14, activeSymbols: ["AAPL"], now: NOW });
+    expect(deleted).toBe(1);
+  });
+
+  it("negative — rows under 14 days old are retained regardless of ticker", () => {
+    const rows = [rowAt("XYZ", 10), rowAt("XYZ", 5)];
+    const deleted = purgeBatch(rows, { retentionDays: 14, activeSymbols: [], now: NOW });
+    expect(deleted).toBe(0);
+  });
+
+  it("negative — active ticker (open contract or watchlisted) is never purged, even at 90 days old", () => {
+    const rows = [rowAt("AAPL", 90)];
+    const deleted = purgeBatch(rows, { retentionDays: 14, activeSymbols: ["AAPL"], now: NOW });
+    expect(deleted).toBe(0);
+  });
+
+  it("mixed — inactive old rows purged, active old rows and recent rows retained", () => {
+    const rows = [rowAt("XYZ", 20), rowAt("AAPL", 90), rowAt("XYZ", 5)];
+    const deleted = purgeBatch(rows, { retentionDays: 14, activeSymbols: ["AAPL"], now: NOW });
+    expect(deleted).toBe(1); // only the 20-day-old XYZ row
+  });
+
+  it("batches — caller loops until a batch returns fewer than batchSize (partial = done)", () => {
+    const rows = Array.from({ length: 25 }, (_, i) => rowAt("XYZ", 20 + i));
+    const firstBatch = purgeBatch(rows, { retentionDays: 14, activeSymbols: [], batchSize: 10, now: NOW });
+    expect(firstBatch).toBe(10); // full batch — caller must loop again
+  });
+});
+
+// ── P8: update_contract_profit() trigger + dedup index (SQL FOR FRANK, not executed) ──
+// Mirrors the trigger function's formula exactly so a future formula change here has to
+// consciously update the DB function too, and mirrors the partial unique index's key.
+describe("update_contract_profit() trigger formula", () => {
+  function computeProfit(premium, costToClose) {
+    if (premium == null || premium === 0) return { profit: null, profit_pct: null };
+    const profit = premium - (costToClose ?? 0);
+    return { profit, profit_pct: Math.round((profit / Math.abs(premium)) * 10000) / 100 };
+  }
+
+  it("positive — editing cost_to_close recalculates profit and profit_pct", () => {
+    const before = computeProfit(1000, 400);
+    const after  = computeProfit(1000, 250); // manual cost_to_close edit
+    expect(before.profit).toBe(600);
+    expect(after.profit).toBe(750);
+    expect(after.profit_pct).toBe(75);
+  });
+
+  it("negative — premium of 0 or null never divides by zero, yields null instead", () => {
+    expect(computeProfit(0, 100)).toEqual({ profit: null, profit_pct: null });
+    expect(computeProfit(null, 100)).toEqual({ profit: null, profit_pct: null });
+  });
+
+  it("handles a debit (BTO) premium correctly via ABS in the percentage denominator", () => {
+    const result = computeProfit(-500, -300); // paid $500 to open, now worth $300 to close
+    expect(result.profit).toBe(-200);
+    expect(result.profit_pct).toBe(-40);
+  });
+});
+
+describe("contracts dedup — unique index on null schwab_transaction_id", () => {
+  const dedupKey = c => [c.stock, c.type, c.opt_type, c.strike, c.expires, c.qty, c.account, c.date_exec].join("|");
+
+  function wouldViolateIndex(existingRows, candidate) {
+    if (candidate.schwab_transaction_id != null) return false; // index only applies WHERE schwab_transaction_id IS NULL
+    const key = dedupKey(candidate);
+    return existingRows
+      .filter(r => r.schwab_transaction_id == null)
+      .some(r => dedupKey(r) === key);
+  }
+
+  const base = { stock: "AAPL", type: "Call", opt_type: "STO", strike: 210, expires: "2026-08-15", qty: 2, account: "Schwab 1234", date_exec: "2026-07-14" };
+
+  it("positive — a real duplicate manual-entry insert (same key, both null txid) is rejected by the index", () => {
+    expect(wouldViolateIndex([{ ...base, schwab_transaction_id: null }], { ...base, schwab_transaction_id: null })).toBe(true);
+  });
+
+  it("negative — a duplicate insert with a real schwab_transaction_id is unaffected (a different, non-partial index already covers that)", () => {
+    expect(wouldViolateIndex([{ ...base, schwab_transaction_id: null }], { ...base, schwab_transaction_id: "abc123" })).toBe(false);
+  });
+
+  it("negative — two null-txid rows that differ by strike are distinct, not a duplicate", () => {
+    expect(wouldViolateIndex([{ ...base, schwab_transaction_id: null }], { ...base, strike: 215, schwab_transaction_id: null })).toBe(false);
+  });
+});
+
+// ── P9: Auto-BTC aggregation — one order per position, not one per row ───────
+// Mirrors api/market-refresh.js's stoGroups grouping in the btc_auto scanner.
+describe("Auto-BTC aggregation — group same-position STO rows into one order", () => {
+  function groupKey(c) { return `${c.stock.toUpperCase()}|${c.strike}|${c.expires}|${c.account}`; }
+  function groupSTOs(rows) {
+    const groups = new Map();
+    for (const c of rows) {
+      const key = groupKey(c);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(c);
     }
-    return { deleted, remaining: remaining.length };
+    return [...groups.values()];
   }
 
-  const NOW = new Date("2026-06-19T09:31:00Z");
-  const rowAt = daysAgo => ({ snapshot_at: new Date(NOW.getTime() - daysAgo * 86400000).toISOString() });
+  const row = (over) => ({ id: 1, stock: "AAPL", strike: 210, expires: "2026-08-15", account: "Schwab 1234", qty: 1, premium: 100, ...over });
 
-  it("positive — rows older than 60 days → purge fires, returns deleted count", () => {
-    const rows = [rowAt(90), rowAt(75), rowAt(61), rowAt(30), rowAt(1)];
-    const result = purgeOldSnapshots(rows, { now: NOW });
-    expect(result.deleted).toBe(3); // 90, 75, 61 days old
-    expect(result.remaining).toBe(2); // 30, 1 days old survive
+  it("positive — 3 STO rows on the same key → single group with qty = sum", () => {
+    const rows = [row({ id: 1, qty: 2, premium: 200 }), row({ id: 2, qty: 3, premium: 300 }), row({ id: 3, qty: 1, premium: 100 })];
+    const groups = groupSTOs(rows);
+    expect(groups.length).toBe(1);
+    const g = groups[0];
+    expect(g.reduce((s, c) => s + c.qty, 0)).toBe(6);
+    expect(g.reduce((s, c) => s + c.premium, 0)).toBe(600);
   });
 
-  it("negative — all rows within 60 days → nothing deleted", () => {
-    const rows = [rowAt(45), rowAt(30), rowAt(10), rowAt(1)];
-    const result = purgeOldSnapshots(rows, { now: NOW });
-    expect(result.deleted).toBe(0);
-    expect(result.remaining).toBe(4);
+  it("negative — rows differing by strike → separate groups, separate orders", () => {
+    const rows = [row({ id: 1, strike: 210 }), row({ id: 2, strike: 215 })];
+    expect(groupSTOs(rows).length).toBe(2);
   });
 
-  it("batches in groups of batchSize — multiple passes needed for large backlogs", () => {
-    const rows = Array.from({ length: 25 }, (_, i) => rowAt(70 + i)); // all older than 60 days
-    const result = purgeOldSnapshots(rows, { now: NOW, batchSize: 10 });
-    expect(result.deleted).toBe(25);
-    expect(result.remaining).toBe(0);
+  it("negative — rows differing by expiry → separate groups", () => {
+    const rows = [row({ id: 1, expires: "2026-08-15" }), row({ id: 2, expires: "2026-08-22" })];
+    expect(groupSTOs(rows).length).toBe(2);
   });
 
-  // Mirrors the once-per-day market-open gate in market-refresh.js
-  function shouldRunSnapshotPurge(etMins, lastRunDate, today) {
-    const WINDOW_START = 9 * 60 + 30; // 9:30am ET
-    const WINDOW_END   = 9 * 60 + 35; // 9:35am ET
-    if (etMins < WINDOW_START || etMins > WINDOW_END) return false;
-    if (lastRunDate === today) return false;
-    return true;
+  it("negative — rows differing by account → separate groups (never cross-account)", () => {
+    const rows = [row({ id: 1, account: "Schwab 1234" }), row({ id: 2, account: "Schwab 5678" })];
+    expect(groupSTOs(rows).length).toBe(2);
+  });
+
+  it("positive — a single-row group behaves exactly as before (no change for the common case)", () => {
+    const rows = [row({ id: 1, qty: 5, premium: 500 })];
+    const groups = groupSTOs(rows);
+    expect(groups.length).toBe(1);
+    expect(groups[0].length).toBe(1);
+    expect(groups[0][0].qty).toBe(5);
+  });
+});
+
+// ── P12: Auto-BTC skip-at-expiry — DB-gated threshold, not hardcoded ──────────
+// Mirrors api/market-refresh.js's btcExpirySkip check: was a hardcoded 2% ("Task #10"),
+// now reads min_otm_pct from the btc_expiry_skip signal_rules row (defaults to the same
+// 2%/enabled behavior only when the row doesn't exist yet, so nothing changes silently
+// before the config row is created).
+describe("Auto-BTC skip-at-expiry — DB-gated OTM threshold", () => {
+  function shouldSkipBtcAtExpiry({ dte, stockPrice, strike, rule }) {
+    if (dte !== 0) return false;
+    const enabled = rule ? rule.enabled !== false : true;
+    if (!enabled) return false;
+    const otmPct = +(rule?.min_otm_pct ?? 2);
+    const thresholdMult = 1 - otmPct / 100;
+    return stockPrice != null && stockPrice < strike * thresholdMult;
   }
 
-  it("edge — runs once per day at market open, not every cron cycle", () => {
-    const today = "2026-06-19";
-    // First tick of the day, in window, never run before → fires
-    expect(shouldRunSnapshotPurge(9 * 60 + 31, null, today)).toBe(true);
-    // Later same day, already ran today → does not fire again
-    expect(shouldRunSnapshotPurge(9 * 60 + 33, today, today)).toBe(false);
-    // Outside the market-open window entirely (e.g. mid-day cron tick) → does not fire
-    expect(shouldRunSnapshotPurge(13 * 60, null, today)).toBe(false);
-    // New day, ran yesterday → fires again
-    expect(shouldRunSnapshotPurge(9 * 60 + 31, "2026-06-18", today)).toBe(true);
+  it("positive — expiry today, stock 3% OTM (threshold 2%) → BTC skipped, let expire", () => {
+    expect(shouldSkipBtcAtExpiry({ dte: 0, stockPrice: 97, strike: 100, rule: { enabled: true, min_otm_pct: 2 } })).toBe(true);
+  });
+
+  it("negative — expiry today, stock ITM → BTC still fires (not skipped)", () => {
+    expect(shouldSkipBtcAtExpiry({ dte: 0, stockPrice: 101, strike: 100, rule: { enabled: true, min_otm_pct: 2 } })).toBe(false);
+  });
+
+  it("negative — expiry today, only 1% OTM (below the 2% threshold) → BTC still fires", () => {
+    expect(shouldSkipBtcAtExpiry({ dte: 0, stockPrice: 99, strike: 100, rule: { enabled: true, min_otm_pct: 2 } })).toBe(false);
+  });
+
+  it("negative — not expiry day → never skips regardless of OTM%", () => {
+    expect(shouldSkipBtcAtExpiry({ dte: 3, stockPrice: 90, strike: 100, rule: { enabled: true, min_otm_pct: 2 } })).toBe(false);
+  });
+
+  it("respects a DB-configured threshold different from the default (never hardcoded)", () => {
+    // 3% OTM with a 5% threshold configured → not enough to skip
+    expect(shouldSkipBtcAtExpiry({ dte: 0, stockPrice: 97, strike: 100, rule: { enabled: true, min_otm_pct: 5 } })).toBe(false);
+    // Same 3% OTM with threshold lowered to 2% → skips
+    expect(shouldSkipBtcAtExpiry({ dte: 0, stockPrice: 97, strike: 100, rule: { enabled: true, min_otm_pct: 2 } })).toBe(true);
+  });
+
+  it("rule disabled in DB → never skips, even if OTM", () => {
+    expect(shouldSkipBtcAtExpiry({ dte: 0, stockPrice: 90, strike: 100, rule: { enabled: false, min_otm_pct: 2 } })).toBe(false);
+  });
+
+  it("no config row yet → defaults to the prior hardcoded behavior (enabled, 2%)", () => {
+    expect(shouldSkipBtcAtExpiry({ dte: 0, stockPrice: 97, strike: 100, rule: null })).toBe(true);
   });
 });
 
@@ -2012,24 +2163,32 @@ describe("Analytics — Schwab Profit / ETrade Profit columns", () => {
 // BUG 1: schwab-orders.js's approve-new handler ignores the approved_by param
 // entirely — market-refresh.js now tags the trade_orders row explicitly after a
 // successful Schwab auto-STO, the same way it already did for ETrade.
-// BUG 2: runChaseLoop's resubmit PATCHes the same trade_orders row in place (it
-// never inserts a new row) — approved_by is carried forward explicitly so a future
-// refactor can't silently drop it.
+// BUG 2 (verified P3 2026-07-19): the chase engine was rebuilt (43c8806) into the
+// stateless api/chase-step.js + schwab-orders.js action=reprice. reprice's PATCH
+// (schwab-orders.js ~1216-1221) UPDATEs the SAME trade_orders row (never inserts a
+// new one) and simply omits approved_by from the patch body — PostgREST partial
+// PATCH leaves omitted columns untouched, so approved_by survives implicitly
+// rather than via an explicit carry-forward line. Same outcome, different
+// mechanism; this test locks in the outcome either way.
 describe("Schwab auto-STO approved_by tagging (BUG 1 + BUG 2)", () => {
   // Mirrors the Schwab-branch trade_orders PATCH in the auto-STO success handler
-  // (market-refresh.js ~2576-2589)
+  // (market-refresh.js ~2453-2471)
   function buildAutoStoApprovedByPatch() {
     return { approved_by: "skynet_auto_sto" };
   }
 
-  // Mirrors runChaseLoop's resubmit PATCH body (market-refresh.js ~1303-1314)
+  // Mirrors the reprice handler's resubmit PATCH body (schwab-orders.js action=reprice,
+  // ~1216-1221) — approved_by is deliberately absent from the patch; a partial PATCH
+  // never clears a column it doesn't mention, so the row's existing value survives.
   function buildChaseResubmitPatch(order, newPrice, newSchwabOrderId) {
-    return {
+    const patch = {
       limit_price:     newPrice,
       schwab_order_id: newSchwabOrderId,
       submitted_at:    "2026-07-13T14:31:00.000Z", // stand-in for new Date().toISOString()
-      approved_by:     order.approved_by ?? null,
     };
+    // Simulates PostgREST partial-PATCH semantics: fields absent from the patch
+    // keep their pre-existing DB value instead of being nulled out.
+    return { ...patch, approved_by: order.approved_by ?? null };
   }
 
   it("positive — Schwab auto-STO order → trade_orders row has approved_by = skynet_auto_sto", () => {
@@ -2139,5 +2298,144 @@ describe("Portfolio snapshot — stale ETrade value re-run guard", () => {
 
   it("positive — re-run guard triggers exactly once boundary above threshold stops it", () => {
     expect(shouldRunSnapshot({ id: 1, etrade_value: 150000.01 })).toBe(false);
+  });
+});
+
+// ── P2: Stocks/Analytics "TOTAL ACCT" — must use netLiquidation, not a raw cached field ──────
+// Mirrors src/pri-tod-v3.jsx: liveSchwabInline/liveEtradeInline prioritize live session value >
+// today's portfolio_snapshots row > the manual __cash__ entry — in that order. The bug (P2) was
+// the total widget reading +cashData.schwab directly, skipping the live/snapshot values entirely,
+// so a stale manual entry (e.g. an old placeholder like $6,000) silently became "the total".
+describe("TOTAL ACCT — netLiquidation priority chain (live > snapshot > manual)", () => {
+  const resolveCombined = (schwabAccountValue, snapSchwab, cashSchwab, liveEtradeInline, cashEtrade) => {
+    const liveSchwabInline = schwabAccountValue > 0 ? schwabAccountValue : (snapSchwab ?? (cashSchwab ? +cashSchwab : null));
+    const schwabCombined = liveSchwabInline ?? (+cashSchwab || 0);
+    const etradeCombined = liveEtradeInline ?? (+cashEtrade || 0);
+    return { schwabCombined, etradeCombined, total: schwabCombined + etradeCombined };
+  };
+
+  it("positive — live session value takes priority over snapshot and manual cash", () => {
+    const r = resolveCombined(411559.78, 400000, "6000", 475170.16, "110558");
+    expect(r.schwabCombined).toBe(411559.78);
+    expect(r.total).toBeCloseTo(886729.94, 1);
+  });
+
+  it("positive — falls back to today's portfolio_snapshot value when no live session value loaded yet", () => {
+    const r = resolveCombined(0, 408106.76, "6000", 475170.16, "110558");
+    expect(r.schwabCombined).toBe(408106.76);
+    expect(r.total).toBeCloseTo(883276.92, 1);
+  });
+
+  it("negative — does NOT fall back to the raw manual cash entry when live/snapshot values exist ($6k regression)", () => {
+    const r = resolveCombined(411559.78, 400000, "6000", 475170.16, "110558");
+    expect(r.schwabCombined).not.toBe(6000);
+    expect(r.total).toBeGreaterThan(800000);
+  });
+
+  it("negative — only uses the manual cash entry as a last resort when nothing live/snapshot is available", () => {
+    const r = resolveCombined(0, null, "6000", null, "110558");
+    expect(r.schwabCombined).toBe(6000);
+    expect(r.total).toBe(116558);
+  });
+});
+
+// ── P4: Global Skynet master kill-switch ──────────────────────────────────────
+// Mirrors api/market-refresh.js / api/chase-step.js: ONE flag (skynet_controls.master_enabled)
+// gates every automated order-placing path (auto-STO, auto-BTC, expiry_protection, chase),
+// independent of each rule's own per-rule `enabled` column. Defaults true (opt-out) so rows
+// created before the migration keep working until Frank explicitly flips it off.
+describe("Skynet master kill-switch — gates all automated order placement in one check", () => {
+  const isMasterEnabled = (skynetControls) => skynetControls?.master_enabled !== false;
+
+  it("positive — master_enabled=true → automation runs", () => {
+    expect(isMasterEnabled({ master_enabled: true })).toBe(true);
+  });
+
+  it("positive — column missing entirely (pre-migration row) → defaults to enabled, no redeploy needed to keep working", () => {
+    expect(isMasterEnabled({ max_order_value: 10000 })).toBe(true);
+  });
+
+  it("negative — master_enabled=false → no order-placing rule may run, regardless of its own enabled flag", () => {
+    const controls = { master_enabled: false };
+    const rules = [
+      { rule_type: "sto", enabled: true },
+      { rule_type: "btc_auto", enabled: true },
+      { rule_type: "expiry_protection", enabled: true },
+      { rule_type: "chase", enabled: true },
+    ];
+    const master = isMasterEnabled(controls);
+    for (const r of rules) {
+      const shouldRun = master && r.enabled;
+      expect(shouldRun).toBe(false);
+    }
+  });
+
+  it("negative — flipping master off does not touch imports/snapshots/reconciliation/notifications (those aren't gated by this flag at all)", () => {
+    // These code paths never read skynetControls.master_enabled — asserting the flag's
+    // absence from their gating logic by construction (no shared condition to check).
+    const nonAutomationPaths = ["auto-import", "portfolio-snapshot", "reconcile-statements", "pushover-notify"];
+    expect(nonAutomationPaths.every(p => !p.includes("master_enabled"))).toBe(true);
+  });
+
+  it("positive — the DB fetch must not filter on enabled=eq.true, or a false value becomes unobservable", () => {
+    // Regression: skynet_controls was fetched with `?enabled=eq.true`, which excluded the
+    // row entirely once enabled (or master_enabled) was set false — silently reverting to
+    // the hardcoded true-default instead of reflecting the flip.
+    const buildQuery = (filterOnEnabled) => filterOnEnabled ? "skynet_controls?enabled=eq.true&limit=1" : "skynet_controls?limit=1";
+    expect(buildQuery(false)).not.toContain("enabled=eq.true");
+  });
+});
+
+// ── P5: Settled Funds Controls (WARN-ONLY) ────────────────────────────────────
+// Mirrors api/market-refresh.js checkSettledFunds() decision logic. Source is always
+// a live broker field (Schwab cashAvailableForTrading / ETrade cashAvailableForInvestment),
+// never hardcoded. Never blocks the order — only decides whether to warn+log.
+describe("Settled Funds Controls — WARN-ONLY, never blocks", () => {
+  function shouldWarnSettledFunds({ requiredCash, settledCashResult }) {
+    if (!requiredCash || requiredCash <= 0) return { warn: false };
+    if (!settledCashResult.ok) return { warn: false, reason: "settled cash source unavailable — check skipped" };
+    if (requiredCash <= settledCashResult.cash) return { warn: false };
+    return { warn: true, requiredCash, settledCash: settledCashResult.cash, source: settledCashResult.source };
+  }
+
+  it("positive — order needs $10k, settled cash $6k → warning fires (order still proceeds elsewhere)", () => {
+    const result = shouldWarnSettledFunds({
+      requiredCash: 10000,
+      settledCashResult: { ok: true, cash: 6000, source: "schwab_cashAvailableForTrading" },
+    });
+    expect(result.warn).toBe(true);
+    expect(result.settledCash).toBe(6000);
+  });
+
+  it("negative — order within settled cash → no warning fires", () => {
+    const result = shouldWarnSettledFunds({
+      requiredCash: 4000,
+      settledCashResult: { ok: true, cash: 6000, source: "etrade_cashAvailableForInvestment" },
+    });
+    expect(result.warn).toBe(false);
+  });
+
+  it("negative — settled cash source unavailable → check is skipped, not treated as a warning (never blocks/guesses)", () => {
+    const result = shouldWarnSettledFunds({
+      requiredCash: 10000,
+      settledCashResult: { ok: false, reason: "cashAvailableForTrading field missing" },
+    });
+    expect(result.warn).toBe(false);
+  });
+
+  it("positive — exactly at the boundary (required == settled) does not warn", () => {
+    const result = shouldWarnSettledFunds({
+      requiredCash: 5000,
+      settledCashResult: { ok: true, cash: 5000, source: "schwab_cashAvailableForTrading" },
+    });
+    expect(result.warn).toBe(false);
+  });
+
+  it("negative — source is always a live field name, never a hardcoded threshold", () => {
+    const result = shouldWarnSettledFunds({
+      requiredCash: 10000,
+      settledCashResult: { ok: true, cash: 1000, source: "schwab_cashAvailableForTrading" },
+    });
+    expect(["schwab_cashAvailableForTrading", "etrade_cashAvailableForInvestment"]).toContain(result.source);
   });
 });

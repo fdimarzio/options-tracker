@@ -1153,8 +1153,10 @@ export default async function handler(req, res) {
     } catch(e) { console.warn("[auto-import] Schwab fetch failed:", e.message); }
 
     // ── Fetch ETrade ──────────────────────────────────────────────────────────
-    const etradeTxs       = [];
-    const etradeEquityTxs = [];
+    // Options only — ETrade equity transactions are NOT imported into stock_transactions.
+    // Both ETrade accounts (6917, 8222) are IRAs; mixing their equity activity with Schwab's
+    // taxable equity activity in the same table would corrupt tax reporting (P11, 2026-07-19).
+    const etradeTxs = [];
     try {
       const acctData = await etradeGet("/v1/accounts/list");
       const eAccts   = acctData?.AccountListResponse?.Accounts?.Account || [];
@@ -1169,9 +1171,7 @@ export default async function handler(req, res) {
           const txList = data?.TransactionListResponse?.Transaction || [];
           txList.forEach(tx => {
             const p = parseEtradeTx(tx, stocksData);
-            if (p) { etradeTxs.push(p); return; }
-            const eq = parseEtradeEquityTx(tx);
-            if (eq) etradeEquityTxs.push(eq);
+            if (p) etradeTxs.push(p);
           });
         } catch(e) { if (!e.message?.includes("204")) console.warn(`[auto-import] ETrade ${acct.accountIdKey}:`, e.message); }
       }
@@ -1427,7 +1427,8 @@ export default async function handler(req, res) {
     // ── Import equity transactions ────────────────────────────────────────────
     let equityImported    = 0;
     const equityImportedRows = [];
-    const allEquityTxs   = [...schwabEquityTxs, ...etradeEquityTxs];
+    // Schwab only — ETrade equity is excluded by design (see fetch block above, P11).
+    const allEquityTxs   = [...schwabEquityTxs];
     if (allEquityTxs.length) {
       try {
         // Load existing stock_transaction IDs + composite fingerprints for dedup

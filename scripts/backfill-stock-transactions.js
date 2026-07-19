@@ -517,8 +517,11 @@ async function main() {
   }
 
   // ── ETrade — SKIPPED (IRA accounts, excluded by design) ─────────────────────
-  // ETrade accounts 6917 and 8222 are IRA accounts. Transactions are excluded
-  // from stock_transactions to avoid mixing taxable and non-taxable activity.
+  // ETrade accounts 6917 and 8222 are IRA accounts (Rollover / Traditional).
+  // Transactions are excluded from stock_transactions to avoid mixing taxable
+  // (Schwab) and non-taxable (ETrade IRA) equity activity. See P11, 2026-07-19 —
+  // a prior uncommitted change had reversed this to include ETrade; reverted back
+  // to Schwab-only per explicit spec.
   console.log("\n[ ETrade ] Skipped — IRA accounts excluded from backfill by design.");
   const etradeCount = 0;
 

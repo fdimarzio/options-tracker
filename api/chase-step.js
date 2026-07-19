@@ -394,6 +394,15 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true, skipped: true, reason: "chase rule disabled" });
     }
 
+    // Global Skynet master kill-switch — same single flag that gates auto-STO/auto-BTC/
+    // expiry_protection in market-refresh.js. Checked here too since chase runs as its own
+    // endpoint/cron, not through market-refresh's request cycle.
+    const scRows = await fetch(`${SUPABASE_URL}/rest/v1/skynet_controls?limit=1`, { headers: SB_HEADERS }).then(r => r.json()).catch(() => []);
+    const masterEnabled = (scRows?.[0]?.master_enabled) !== false;
+    if (!masterEnabled) {
+      return res.status(200).json({ ok: true, skipped: true, reason: "Skynet master switch off" });
+    }
+
     // Market-hours gate — no steps outside RTH.
     if (!isMarketHours()) {
       return res.status(200).json({ ok: true, skipped: true, reason: "outside market hours" });

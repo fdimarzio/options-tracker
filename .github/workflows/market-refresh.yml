@@ -78,8 +78,10 @@ jobs:
           echo "Status: $HTTP_STATUS"
           echo "Response: $BODY"
 
-          if [ "$HTTP_STATUS" == "401" ]; then
-            echo "WARNING: ETrade token expired — manual re-auth required at:"
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "ERROR: ETrade token renewal failed (status $HTTP_STATUS) — manual re-auth required at:"
             echo "https://options-tracker-five.vercel.app/api/etrade?action=auth"
-            echo "A Pushover notification has been sent."
+            echo "A Pushover notification has been sent (if 401 — same-day renewal window missed)."
+            exit 1
           fi
+          echo "ETrade token renewed successfully."

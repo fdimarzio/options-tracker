@@ -197,6 +197,50 @@ describe("applyOutlierGuard — huge implied swing gets carried forward instead 
   });
 });
 
+// ── carryForward query column name ────────────────────────────────────────────
+// The real DB columns are `schwab_stale` / `etrade_stale` — NOT `${field}_stale`
+// (there is no `etrade_value_stale` column). Querying the wrong name gets a 400
+// from PostgREST, which resolves to {value:null,cash:null} — i.e. carry-forward
+// silently never works. This mirrors the fix in api/market-refresh.js carryForward().
+function buildCarryForwardStaleField(field) {
+  return field.replace(/_value$/, "_stale");
+}
+
+describe("carryForward — queries the real stale column name", () => {
+  it("positive — etrade_value maps to etrade_stale", () => {
+    expect(buildCarryForwardStaleField("etrade_value")).toBe("etrade_stale");
+  });
+
+  it("positive — schwab_value maps to schwab_stale", () => {
+    expect(buildCarryForwardStaleField("schwab_value")).toBe("schwab_stale");
+  });
+
+  it("negative — never produces the nonexistent `${field}_stale` column name", () => {
+    expect(buildCarryForwardStaleField("etrade_value")).not.toBe("etrade_value_stale");
+    expect(buildCarryForwardStaleField("schwab_value")).not.toBe("schwab_value_stale");
+  });
+});
+
+// ── Skip-write guard — never cache a bad value when nothing is resolvable ────
+
+function shouldSkipSnapshotWrite({ etradeValue, schwabValue }) {
+  return etradeValue == null || schwabValue == null;
+}
+
+describe("shouldSkipSnapshotWrite — no live value and no carry-forward history", () => {
+  it("positive — both values resolved → write proceeds", () => {
+    expect(shouldSkipSnapshotWrite({ etradeValue: 475170.16, schwabValue: 423439.81 })).toBe(false);
+  });
+
+  it("negative — ETrade unresolved (0/unavailable, no history) → skip the write", () => {
+    expect(shouldSkipSnapshotWrite({ etradeValue: null, schwabValue: 423439.81 })).toBe(true);
+  });
+
+  it("negative — Schwab unresolved → skip the write", () => {
+    expect(shouldSkipSnapshotWrite({ etradeValue: 475170.16, schwabValue: null })).toBe(true);
+  });
+});
+
 // ── Regression: the specific bug that shipped ─────────────────────────────────
 
 describe("regression — 28-day $110,558 placeholder bug", () => {
