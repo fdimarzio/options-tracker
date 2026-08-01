@@ -1487,7 +1487,7 @@ export default async function handler(req, res) {
 
     // ── Ecosystem heartbeat ──────────────────────────────────────────────────────
     const now = new Date().toISOString();
-    await fetch(`${SUPABASE_URL}/rest/v1/ecosystem_heartbeat`, {
+    await fetch(`${SUPABASE_URL}/rest/v1/ecosystem_heartbeat?on_conflict=agent_name`, {
       method: "POST",
       headers: { ...sbHeaders, Prefer: "resolution=merge-duplicates,return=minimal" },
       body: JSON.stringify({ agent_name: "auto-import", last_run_at: now, status: "ok", notes: `${committed.length} committed, ${anomalies.length} anomalies, ${equityImported} equity`, updated_at: now }),
@@ -1504,7 +1504,7 @@ export default async function handler(req, res) {
 
   } catch(err) {
     console.error("[auto-import]", err.message);
-    await fetch(`${SUPABASE_URL}/rest/v1/ecosystem_heartbeat`, {
+    await fetch(`${SUPABASE_URL}/rest/v1/ecosystem_heartbeat?on_conflict=agent_name`, {
       method: "POST",
       headers: { ...sbHeaders, Prefer: "resolution=merge-duplicates,return=minimal" },
       body: JSON.stringify({ agent_name: "auto-import", last_run_at: new Date().toISOString(), status: "error", notes: err.message, updated_at: new Date().toISOString() }),

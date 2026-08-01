@@ -5,16 +5,27 @@
 //
 // Behavior:
 //   1. Reads threshold/retention from col_prefs "option_snapshot_purge_config" — no
-//      redeploy needed to change either value.
+//      redeploy needed to change either value. retention_days can also be overridden
+//      per-run via the PURGE_RETENTION_DAYS env var / workflow_dispatch input.
 //   2. Skips entirely if current DB size is under the threshold.
-//   3. Never purges rows for "active" tickers (open contracts + watchlist), regardless
-//      of age — only inactive-ticker rows older than the retention window are deleted.
-//   4. Deletes in batches (default 500k rows/loop) via a server-side RPC so a single
+//   3. Retention is time-based for ALL symbols (not just inactive ones) — protecting
+//      100% of history for open/watchlist tickers regardless of age couldn't hit any
+//      size target, since active symbols are ~85% of rows. The one exception, "never
+//      delete a snapshot a trade references" (contracts.entry_snapshot_id /
+//      exit_snapshot_id), is enforced inside purge_option_snapshots_batch itself —
+//      see sql/purge_option_snapshots_batch.sql — so p_active_symbols is always [].
+//   4. Deletes in batches (default 20k rows/loop) via a server-side RPC so a single
 //      run can't time out or hold one giant transaction against a 32M+ row table.
+//      (Previously 500k/loop — that exceeded the statement/RPC timeout on every run,
+//      so the purge never made progress.)
 //
 // VACUUM is NOT run by this script — DELETE cannot reclaim disk by itself, and VACUUM
 // cannot run inside a PostgREST RPC transaction. Run `VACUUM ANALYZE option_snapshots;`
-// manually via the Supabase SQL editor after a large purge (see SQL FOR FRANK).
+// manually via the Supabase SQL editor after a large purge.
+//
+// NOTE: the one-time backlog drain of stale historical rows and the VACUUM FULL to
+// reclaim billed disk are separate manual DB maintenance steps Frank runs directly —
+// out of scope for this script.
 //
 // Run manually: node --env-file=.env.local scripts/option-snapshot-purge.js
 
@@ -30,13 +41,15 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
 
 const HEADERS = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" };
 
-const DEFAULT_CONFIG = { db_size_threshold_gb: 4, retention_days: 14, batch_size: 500000 };
-const MAX_BATCHES = 200; // safety cap — 200 * 500k = 100M rows, well above current 32.5M
+const DEFAULT_CONFIG = { db_size_threshold_gb: 4, retention_days: 21, batch_size: 20000 };
+const MAX_BATCHES = 200; // safety cap — 200 * 20k = 4M rows/run
 
 async function loadConfig() {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.option_snapshot_purge_config`, { headers: HEADERS });
   const rows = await res.json();
-  return { ...DEFAULT_CONFIG, ...(rows?.[0]?.cols || {}) };
+  const config = { ...DEFAULT_CONFIG, ...(rows?.[0]?.cols || {}) };
+  if (process.env.PURGE_RETENTION_DAYS) config.retention_days = +process.env.PURGE_RETENTION_DAYS;
+  return config;
 }
 
 async function getDbSizeBytes() {
@@ -45,24 +58,10 @@ async function getDbSizeBytes() {
   return +(await res.json());
 }
 
-async function getActiveSymbols() {
-  const [contractsRes, watchlistRes] = await Promise.all([
-    fetch(`${SUPABASE_URL}/rest/v1/contracts?select=stock&status=eq.Open`, { headers: HEADERS }),
-    fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.watchlist`, { headers: HEADERS }),
-  ]);
-  const contracts = await contractsRes.json();
-  const watchlist = (await watchlistRes.json())?.[0]?.cols?.tickers || [];
-  const symbols = new Set([
-    ...(Array.isArray(contracts) ? contracts.map(c => c.stock?.toUpperCase()) : []),
-    ...watchlist.map(t => t.toUpperCase()),
-  ].filter(Boolean));
-  return [...symbols];
-}
-
-async function purgeBatch(retentionDays, activeSymbols, batchSize) {
+async function purgeBatch(retentionDays, batchSize) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/purge_option_snapshots_batch`, {
     method: "POST", headers: HEADERS,
-    body: JSON.stringify({ p_retention_days: retentionDays, p_active_symbols: activeSymbols, p_batch_size: batchSize }),
+    body: JSON.stringify({ p_retention_days: retentionDays, p_active_symbols: [], p_batch_size: batchSize }),
   });
   if (!res.ok) throw new Error(`purge_option_snapshots_batch RPC failed: ${res.status} ${await res.text()}`);
   return +(await res.json());
@@ -88,13 +87,11 @@ async function main() {
     return;
   }
 
-  const activeSymbols = await getActiveSymbols();
-  console.log(`[purge] ${activeSymbols.length} active symbols protected regardless of age: ${activeSymbols.join(", ")}`);
-  console.log(`[purge] deleting option_snapshots older than ${config.retention_days} days for inactive symbols, batch size ${config.batch_size}`);
+  console.log(`[purge] deleting option_snapshots older than ${config.retention_days} days for all symbols (trade-referenced snapshots protected in-function), batch size ${config.batch_size}`);
 
   let totalDeleted = 0;
   for (let i = 0; i < MAX_BATCHES; i++) {
-    const deleted = await purgeBatch(config.retention_days, activeSymbols, config.batch_size);
+    const deleted = await purgeBatch(config.retention_days, config.batch_size);
     totalDeleted += deleted;
     console.log(`[purge] batch ${i + 1}: deleted ${deleted} rows (running total ${totalDeleted})`);
     if (deleted < config.batch_size) break; // last batch was partial — done

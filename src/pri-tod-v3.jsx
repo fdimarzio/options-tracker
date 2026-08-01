@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "rea
 import { fetchQuotes, fetchOpenPositionChains, findOptionForContract, fetchPositions, schwabGet, buildOCCSymbol, fetchOptionQuotes } from "./schwab.js";
 import { BarChart, Bar, ComposedChart, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { createClient } from "@supabase/supabase-js";
+import { computeClosePnl } from "./lib/pnl.js";
 
 // ── Supabase client ───────────────────────────────────────────────────────────
 const supabase = createClient(
@@ -7382,7 +7383,7 @@ ${JSON.stringify(summary, null, 1)}`;
                   <div style={{borderTop:"1px solid #1c2128",marginTop:11,paddingTop:11}}>
                     <div style={{fontFamily:"monospace",fontSize:8,color:"#ffd166",letterSpacing:"0.07em",marginBottom:7}}>CLOSE DETAILS</div>
                     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(125px,1fr))",gap:7}}>
-                      <div><FL>Cost to Close $</FL><input type="number" value={form.costToClose||""} onChange={e=>{const ctc=+e.target.value||0;const pr=+form.premium||0;const p=+(pr-ctc).toFixed(2);setForm(x=>({...x,costToClose:e.target.value,profit:`${p}`,profitPct:`${pr>0?+(p/pr).toFixed(4):0}`}));}}/></div>
+                      <div><FL>Cost to Close $</FL><input type="number" value={form.costToClose||""} onChange={e=>{const ctc=+e.target.value||0;const pr=+form.premium||0;const {profit,profitPct}=computeClosePnl(form.optType,pr,Math.abs(ctc));setForm(x=>({...x,costToClose:e.target.value,profit:`${profit}`,profitPct:`${profitPct??0}`}));}}/></div>
                       <div><FL>Date Closed</FL><input type="date" value={form.closeDate||""} onChange={e=>{const dy=form.dateExec&&e.target.value?Math.round((new Date(e.target.value)-new Date(form.dateExec))/86400000):"";setForm(x=>({...x,closeDate:e.target.value,daysHeld:`${dy}`}));}}/></div>
                       <div><FL>Profit $</FL><input type="number" value={form.profit||""} onChange={e=>sf("profit",e.target.value)}/></div>
                       <div><FL>Days Held</FL><input type="number" value={form.daysHeld||""} onChange={e=>sf("daysHeld",e.target.value)}/></div>

@@ -11,6 +11,7 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { createClient } from "@supabase/supabase-js";
+import { computeClosePnl } from "./lib/pnl.js";
 
 // ── Strategies (keep in sync with main app) ───────────────────────────────────
 const STRATEGIES = [
@@ -491,11 +492,11 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
         const costToClose = Math.abs(t.premium);
         const { data: parent } = await supabase
           .from("contracts")
-          .select("premium,date_exec")
+          .select("premium,date_exec,opt_type")
           .eq("id", t.match_id)
           .single();
         if (parent) {
-          const profit = Math.abs(parent.premium) - costToClose;
+          const { profit, profitPct } = computeClosePnl(parent.opt_type, parent.premium, costToClose);
           const daysHeld = parent.date_exec
             ? Math.ceil((new Date(t.date_exec) - new Date(parent.date_exec)) / 86400000)
             : null;
@@ -503,7 +504,8 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
             status:         "Closed",
             cost_to_close:  costToClose,
             close_date:     t.date_exec,
-            profit:         Math.round(profit * 100) / 100,
+            profit,
+            profit_pct:     profitPct,
             days_held:      daysHeld,
             stock_price_at_close: t.stock_price_at_exec,
           }).eq("id", t.match_id);
@@ -729,19 +731,17 @@ export default function ImportPage({ parallelRun = false, defaultDays = 30, supa
           // Load parent to compute profit
           const { data: parent } = await supabase
             .from("contracts")
-            .select("id, premium, date_exec, qty")
+            .select("id, premium, date_exec, qty, opt_type")
             .eq("id", c.parentId)
             .single();
 
           if (parent) {
             const costToClose = Math.abs(c.premium || 0);
-            const parentPrem  = Math.abs(parent.premium || 0);
-            // Pro-rate if partial close (different qty)
+            // Pro-rate the signed premium if partial close (different qty)
             const closeQty  = c.qty || parent.qty || 1;
             const parentQty = parent.qty || closeQty;
-            const proratedPrem = parentPrem * (closeQty / parentQty);
-            const profit    = Math.round((proratedPrem - costToClose) * 100) / 100;
-            const profitPct = proratedPrem > 0 ? Math.round((profit / proratedPrem) * 10000) / 10000 : null;
+            const proratedPrem = (parent.premium || 0) * (closeQty / parentQty);
+            const { profit, profitPct } = computeClosePnl(parent.opt_type, proratedPrem, costToClose);
             const daysHeld  = parent.date_exec
               ? Math.ceil((new Date(c.dateExec) - new Date(parent.date_exec)) / 86400000)
               : null;

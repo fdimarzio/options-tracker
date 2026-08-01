@@ -1,29 +1,24 @@
-name: Option Snapshot Purge
+name: Earnings Dates Refresh
 
 on:
   schedule:
-    - cron: '0 11 * * *'  # daily at 7am ET / 11:00 UTC, off market hours
+    - cron: '0 10 * * *'  # daily at 6am ET / 10:00 UTC, before market open
   workflow_dispatch:        # manual trigger anytime
-    inputs:
-      retention_days:
-        description: 'Days of option_snapshots history to keep (overrides col_prefs config)'
-        required: false
-        default: '21'
 
 jobs:
-  purge:
+  refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-node@v3
         with:
           node-version: '18'
-      - name: Run option_snapshots purge
+      - name: Run earnings_dates refresh
         env:
           VITE_SUPABASE_URL: https://ufagnokxmetushstgrip.supabase.co
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
           PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
           PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
-          PURGE_RETENTION_DAYS: ${{ github.event.inputs.retention_days }}
-        run: node scripts/option-snapshot-purge.js
+        run: node scripts/earnings-refresh.js

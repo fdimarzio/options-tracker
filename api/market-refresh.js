@@ -2,6 +2,10 @@
 // Fetches stock quotes, evaluates close signals using DTE/OTM matrix,
 // sends Pushover notifications with bid/ask/mid/profit. Re-notifies on improvement.
 
+import { computeClosePnl } from "./_lib/pnl.js";
+import { computeOrigDte, shouldBlockForLeapProtection } from "./_lib/leapGuard.js";
+import { isExpiryBlockedByEarnings } from "./_lib/earningsGuard.js";
+
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
 const SUPABASE_KEY = process.env.VITE_SUPABASE_ANON_KEY;
 const SUPABASE_SVC_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_ANON_KEY; // service key for token rows
@@ -609,7 +613,12 @@ async function computeAndStoreIVRank(symbol, ivPct, stockPrice) {
   if (!ivPct || !symbol) return null;
 
   // 1. Upsert today's reading (one per symbol per day)
-  await fetch(`${SUPABASE_URL}/rest/v1/iv_history`, {
+  // NOTE: on_conflict=symbol,date is required — without it, PostgREST's
+  // merge-duplicates resolution targets the primary key, not the
+  // iv_history_symbol_date unique constraint, and every re-run after the
+  // first for a symbol/day 409s with "duplicate key value violates unique
+  // constraint iv_history_symbol_date" instead of updating the row.
+  await fetch(`${SUPABASE_URL}/rest/v1/iv_history?on_conflict=symbol,date`, {
     method:  "POST",
     headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
     body: JSON.stringify({ symbol: symbol.toUpperCase(), iv_pct: ivPct, stock_price: stockPrice, date: new Date().toISOString().slice(0, 10) }),
@@ -1241,7 +1250,7 @@ export default async function handler(req, res) {
     const token = await getValidToken();
 
     // ── Load everything in parallel ─────────────────────────────────────────
-    const [contractsRes, chainRes, notifRes, matrixRes, allPositions, signalRulesRes, momentumConfigRes, priceHistoryRes, watchlistRes, chaseRuleRes] = await Promise.all([
+    const [contractsRes, chainRes, notifRes, matrixRes, allPositions, signalRulesRes, momentumConfigRes, priceHistoryRes, watchlistRes, chaseRuleRes, leapProtectRuleRes, avoidEarningsRuleRes, earningsDatesRes] = await Promise.all([
       fetch(`${SUPABASE_URL}/rest/v1/contracts?select=id,stock,type,opt_type,strike,expires,premium,qty,account,stop_loss_multiplier,time_stop_dte,delta_stop,last_exit_alert_at&status=eq.Open`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }),
       fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.last_chain_refresh`,   { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }),
       fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.notifications_sent`,   { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }),
@@ -1257,12 +1266,33 @@ export default async function handler(req, res) {
       // read chase_params even while the master switch is off (the engine itself gates
       // stepping on enabled/dry_run separately, in chase-step.js).
       fetch(`${SUPABASE_URL}/rest/v1/signal_rules?rule_type=eq.chase&limit=1`,          { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }),
+      // Fetched regardless of enabled (same reason as chaseRuleRes above, and per the
+      // Skynet master-switch lesson) — filtering on enabled=eq.true would make a
+      // disabled row invisible instead of observable as "disabled".
+      fetch(`${SUPABASE_URL}/rest/v1/signal_rules?rule_type=eq.protect_leaps_ltcg&limit=1`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }),
+      // Same unfiltered-by-enabled reasoning as chaseRuleRes/leapProtectRuleRes.
+      fetch(`${SUPABASE_URL}/rest/v1/signal_rules?rule_type=eq.avoid_earnings&limit=1`,   { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }),
+      fetch(`${SUPABASE_URL}/rest/v1/earnings_dates?select=symbol,next_earnings`,          { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }),
     ]);
 
     const contracts      = await contractsRes.json();
     const chainData      = (await chainRes.json())?.[0]?.cols?.chains || {};
     const matrix         = (await matrixRes.json())?.[0]?.cols || null;
     const signalRules    = await signalRulesRes.json();
+    const leapProtectRule = (await leapProtectRuleRes.json())?.[0] || null;
+    const avoidEarningsRule = (await avoidEarningsRuleRes.json())?.[0] || null;
+    // Fails OPEN (no block) if the earnings_dates table doesn't exist yet or a
+    // symbol is missing from it — this is a new filter, not a safety net, so
+    // absence of data must never silently block STO candidate generation.
+    const nextEarningsBySymbol = {};
+    for (const row of (await earningsDatesRes.json().catch(() => []))) {
+      if (row?.symbol) nextEarningsBySymbol[row.symbol.toUpperCase()] = row.next_earnings;
+    }
+    // avoid_earnings — off by default until Frank enables it (see sql/earnings_dates.sql),
+    // same rollout convention as btc_expiry_skip: absence of the row means unchanged
+    // (unfiltered) behavior, not a new silent block.
+    const avoidEarningsEnabled    = avoidEarningsRule ? avoidEarningsRule.enabled === true : false;
+    const avoidEarningsBufferDays = +(avoidEarningsRule?.avoid_earnings_days ?? 0);
     const momentumConfig = (await momentumConfigRes.json())?.[0] || null;
     const priceHistory   = await priceHistoryRes.json();
     const watchlistTickers = ((await watchlistRes.json())?.[0]?.cols?.tickers || []).map(t => t.toUpperCase());
@@ -1930,11 +1960,21 @@ export default async function handler(req, res) {
 
           // Find matching strikes in chain data — scan calls for covered call STOs
           const matchingOpps = [];
+          let earningsBlockedExpiries = [];
           for (const [chainKey, chain] of Object.entries(chainData)) {
             const [chainTicker, chainExpiry] = chainKey.split("|");
             if (chainTicker !== symbol) continue;
             const dte = Math.ceil((new Date(chainExpiry) - new Date()) / 86400000);
             if (dte < minDTE || dte > maxDTE) continue;
+
+            // Earnings-date awareness — prefer expiries before earnings by excluding
+            // any expiry on/after next_earnings (minus avoid_earnings_days buffer)
+            // from the candidate pool entirely, so the scorer naturally picks the
+            // best remaining pre-earnings expiry instead of one that straddles it.
+            if (avoidEarningsEnabled) {
+              const { blocked } = isExpiryBlockedByEarnings(chainExpiry, nextEarningsBySymbol[symbol], avoidEarningsBufferDays);
+              if (blocked) { earningsBlockedExpiries.push(chainExpiry); continue; }
+            }
 
             // ── Table-driven OTM by DTE ────────────────────────────────
             // otm_dte_table: [{ max_dte: 3, min_otm_pct: 1.75 }, { max_dte: 7, min_otm_pct: 2.0 }, ...]
@@ -1959,7 +1999,15 @@ export default async function handler(req, res) {
             }
           }
 
-          if (!matchingOpps.length) continue;
+          if (!matchingOpps.length) {
+            // Surface it — not silent — when the reason is specifically earnings,
+            // same pattern as the momentum-suppression logSignal below.
+            if (earningsBlockedExpiries.length) {
+              console.log(`[sto] ${symbol} — all candidate expiries fall on/after earnings (${nextEarningsBySymbol[symbol]}), none suggested: ${earningsBlockedExpiries.join(", ")}`);
+              await logSignal({ signal_type: "sto_suggestion", symbol, account, stock_price: stockPrice, change_pct: changePct, vix, time_of_day: etNow.toTimeString().slice(0, 8), day_of_week: etNow.getDay(), suggested_qty: suggestQty, rule_id: rule?.id ?? null, pushed: false, notes: `earnings suppressed: next earnings ${nextEarningsBySymbol[symbol]}, blocked expiries ${earningsBlockedExpiries.join(", ")}` });
+            }
+            continue;
+          }
 
           matchingOpps.sort((a, b) => b.premiumEst - a.premiumEst);
           const top = matchingOpps.slice(0, 3);
@@ -2189,12 +2237,22 @@ export default async function handler(req, res) {
 
                 // Group valid candidates by expiry, pick nearest expiry first
                 const candidatesByExpiry = {};
+                let autoEarningsBlockedExpiries = [];
                 for (const [chainKey, chain] of Object.entries(chainData)) {
                   const [chainTicker, chainExpiry] = chainKey.split("|");
                   if (chainTicker !== symbol) continue;
                   if (chainExpiry <= today2) continue;
                   const dte = Math.ceil((new Date(chainExpiry) - new Date()) / 86400000);
                   if (dte < minDTE || dte > effectiveMaxDTE) continue;
+
+                  // Earnings-date awareness (same reasoning as the STO Rules Scanner
+                  // above) — never place a real order on an expiry that straddles
+                  // next_earnings; excluding it from the pool naturally prefers the
+                  // best remaining pre-earnings expiry.
+                  if (avoidEarningsEnabled) {
+                    const { blocked } = isExpiryBlockedByEarnings(chainExpiry, nextEarningsBySymbol[symbol], avoidEarningsBufferDays);
+                    if (blocked) { autoEarningsBlockedExpiries.push(chainExpiry); continue; }
+                  }
 
                   // Effective min OTM — table-driven via stoRuleAuto.otm_dte_table
                   // Table format: [{ max_dte: 3, min_otm_pct: 1.75 }, { max_dte: 7, min_otm_pct: 2.00 }, ...]
@@ -2229,7 +2287,16 @@ export default async function handler(req, res) {
                   }).filter(Boolean);
 
                 if (!sortedExpiryCandidates.length) {
-                  console.log(`[auto-sto] ${symbol} — no suitable strike found in chain`);
+                  if (autoEarningsBlockedExpiries.length) {
+                    console.log(`[auto-sto] ${symbol} — all candidate expiries fall on/after earnings (${nextEarningsBySymbol[symbol]}), skipping auto-STO: ${autoEarningsBlockedExpiries.join(", ")}`);
+                    await sendPushover(
+                      `📅 ${symbol} auto-STO skipped — earnings ${nextEarningsBySymbol[symbol]}`,
+                      `Every candidate expiry (${autoEarningsBlockedExpiries.join(", ")}) falls on/after ${symbol}'s next earnings — no covered call placed. Review manually if desired.`,
+                      `${APP_URL}/?tab=stocks&ticker=${symbol}`, "View in App", 0
+                    ).catch(()=>{});
+                  } else {
+                    console.log(`[auto-sto] ${symbol} — no suitable strike found in chain`);
+                  }
                   continue;
                 }
 
@@ -2556,6 +2623,15 @@ export default async function handler(req, res) {
       const btcExpirySkipEnabled = btcExpirySkipRule ? btcExpirySkipRule.enabled !== false : true;
       const btcExpirySkipOtmPct  = +(btcExpirySkipRule?.min_otm_pct ?? 2);
 
+      // LEAPS LTCG protection — DB-gated via the protect_leaps_ltcg signal_rules row
+      // (fetched separately as leapProtectRule, unfiltered by enabled, for the same
+      // reason as chaseRuleRes: filtering on enabled=eq.true would make a disabled
+      // row invisible instead of observable). Unlike btcExpirySkip above, this fails
+      // SAFE (protects) rather than open if the row doesn't exist yet — the failure
+      // mode of not protecting is unwinding a deliberate long-term hold.
+      const leapProtectEnabled = leapProtectRule ? leapProtectRule.enabled !== false : true;
+      const leapProtectDryRun  = leapProtectRule ? leapProtectRule.dry_run === true : false;
+
       if (btcRules.length) {
         // Pick the best matching rule for current ET time
         const etNowForBtc = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
@@ -2596,7 +2672,7 @@ export default async function handler(req, res) {
 
         // Fetch all open STO Call contracts with full details
         const openSTOs = await fetch(
-          `${SUPABASE_URL}/rest/v1/contracts?select=id,stock,type,opt_type,strike,expires,premium,qty,account,status&status=eq.Open&opt_type=eq.STO`,
+          `${SUPABASE_URL}/rest/v1/contracts?select=id,stock,type,opt_type,strike,expires,premium,qty,account,status,date_exec,entry_dte&status=eq.Open&opt_type=eq.STO`,
           { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }
         ).then(r => r.json());
 
@@ -2732,6 +2808,28 @@ export default async function handler(req, res) {
             console.log(`[btc_auto] ${ticker} $${contract.strike} ${contract.type} — bid:${bid} mid:${mid.toFixed(3)} profit:${profitPct.toFixed(1)}% (qty ${groupQty}) — rule:"${contractRule.name}" threshold:${contractMinProfit}%`);
 
             if (profitPct < contractMinProfit) continue;
+
+            // LEAPS LTCG protection — never auto-close a contract that was originally
+            // opened with > 365 DTE, even once its remaining DTE has dropped well
+            // below 365, so a deliberate long-term hold isn't unwound by a routine
+            // profit-threshold BTC. Applies to both the "regular" and "after-3pm"
+            // btc_auto rules, since both funnel through this same scanner loop.
+            const origDte = computeOrigDte(contract.entry_dte, expires, contract.date_exec);
+            const { isLeap, blocked } = shouldBlockForLeapProtection({
+              origDte, ruleEnabled: leapProtectEnabled, dryRun: leapProtectDryRun,
+            });
+            if (blocked) {
+              console.log(`[btc_auto] LEAP protection — ${ticker} $${contract.strike} opened at ${origDte} DTE, held for LTCG, not auto-closed (profit ${profitPct.toFixed(1)}% ≥ ${contractMinProfit}%)`);
+              await sendPushover(
+                `🔒 LEAP ${ticker} hit ${Math.round(contractMinProfit)}% — held for LTCG, not closed`,
+                `${ticker} $${contract.strike} ${contract.type} ${expires} opened at ${origDte} DTE — auto-BTC skipped to preserve long-term cap gains. Close manually if desired.`,
+                `${APP_URL}/?tab=contracts`, "View in App", 0
+              ).catch(()=>{});
+              continue;
+            }
+            if (isLeap) {
+              console.log(`[btc_auto] [DRY RUN] LEAP protection would block ${ticker} $${contract.strike} (opened at ${origDte} DTE) — proceeding since rule is disabled or in dry_run`);
+            }
 
             // Use mid if available, fall back to bid
             const limitPrice = mid > 0 ? Math.round(mid * 100) / 100 : Math.round(bid * 100) / 100;
@@ -3147,11 +3245,13 @@ export default async function handler(req, res) {
                       const contractRows = await contractRes.json();
                       if (contractRows?.[0]?.id) {
                         const contractId = contractRows[0].id;
-                        const parentPremium = Math.abs(parseFloat(contractRows[0].premium) || 0);
+                        const parentOptType = contractRows[0].opt_type;
+                        const parentPremium = parseFloat(contractRows[0].premium) || 0;
                         const fillPrice = patch.fill_price ?? order.limit_price ?? null;
                         const costToClose = fillPrice ? Math.round(fillPrice * (order.qty || 1) * 100 * 100) / 100 : null;
-                        const profit = costToClose != null ? Math.round((parentPremium - costToClose) * 100) / 100 : null;
-                        const profitPct = profit != null && parentPremium ? Math.round((profit / parentPremium) * 10000) / 10000 : null;
+                        const { profit, profitPct } = costToClose != null
+                          ? computeClosePnl(parentOptType, parentPremium, costToClose)
+                          : { profit: null, profitPct: null };
 
                         const contractPatch = { [methodField]: "auto" };
                         if (isClose) {
@@ -3211,7 +3311,7 @@ export default async function handler(req, res) {
 
     // ── Ecosystem heartbeat ──────────────────────────────────────────────────────
     try {
-      await fetch(`${SUPABASE_URL}/rest/v1/ecosystem_heartbeat`, {
+      await fetch(`${SUPABASE_URL}/rest/v1/ecosystem_heartbeat?on_conflict=agent_name`, {
         method: "POST",
         headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" },
         body: JSON.stringify({ agent_name: "market-refresh", last_run_at: lastRefresh, status: "ok", notes: `${tickers.length} tickers, ${notifications.length} signals`, updated_at: lastRefresh }),
@@ -3338,7 +3438,7 @@ export default async function handler(req, res) {
     console.error("[market-refresh]", err.message);
     // Write error heartbeat
     try {
-      await fetch(`${SUPABASE_URL}/rest/v1/ecosystem_heartbeat`, {
+      await fetch(`${SUPABASE_URL}/rest/v1/ecosystem_heartbeat?on_conflict=agent_name`, {
         method: "POST",
         headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" },
         body: JSON.stringify({ agent_name: "market-refresh", last_run_at: new Date().toISOString(), status: "error", notes: err.message, updated_at: new Date().toISOString() }),
