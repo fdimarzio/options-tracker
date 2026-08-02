@@ -4,6 +4,7 @@
 // Also serves anomaly CRUD via ?action=anomalies|dismiss|resolve
 
 import crypto from "crypto";
+import { computeReconcileWindowStart } from "./_lib/reconcileWindow.js";
 
 const SUPABASE_URL  = process.env.VITE_SUPABASE_URL;
 const SUPABASE_KEY  = process.env.VITE_SUPABASE_ANON_KEY;
@@ -1080,6 +1081,14 @@ export default async function handler(req, res) {
   try {
     const today = new Date().toLocaleString("en-CA", { timeZone: "America/New_York" }).slice(0, 10);
 
+    // Reconciliation window — a broker settlement transaction (e.g. a Friday expiry
+    // close) can post while this job isn't running (weekends — no Sat/Sun runs until
+    // this fix — or any other gap), so fetching a fixed "today" or "yesterday" window
+    // permanently misses it once that calendar day has passed. Instead, look back to
+    // this agent's last successful run, capped at 10 days.
+    const heartbeatRows = await sbGet(`ecosystem_heartbeat?select=last_run_at&agent_name=eq.auto-import`);
+    const reconcileSince = computeReconcileWindowStart(heartbeatRows?.[0]?.last_run_at, new Date(), 10);
+
     // Load stocks_data for price at execution
     const sdRows     = await sbGet(`col_prefs?select=cols&id=eq.stocks_data`);
     const stocksData = sdRows?.[0]?.cols || {};
@@ -1133,7 +1142,10 @@ export default async function handler(req, res) {
     try {
       const token    = await getValidToken();
       const accts    = await fetch(`${SCHWAB_BASE}/trader/v1/accounts/accountNumbers`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } }).then(r => r.json());
-      const startUTC = new Date(today + "T05:00:00.000Z").toISOString();
+      // Was hardcoded to "today only" — permanently missed anything that posted on a
+      // day this job didn't run (see reconcileSince above). endUTC keeps the original
+      // "through tomorrow's boundary" cushion.
+      const startUTC = reconcileSince.toISOString();
       const endUTC   = new Date(new Date(today + "T05:00:00.000Z").getTime() + 86400000).toISOString();
       for (const acct of (Array.isArray(accts) ? accts : [])) {
         if (!acct.hashValue) continue;
@@ -1162,10 +1174,11 @@ export default async function handler(req, res) {
       const eAccts   = acctData?.AccountListResponse?.Accounts?.Account || [];
       for (const acct of eAccts) {
         try {
-          const fromD = new Date(); fromD.setDate(fromD.getDate() - 1);
+          // Was hardcoded to "yesterday through today" — a Monday run's "yesterday" is
+          // Sunday, still missing a Friday-posted settlement. Use reconcileSince instead.
           const fmtD  = d => `${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}${d.getFullYear()}`;
           const data  = await etradeGet(`/v1/accounts/${acct.accountIdKey}/transactions`, {
-            startDate: fmtD(fromD),
+            startDate: fmtD(reconcileSince),
             endDate:   fmtD(new Date()),
           });
           const txList = data?.TransactionListResponse?.Transaction || [];

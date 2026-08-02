@@ -8,6 +8,11 @@ on:
     - cron: '0 12 * * *'
     # ETrade pre-expiry renew: daily at 11:50pm ET (3:50 UTC) — before midnight expiry
     - cron: '50 3 * * *'
+    # Weekend reconciliation: Sat & Sun morning, ~9am ET (13:00 UTC) — catches broker
+    # settlement transactions (e.g. a Friday expiry close) that post over the weekend
+    # while no weekday run is happening to pick them up. Market is closed so this only
+    # checks for new transactions, not a full quote/chain refresh.
+    - cron: '0 13 * * 0,6'
   workflow_dispatch:
 
 jobs:
@@ -85,3 +90,13 @@ jobs:
             exit 1
           fi
           echo "ETrade token renewed successfully."
+
+  weekend-reconcile:
+    if: github.event.schedule == '0 13 * * 0,6'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - name: Check for weekend-posted settlement transactions
+        run: |
+          curl -s -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" --max-time 20 "https://options-tracker-five.vercel.app/api/auto-import"

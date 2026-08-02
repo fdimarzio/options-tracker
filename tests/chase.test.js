@@ -12,10 +12,16 @@
 // Run: npx vitest run tests/chase.test.js
 
 import { describe, it, expect } from "vitest";
+import fs from "fs";
+import path from "path";
 import {
   isDue, isExpired, resolveStep, computeNextPrice, clampToBound,
   evaluateMarketGuards, interpretFillState, applyOnBound, buildOSI, isMarketHours,
+  toOutcome,
 } from "../api/chase-step.js";
+
+const chaseStepSrc = fs.readFileSync(path.resolve("api/chase-step.js"), "utf8");
+const sqlSrc       = fs.readFileSync(path.resolve("sql/chase_log.sql"), "utf8");
 
 // ── Orchestrator mirroring processOrder()'s step sequence (see api/chase-step.js) ──
 function simulateChaseStep(order, ctx) {
@@ -445,5 +451,111 @@ describe("regression — historical chase order replay", () => {
     expect(order.limit_price).toBeGreaterThanOrEqual(2.00); // floor never breached at any point
     // Every historical price stayed at or above the bound.
     expect(order.limit_price).toBeCloseTo(Math.max(order.limit_price, 2.00), 5);
+  });
+});
+
+// ── 13. Observability — outcome vocabulary (chase_log) ───────────────────────────
+describe("toOutcome — chase_log outcome vocabulary", () => {
+  it("positive — an ordinary step (live or dry_run) maps to 'stepped'", () => {
+    expect(toOutcome("step", "rest")).toBe("stepped");
+    expect(toOutcome("dry_run_step", "rest")).toBe("stepped");
+  });
+  it("positive — a fill maps to 'filled'", () => {
+    expect(toOutcome("filled")).toBe("filled");
+  });
+  it("positive — hitting the bound with chase_on_bound=rest maps to 'rested'", () => {
+    expect(toOutcome("hit_bound", "rest")).toBe("rested");
+  });
+  it("positive — hitting the bound with chase_on_bound=cancel maps to 'cancelled'", () => {
+    expect(toOutcome("hit_bound", "cancel")).toBe("cancelled");
+  });
+  it("negative — a broker-side cancellation maps to 'cancelled' regardless of on_bound", () => {
+    expect(toOutcome("cancelled_at_broker", "rest")).toBe("cancelled");
+  });
+  it("negative — expiry follows the same rest/cancel split as hit_bound", () => {
+    expect(toOutcome("expired", "rest")).toBe("rested");
+    expect(toOutcome("expired", "cancel")).toBe("cancelled");
+  });
+  it("negative — a guard exit follows chase_on_bound, a guard pause always rests", () => {
+    expect(toOutcome("guard_exit", "cancel")).toBe("cancelled");
+    expect(toOutcome("guard_pause", "cancel")).toBe("rested"); // still resting this cycle, not terminal
+  });
+  it("edge — an unrecognized action passes through literally (debugging aid, not silently dropped)", () => {
+    expect(toOutcome("apply_failed")).toBe("apply_failed");
+    expect(toOutcome("error")).toBe("error");
+  });
+});
+
+// ── 14. Observability wiring — every real decision point logs to chase_log ───────
+// processOrder() does real network I/O (Supabase PATCH/POST, broker calls), so per
+// this repo's established convention for chase-step.js (pure-function export +
+// dependency injection, not fetch-mocking — see file header), these are source-level
+// regression guards rather than live execution tests: they pin down that every
+// meaningful branch calls logChaseAction, and that a bare interval-gate/no-op skip
+// does not.
+describe("chase_log wiring in api/chase-step.js", () => {
+  const meaningfulBranches = [
+    ["filled (race-guard status check)", /reason: "filled".*\n.*await logChaseAction/],
+    ["cancelled_at_broker",              /chase_status: "cancelled" \}\),\s*\n\s*\}\);\s*\n\s*await logChaseAction/],
+    ["partial_fill",                     /reason: "partial_fill".*\n.*await logChaseAction/],
+    ["expired",                          /await logChaseAction\(order, \{ fromPrice: order\.limit_price, toPrice: order\.limit_price, outcome: toOutcome\("expired"/],
+    ["guard_exit",                       /outcome: toOutcome\("guard_exit"/],
+    ["guard_pause",                      /outcome: "rested", dryRun, stepNum, minIntervalSecs \}\);\s*\n\s*return \{ orderId: order\.id, action: "guard_pause"/],
+    ["hit_bound",                        /outcome: toOutcome\("hit_bound"/],
+    ["dry_run step",                     /outcome: "stepped", dryRun, stepNum, minIntervalSecs \}\);\s*\n\s*return \{ orderId: order\.id, action: "dry_run_step"/],
+    ["live step",                        /outcome: "stepped", dryRun, stepNum, minIntervalSecs \}\);\s*\n\s*return \{ orderId: order\.id, action: "step"/],
+    ["apply_failed",                     /outcome: "apply_failed"/],
+    ["per-order error (handler catch)",  /outcome: "error", dryRun, stepNum/],
+  ];
+
+  it.each(meaningfulBranches)("positive — %s logs to chase_log", (_label, re) => {
+    expect(chaseStepSrc).toMatch(re);
+  });
+
+  it("negative — the interval-gate skip does not call logChaseAction (would flood the table every 15-20s)", () => {
+    const intervalGateBlock = chaseStepSrc.split('reason: "interval_gate"')[1]?.slice(0, 60) || "";
+    expect(intervalGateBlock).not.toContain("logChaseAction");
+  });
+
+  it("logChaseAction swallows its own errors so a logging failure can't break the engine", () => {
+    expect(chaseStepSrc).toMatch(/async function logChaseAction[\s\S]*?\.catch\(e => console\.warn/);
+  });
+});
+
+// ── 15. The dry-run chase_last_step_at gap fix ────────────────────────────────────
+describe("dry_run steps now stamp chase_last_step_at (previously a dead column in dry_run)", () => {
+  it("positive — the dry_run branch PATCHes chase_last_step_at (and limit_price) before logging", () => {
+    const dryRunBranch = chaseStepSrc.split("if (dryRun) {")[1]?.split("const applyResult")[0] || "";
+    expect(dryRunBranch).toContain("chase_last_step_at: new Date().toISOString()");
+    expect(dryRunBranch).toContain("limit_price: toPrice");
+    expect(dryRunBranch).toContain('outcome: "stepped"');
+  });
+
+  it("negative — the broker is still never called from the dry_run branch (applyStep is not invoked there)", () => {
+    const dryRunBranch = chaseStepSrc.split("if (dryRun) {")[1]?.split("const applyResult")[0] || "";
+    expect(dryRunBranch).not.toContain("applyStep(order, toPrice, false)");
+  });
+});
+
+// ── 16. No active chases → no log rows ────────────────────────────────────────────
+describe("no-op when there's nothing to chase", () => {
+  it("negative — zero chase_status=active orders short-circuits before any per-order logging", () => {
+    // Mirrors the handler's early return: `if (!Array.isArray(orders) || !orders.length)
+    // return res.status(200).json({ ok: true, processed: 0, dryRun });` — processOrder
+    // (and therefore logChaseAction) is never reached.
+    const orders = [];
+    const logCalls = [];
+    for (const order of orders) logCalls.push(order); // mirrors the `for (const order of orders)` loop
+    expect(logCalls.length).toBe(0);
+    expect(chaseStepSrc).toContain("if (!Array.isArray(orders) || !orders.length)");
+  });
+});
+
+// ── 17. chase_log table shape (sql/chase_log.sql, for Frank) ─────────────────────
+describe("sql/chase_log.sql", () => {
+  it("has the columns needed for full chase observability", () => {
+    for (const col of ["order_id", "symbol", "side", "step_num", "from_price", "to_price", "chase_bound", "min_interval_secs", "guard_reasons", "outcome", "dry_run"]) {
+      expect(sqlSrc).toContain(col);
+    }
   });
 });

@@ -254,11 +254,65 @@ async function appendHistory(order, entry) {
   return history;
 }
 
+// ── Observability ──────────────────────────────────────────────────────────
+// Maps an internal processOrder action to the outcome vocabulary Frank asked
+// for. dry_run stays a separate column (the decision, not whether it was
+// actually executed against the broker) — same convention auto-BTC/auto-STO
+// use ("[DRY RUN] Placing BTC" is still logged as a placement decision).
+function toOutcome(processAction, onBound) {
+  switch (processAction) {
+    case "step":
+    case "dry_run_step":       return "stepped";
+    case "filled":              return "filled";
+    case "cancelled_at_broker": return "cancelled";
+    case "partial_fill":        return "partial_fill";
+    case "expired":
+    case "hit_bound":
+    case "guard_exit":          return onBound === "cancel" ? "cancelled" : "rested";
+    case "guard_pause":         return "rested";
+    default:                    return processAction; // apply_failed, error — keep literal for debugging
+  }
+}
+
+// Writes one row per chase action to the queryable chase_log table (see
+// sql/chase_log.sql). Never throws — a logging failure must not break the
+// chase engine itself.
+async function logChaseAction(order, {
+  fromPrice, toPrice, bid = null, ask = null, mid = null,
+  guardReasons = null, outcome, dryRun, stepNum, minIntervalSecs,
+}) {
+  const isSell = ["STO", "STC"].includes(order.opt_type);
+  await fetch(`${SUPABASE_URL}/rest/v1/chase_log`, {
+    method: "POST", headers: { ...SB_HEADERS, Prefer: "return=minimal" },
+    body: JSON.stringify({
+      order_id: order.id,
+      symbol: order.ticker,
+      opt_type: order.opt_type,
+      side: isSell ? "SELL" : "BUY",
+      step_num: stepNum,
+      from_price: fromPrice ?? null,
+      to_price: toPrice ?? null,
+      chase_bound: order.chase_bound ?? null,
+      min_interval_secs: minIntervalSecs ?? null,
+      bid, ask, mid,
+      guard_tripped: !!(guardReasons && guardReasons.length),
+      guard_reasons: guardReasons,
+      outcome,
+      dry_run: dryRun,
+    }),
+  }).catch(e => console.warn(`[chase-step] chase_log write failed for order ${order.id}:`, e.message));
+}
+
 // ── Per-order engine step ─────────────────────────────────────────────────────
 async function processOrder(order, { token, chaseParams, dryRun, stocksData, vix, nowMs }) {
   const minIntervalSecs = +(chaseParams.min_interval_secs ?? 20);
+  // Sequential step count for this order, for the chase_log step_num column —
+  // not re-read per branch, so a single invocation that appends two history
+  // entries (e.g. partial_fill then step) logs both under the same number.
+  const stepNum = (Array.isArray(order.price_history) ? order.price_history.length : 0) + 1;
 
-  // a. Interval gate
+  // a. Interval gate — not logged: happens every 15-20s for every order that
+  // isn't due yet, and isn't a chase "action" so much as a no-op early exit.
   if (!isDue(order, nowMs, minIntervalSecs)) {
     return { orderId: order.id, action: "skip", reason: "interval_gate" };
   }
@@ -271,6 +325,7 @@ async function processOrder(order, { token, chaseParams, dryRun, stocksData, vix
       body: JSON.stringify({ chase_status: "filled", status: "filled", fill_qty: brokerStatus.fillQty, fill_price: brokerStatus.fillPrice, filled_at: new Date().toISOString() }),
     });
     await appendHistory(order, { ts: new Date().toISOString(), reason: "filled", from_price: order.limit_price, to_price: brokerStatus.fillPrice, fill_qty: brokerStatus.fillQty });
+    await logChaseAction(order, { fromPrice: order.limit_price, toPrice: brokerStatus.fillPrice, outcome: "filled", dryRun, stepNum, minIntervalSecs });
     return { orderId: order.id, action: "filled" };
   }
   if (brokerStatus.state === "cancelled") {
@@ -278,6 +333,7 @@ async function processOrder(order, { token, chaseParams, dryRun, stocksData, vix
       method: "PATCH", headers: { ...SB_HEADERS, Prefer: "return=minimal" },
       body: JSON.stringify({ chase_status: "cancelled" }),
     });
+    await logChaseAction(order, { fromPrice: order.limit_price, toPrice: order.limit_price, outcome: "cancelled", dryRun, stepNum, minIntervalSecs });
     return { orderId: order.id, action: "cancelled_at_broker" };
   }
   let remainingQty = order.qty;
@@ -288,6 +344,7 @@ async function processOrder(order, { token, chaseParams, dryRun, stocksData, vix
       body: JSON.stringify({ qty: remainingQty, fill_qty: brokerStatus.fillQty, fill_price: brokerStatus.fillPrice }),
     });
     await appendHistory(order, { ts: new Date().toISOString(), reason: "partial_fill", from_price: order.limit_price, to_price: order.limit_price, fill_qty: brokerStatus.fillQty, remaining_qty: remainingQty });
+    await logChaseAction(order, { fromPrice: order.limit_price, toPrice: order.limit_price, outcome: "partial_fill", dryRun, stepNum, minIntervalSecs });
     order = { ...order, qty: remainingQty };
   }
 
@@ -302,6 +359,7 @@ async function processOrder(order, { token, chaseParams, dryRun, stocksData, vix
     if (onBound === "cancel" && !dryRun) {
       await fetch(`${APP_URL}/api/schwab-orders?action=cancel&secret=${process.env.CRON_SECRET}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderId: order.id }) }).catch(() => {});
     }
+    await logChaseAction(order, { fromPrice: order.limit_price, toPrice: order.limit_price, outcome: toOutcome("expired", onBound), dryRun, stepNum, minIntervalSecs });
     return { orderId: order.id, action: "expired", onBound };
   }
 
@@ -325,9 +383,11 @@ async function processOrder(order, { token, chaseParams, dryRun, stocksData, vix
         body: JSON.stringify({ chase_status: "hit_bound" }),
       });
       await appendHistory(order, { ts: new Date().toISOString(), reason: "guard_pause", from_price: order.limit_price, to_price: order.limit_price, bid, ask, mid, guard_reasons: guardResult.reasons, on_bound: onBound });
+      await logChaseAction(order, { fromPrice: order.limit_price, toPrice: order.limit_price, bid, ask, mid, guardReasons: guardResult.reasons, outcome: toOutcome("guard_exit", onBound), dryRun, stepNum, minIntervalSecs });
       return { orderId: order.id, action: "guard_exit", reasons: guardResult.reasons };
     }
     await appendHistory(order, { ts: new Date().toISOString(), reason: "guard_pause", from_price: order.limit_price, to_price: order.limit_price, bid, ask, mid, guard_reasons: guardResult.reasons });
+    await logChaseAction(order, { fromPrice: order.limit_price, toPrice: order.limit_price, bid, ask, mid, guardReasons: guardResult.reasons, outcome: "rested", dryRun, stepNum, minIntervalSecs });
     return { orderId: order.id, action: "guard_pause", reasons: guardResult.reasons };
   }
 
@@ -355,17 +415,30 @@ async function processOrder(order, { token, chaseParams, dryRun, stocksData, vix
     if (onBound === "cancel" && !dryRun) {
       await fetch(`${APP_URL}/api/schwab-orders?action=cancel&secret=${process.env.CRON_SECRET}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderId: order.id }) }).catch(() => {});
     }
+    await logChaseAction(order, { fromPrice: historyEntry.from_price, toPrice, bid, ask, mid, outcome: toOutcome("hit_bound", onBound), dryRun, stepNum, minIntervalSecs });
     return { orderId: order.id, action: "hit_bound", toPrice, onBound };
   }
 
   if (dryRun) {
     await appendHistory(order, historyEntry);
+    // Stamp chase_last_step_at (and simulate the price move via limit_price) even in
+    // dry_run — without this, isDue() never advances past its initial null state and
+    // computeNextPrice() keeps recomputing from the same static submit price forever,
+    // so a "dry run chase" never actually progresses. The broker itself is still never
+    // called (applyStep short-circuits on dryRun) — this only updates our own tracking
+    // columns to simulate what a live chase would do.
+    await fetch(`${SUPABASE_URL}/rest/v1/trade_orders?id=eq.${order.id}`, {
+      method: "PATCH", headers: { ...SB_HEADERS, Prefer: "return=minimal" },
+      body: JSON.stringify({ limit_price: toPrice, chase_last_step_at: new Date().toISOString() }),
+    });
+    await logChaseAction(order, { fromPrice: historyEntry.from_price, toPrice, bid, ask, mid, outcome: "stepped", dryRun, stepNum, minIntervalSecs });
     return { orderId: order.id, action: "dry_run_step", fromPrice: order.limit_price, toPrice };
   }
 
   const applyResult = await applyStep(order, toPrice, false);
   if (!applyResult?.ok) {
     console.warn(`[chase-step] broker apply failed for order ${order.id}:`, JSON.stringify(applyResult));
+    await logChaseAction(order, { fromPrice: historyEntry.from_price, toPrice, bid, ask, mid, outcome: "apply_failed", dryRun, stepNum, minIntervalSecs });
     return { orderId: order.id, action: "apply_failed", error: applyResult?.error };
   }
   await fetch(`${SUPABASE_URL}/rest/v1/trade_orders?id=eq.${order.id}`, {
@@ -373,6 +446,7 @@ async function processOrder(order, { token, chaseParams, dryRun, stocksData, vix
     body: JSON.stringify({ limit_price: toPrice, chase_last_step_at: new Date().toISOString() }),
   });
   await appendHistory(order, historyEntry);
+  await logChaseAction(order, { fromPrice: historyEntry.from_price, toPrice, bid, ask, mid, outcome: "stepped", dryRun, stepNum, minIntervalSecs });
   return { orderId: order.id, action: "step", fromPrice: historyEntry.from_price, toPrice };
 }
 
@@ -438,6 +512,11 @@ export default async function handler(req, res) {
         results.push(await processOrder(order, { token, chaseParams, dryRun, stocksData, vix, nowMs }));
       } catch (e) {
         console.warn(`[chase-step] order ${order.id} failed:`, e.message);
+        const stepNum = (Array.isArray(order.price_history) ? order.price_history.length : 0) + 1;
+        await logChaseAction(order, {
+          fromPrice: order.limit_price, toPrice: order.limit_price,
+          outcome: "error", dryRun, stepNum, minIntervalSecs: chaseParams.min_interval_secs ?? null,
+        });
         results.push({ orderId: order.id, action: "error", error: e.message });
       }
     }
@@ -452,4 +531,5 @@ export default async function handler(req, res) {
 export {
   isDue, isExpired, resolveStep, computeNextPrice, clampToBound,
   evaluateMarketGuards, interpretFillState, applyOnBound, buildOSI, isMarketHours,
+  toOutcome,
 };
