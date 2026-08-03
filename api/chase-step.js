@@ -244,6 +244,35 @@ async function applyStep(order, toPrice, dryRun) {
   return r.json();
 }
 
+// Which schwab-orders.js cancel action applies to this order's broker. Was always
+// action=cancel (Schwab-only) even for ETrade orders — an ETrade chase that hit its
+// bound with chase_on_bound=cancel would likely fail to actually cancel at the
+// broker (action=cancel calls getAccountHash/DELETE against Schwab's API regardless
+// of account), while our own trade_orders row still got marked cancelled/expired.
+function resolveCancelAction(account) {
+  const isEtrade = account?.startsWith("ETrade") || account?.startsWith("Etrade");
+  return isEtrade ? "order-cancel" : "cancel";
+}
+
+// Cancels at the correct broker, then re-checks broker status immediately after —
+// a cancel can race a fill (the order fills at the broker between our last status
+// check and the cancel actually landing), and the broker then rejects the cancel
+// because the order is already filled. Re-checking turns that race into a
+// correctly-classified fill instead of a stale cancelled/expired status, instead of
+// trying to parse broker-specific rejection-reason text.
+async function cancelOrderAndCheckForRaceFill(order, token) {
+  const action = resolveCancelAction(order.account);
+  await fetch(`${APP_URL}/api/schwab-orders?action=${action}&secret=${process.env.CRON_SECRET}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderId: order.id }),
+  }).catch(e => console.warn(`[chase-step] cancel (${action}) failed for order ${order.id}:`, e.message));
+
+  const postCancelStatus = await fetchBrokerStatus(order, token).catch(() => ({ state: "none" }));
+  if (postCancelStatus.state === "full") {
+    return { filled: true, fillQty: postCancelStatus.fillQty, fillPrice: postCancelStatus.fillPrice };
+  }
+  return { filled: false };
+}
+
 async function appendHistory(order, entry) {
   const history = Array.isArray(order.price_history) ? order.price_history : [];
   history.push(entry);
@@ -357,7 +386,18 @@ async function processOrder(order, { token, chaseParams, dryRun, stocksData, vix
     });
     await appendHistory(order, { ts: new Date().toISOString(), reason: "expired", from_price: order.limit_price, to_price: order.limit_price, on_bound: onBound });
     if (onBound === "cancel" && !dryRun) {
-      await fetch(`${APP_URL}/api/schwab-orders?action=cancel&secret=${process.env.CRON_SECRET}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderId: order.id }) }).catch(() => {});
+      const raceCheck = await cancelOrderAndCheckForRaceFill(order, token);
+      if (raceCheck.filled) {
+        // Cancel raced a fill — the broker rejected it because the order already
+        // filled. Correct the DB to filled instead of leaving it expired.
+        await fetch(`${SUPABASE_URL}/rest/v1/trade_orders?id=eq.${order.id}`, {
+          method: "PATCH", headers: { ...SB_HEADERS, Prefer: "return=minimal" },
+          body: JSON.stringify({ chase_status: "filled", status: "filled", fill_qty: raceCheck.fillQty, fill_price: raceCheck.fillPrice, filled_at: new Date().toISOString() }),
+        });
+        await appendHistory(order, { ts: new Date().toISOString(), reason: "filled", from_price: order.limit_price, to_price: raceCheck.fillPrice, fill_qty: raceCheck.fillQty });
+        await logChaseAction(order, { fromPrice: order.limit_price, toPrice: raceCheck.fillPrice, outcome: "filled", dryRun, stepNum, minIntervalSecs });
+        return { orderId: order.id, action: "filled" };
+      }
     }
     await logChaseAction(order, { fromPrice: order.limit_price, toPrice: order.limit_price, outcome: toOutcome("expired", onBound), dryRun, stepNum, minIntervalSecs });
     return { orderId: order.id, action: "expired", onBound };
@@ -413,7 +453,18 @@ async function processOrder(order, { token, chaseParams, dryRun, stocksData, vix
     });
     await appendHistory(order, { ...historyEntry, reason: dryRun ? "dry_run_step" : "hit_bound", on_bound: onBound });
     if (onBound === "cancel" && !dryRun) {
-      await fetch(`${APP_URL}/api/schwab-orders?action=cancel&secret=${process.env.CRON_SECRET}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderId: order.id }) }).catch(() => {});
+      const raceCheck = await cancelOrderAndCheckForRaceFill(order, token);
+      if (raceCheck.filled) {
+        // Cancel raced a fill — the broker rejected it because the order already
+        // filled. Correct the DB to filled instead of leaving it hit_bound.
+        await fetch(`${SUPABASE_URL}/rest/v1/trade_orders?id=eq.${order.id}`, {
+          method: "PATCH", headers: { ...SB_HEADERS, Prefer: "return=minimal" },
+          body: JSON.stringify({ chase_status: "filled", status: "filled", fill_qty: raceCheck.fillQty, fill_price: raceCheck.fillPrice, filled_at: new Date().toISOString() }),
+        });
+        await appendHistory(order, { ts: new Date().toISOString(), reason: "filled", from_price: toPrice, to_price: raceCheck.fillPrice, fill_qty: raceCheck.fillQty });
+        await logChaseAction(order, { fromPrice: toPrice, toPrice: raceCheck.fillPrice, outcome: "filled", dryRun, stepNum, minIntervalSecs });
+        return { orderId: order.id, action: "filled" };
+      }
     }
     await logChaseAction(order, { fromPrice: historyEntry.from_price, toPrice, bid, ask, mid, outcome: toOutcome("hit_bound", onBound), dryRun, stepNum, minIntervalSecs });
     return { orderId: order.id, action: "hit_bound", toPrice, onBound };
@@ -531,5 +582,5 @@ export default async function handler(req, res) {
 export {
   isDue, isExpired, resolveStep, computeNextPrice, clampToBound,
   evaluateMarketGuards, interpretFillState, applyOnBound, buildOSI, isMarketHours,
-  toOutcome,
+  toOutcome, resolveCancelAction,
 };
