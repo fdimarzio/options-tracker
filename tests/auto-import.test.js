@@ -923,7 +923,7 @@ describe("auto-import: open_method detection via trade_orders", () => {
 
 const SCHWAB_EQUITY_TYPE_MAP = {
   DIVIDEND: "DIVIDEND", INTEREST: "INTEREST", TRANSFER: "TRANSFER",
-  JOURNAL: "TRANSFER", MARGIN_INTEREST: "INTEREST", OTHER: "OTHER",
+  JOURNAL: "TRANSFER", MARGIN_INTEREST: "INTEREST", FEE: "FEE", OTHER: "OTHER",
 };
 
 function parseSchwabEquityTx(tx, accountNumber) {
@@ -1030,6 +1030,14 @@ describe("parseSchwabEquityTx", () => {
     expect(parseSchwabEquityTx(tx, "3866").transaction_type).toBe("INTEREST");
   });
 
+  it("parses FEE transaction", () => {
+    const tx = {
+      activityId: 130, type: "FEE", netAmount: -2.50,
+      tradeDate: "2026-06-12T00:00:00Z", transferItems: [],
+    };
+    expect(parseSchwabEquityTx(tx, "3866").transaction_type).toBe("FEE");
+  });
+
   it("returns null for TRADE with no equity item", () => {
     const tx = {
       activityId: 128, type: "TRADE", netAmount: -100,
@@ -1115,16 +1123,20 @@ describe("parseEtradeEquityTx", () => {
   });
 });
 
-// ── P11: stock_transactions import — Schwab only, ETrade excluded ────────────
-// Mirrors api/auto-import.js's equity-import aggregation (~line 1430):
-// `allEquityTxs = [...schwabEquityTxs]` — ETrade equity is parsed (parseEtradeEquityTx
-// still exists, e.g. for future debugging) but never included in what gets inserted
-// into stock_transactions, since both ETrade accounts are IRAs (tax-deferred) and mixing
-// them with Schwab's taxable equity activity in one table would corrupt tax reporting.
-describe("stock_transactions import — Schwab only (P11)", () => {
+// ── P11 resolved (2026-08-03): stock_transactions import — both brokers ─────
+// Mirrors api/auto-import.js's equity-import aggregation:
+// `allEquityTxs = [...schwabEquityTxs, ...etradeEquityTxs]`. ETrade equity used to be
+// blanket-excluded (both ETrade accounts are IRAs/tax-deferred, and mixing them with
+// Schwab's taxable equity activity in one table risked corrupting tax reporting), but
+// nothing in this codebase actually aggregates stock_transactions across accounts for
+// a tax computation — the `account` field ("ETrade 6917"/"Schwab 3866") already
+// distinguishes them, the same prefix every other broker-aware check here keys off of,
+// and the All Transactions tab already filters by account. So the exclusion is gone;
+// the guard is the account field, same as everywhere else.
+describe("stock_transactions import — both brokers, guarded by account (P11 resolved)", () => {
   function buildEquityImportList(schwabEquityTxs, etradeEquityTxs) {
-    // Deliberately does NOT spread etradeEquityTxs — this is the actual production line.
-    return [...schwabEquityTxs];
+    // This is the actual production line.
+    return [...schwabEquityTxs, ...etradeEquityTxs];
   }
 
   it("positive — a Schwab equity transaction is included in the import list", () => {
@@ -1134,17 +1146,33 @@ describe("stock_transactions import — Schwab only (P11)", () => {
     expect(result.length).toBe(1);
   });
 
-  it("negative — an ETrade equity transaction is NOT included, even when present in the parsed list", () => {
+  it("positive — an ETrade equity transaction is now included alongside a Schwab one, both tagged by account", () => {
     const schwabTx = { schwab_transaction_id: "1", symbol: "AAPL", transaction_type: "BUY", account: "Schwab 3866" };
     const etradeTx = { schwab_transaction_id: "etrade_2", symbol: "NVDA", transaction_type: "SELL", account: "ETrade 6917" };
     const result = buildEquityImportList([schwabTx], [etradeTx]);
     expect(result).toContainEqual(schwabTx);
-    expect(result).not.toContainEqual(etradeTx);
-    expect(result.find(r => r.account?.startsWith("ETrade"))).toBeUndefined();
+    expect(result).toContainEqual(etradeTx);
+    expect(result.find(r => r.account?.startsWith("ETrade"))).toEqual(etradeTx);
   });
 
-  it("negative — an all-ETrade batch results in an empty import list", () => {
+  it("positive — an all-ETrade batch (e.g. only ETrade posted activity that day) is fully included, not dropped", () => {
     const etradeTx = { schwab_transaction_id: "etrade_3", symbol: "TSLA", transaction_type: "BUY", account: "ETrade 8222" };
-    expect(buildEquityImportList([], [etradeTx])).toEqual([]);
+    expect(buildEquityImportList([], [etradeTx])).toEqual([etradeTx]);
+  });
+
+  it("negative — an option trade never enters this list at all (only equity parsers feed schwabEquityTxs/etradeEquityTxs)", () => {
+    // Options flow through the separate schwabTxs/etradeTxs + committed/contracts pipeline,
+    // never through parseSchwabEquityTx/parseEtradeEquityTx — nothing to assert on the
+    // equity-import list itself beyond it staying empty for an all-option batch.
+    expect(buildEquityImportList([], [])).toEqual([]);
+  });
+
+  it("account field still fully distinguishes taxable vs IRA activity for any future tax-specific view", () => {
+    const rows = buildEquityImportList(
+      [{ account: "Schwab 3866" }],
+      [{ account: "ETrade 6917" }, { account: "ETrade 8222" }]
+    );
+    const taxable = rows.filter(r => !r.account.startsWith("ETrade"));
+    expect(taxable).toEqual([{ account: "Schwab 3866" }]);
   });
 });

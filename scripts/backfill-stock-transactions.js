@@ -1,6 +1,14 @@
 // scripts/backfill-stock-transactions.js
-// Backfill: pulls all non-option transactions from Schwab + ETrade into stock_transactions.
+// Backfill: pulls all non-option transactions from Schwab (ETrade currently skipped,
+// see below) into stock_transactions.
 // Run: node --env-file=.env.local scripts/backfill-stock-transactions.js
+//
+// NOTE (2026-08-03): api/auto-import.js now accepts ?action=run&sinceDate=YYYY-MM-DD
+// for historical backfill and is the preferred path going forward — it reuses the
+// live pipeline's assignment-linking and dedup logic, whereas this script writes plain
+// equity rows with no contract_id and upserts on schwab_transaction_id with
+// merge-duplicates, which would silently overwrite (and strip contract_id from) a row
+// the live pipeline already assignment-linked if run again over the same window.
 
 import crypto from "crypto";
 

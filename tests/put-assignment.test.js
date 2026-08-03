@@ -268,8 +268,8 @@ describe("api/auto-import.js — wiring and P11 invariant", () => {
     expect(handleAssignmentBlock).toContain("computeClosePnl(parent.opt_type, parent.premium, 0)");
   });
 
-  it("P11 invariant preserved — the generic equity-import list still only spreads schwabEquityTxs, never etradeEquityTxs", () => {
-    expect(autoImportSrc).toContain("const allEquityTxs   = [...schwabEquityTxs];");
+  it("P11 resolved (2026-08-03) — the generic equity-import list now spreads both schwabEquityTxs and etradeEquityTxs, guarded by account instead of exclusion", () => {
+    expect(autoImportSrc).toContain("const allEquityTxs   = [...schwabEquityTxs, ...etradeEquityTxs];");
   });
 
   it("the assignment-linked stock_transactions write reuses the real parsed equity transaction (contract_id added, not a synthetic row)", () => {
@@ -281,8 +281,8 @@ describe("api/auto-import.js — wiring and P11 invariant", () => {
     expect(detectionBlock).toContain("existingAssignmentFPs.has(makeAssignmentEquityFP(eq))");
   });
 
-  it("a matched equity BUY is removed from schwabEquityTxs so it isn't double-imported by the generic pipeline", () => {
-    expect(autoImportSrc).toContain("schwabEquityTxs.splice(idx, 1);");
+  it("a matched equity BUY is removed via removeFromEquityLists so it isn't double-imported by the generic pipeline (either broker)", () => {
+    expect(autoImportSrc).toContain("removeFromEquityLists(eq);");
   });
 
   it("open puts and calls for assignment detection are read fresh from the DB in one query, not the possibly-stale in-memory openContracts", () => {

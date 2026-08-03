@@ -291,6 +291,7 @@ const SCHWAB_EQUITY_TYPE_MAP = {
   ACH_RECEIPT:         "TRANSFER",
   ACH_DISBURSEMENT:    "TRANSFER",
   MARGIN_INTEREST:     "INTEREST",
+  FEE:                 "FEE",
   OTHER:               "OTHER",
 };
 
@@ -1227,8 +1228,22 @@ export default async function handler(req, res) {
     // this fix — or any other gap), so fetching a fixed "today" or "yesterday" window
     // permanently misses it once that calendar day has passed. Instead, look back to
     // this agent's last successful run, capped at 10 days.
+    //
+    // Manual backfill: ?sinceDate=YYYY-MM-DD overrides the window start outright, for
+    // a one-off historical pull through this same safe/dedup/assignment-aware pipeline
+    // (rather than the separate, equity-only scripts/backfill-stock-transactions.js).
+    // Broker limits still apply — this handler makes ONE un-chunked request per account,
+    // unlike that script's annual chunking, and Schwab's transactions endpoint enforces
+    // a ~1-year max window per request — so a sinceDate more than ~1 year back will get
+    // a truncated or error response from Schwab (logged as a warning, not a crash) rather
+    // than actually reaching that far back. ETrade's own history API has a similar
+    // practical lookback limit. For older gaps, statement-based backfill is a separate,
+    // unimplemented follow-up.
     const heartbeatRows = await sbGet(`ecosystem_heartbeat?select=last_run_at&agent_name=eq.auto-import`);
-    const reconcileSince = computeReconcileWindowStart(heartbeatRows?.[0]?.last_run_at, new Date(), 10);
+    const sinceDateParam = req.query.sinceDate ? new Date(`${req.query.sinceDate}T00:00:00.000Z`) : null;
+    const reconcileSince = (sinceDateParam && !isNaN(sinceDateParam.getTime()))
+      ? sinceDateParam
+      : computeReconcileWindowStart(heartbeatRows?.[0]?.last_run_at, new Date(), 10);
 
     // Load stocks_data for price at execution
     const sdRows     = await sbGet(`col_prefs?select=cols&id=eq.stocks_data`);
@@ -1306,12 +1321,14 @@ export default async function handler(req, res) {
     } catch(e) { console.warn("[auto-import] Schwab fetch failed:", e.message); }
 
     // ── Fetch ETrade ──────────────────────────────────────────────────────────
-    // Options + equity (equity only for wheel-assignment linking below — ETrade
-    // equity is still never imported into stock_transactions as ordinary activity.
-    // Both ETrade accounts (6917, 8222) are IRAs; mixing their equity activity with
-    // Schwab's taxable equity activity in the same table would corrupt tax reporting
-    // (P11, 2026-07-19). A put assignment's share purchase is a different, tagged
-    // write (contract_id set) via processPutAssignmentFromEquity, not that pipeline.
+    // Options + equity. ETrade equity now flows into stock_transactions as ordinary
+    // activity too (previously blanket-excluded — P11, 2026-07-19 — over concern that
+    // mixing ETrade's tax-deferred IRA equity activity with Schwab's taxable activity
+    // in one table would corrupt tax reporting). That's guarded by the `account` field
+    // instead of exclusion: every row already carries "ETrade 6917"/"ETrade 8222" vs
+    // "Schwab ####", the same prefix every other broker-aware check in this file keys
+    // off of, and the All Transactions tab already filters by account — a tax-specific
+    // view just excludes account LIKE 'ETrade%' rather than the data never existing.
     const etradeTxs       = [];
     const etradeEquityTxs = [];
     try {
@@ -1613,6 +1630,16 @@ export default async function handler(req, res) {
       const candidateEquityBuys  = allEquityTxsForAssignment.filter(eq => eq.transaction_type === "BUY");
       const candidateEquitySells = allEquityTxsForAssignment.filter(eq => eq.transaction_type === "SELL");
 
+      // Removes a matched-for-assignment equity tx from whichever source array it came
+      // from (Schwab or ETrade) so the generic equity import below doesn't also write
+      // it as a second, unlinked row now that both brokers' equity feeds it.
+      const removeFromEquityLists = eq => {
+        let idx = schwabEquityTxs.indexOf(eq);
+        if (idx !== -1) { schwabEquityTxs.splice(idx, 1); return; }
+        idx = etradeEquityTxs.indexOf(eq);
+        if (idx !== -1) etradeEquityTxs.splice(idx, 1);
+      };
+
       if ((candidateEquityBuys.length || candidateEquitySells.length) && allOpenShortOptions.length) {
         // Dedup on a composite fingerprint, not schwab_transaction_id alone — ETrade
         // reissues a different transaction id for the same real-world fill across
@@ -1637,10 +1664,7 @@ export default async function handler(req, res) {
             await processPutAssignmentFromEquity(eq, put);
             claimedContractIds.add(put.id);
             existingAssignmentFPs.add(makeAssignmentEquityFP(eq));
-            // Remove from schwabEquityTxs so the generic Schwab-only import below
-            // doesn't also write it as a second, unlinked BUY row.
-            const idx = schwabEquityTxs.indexOf(eq);
-            if (idx !== -1) schwabEquityTxs.splice(idx, 1);
+            removeFromEquityLists(eq);
             const pIdx = openPutsForAssignment.indexOf(put);
             if (pIdx !== -1) openPutsForAssignment.splice(pIdx, 1);
           } catch(e) { console.warn(`[auto-import] put assignment processing failed for ${eq.symbol}:`, e.message); }
@@ -1657,10 +1681,7 @@ export default async function handler(req, res) {
             await processCallAssignmentFromEquity(eq, call);
             claimedContractIds.add(call.id);
             existingAssignmentFPs.add(makeAssignmentEquityFP(eq));
-            // Remove from schwabEquityTxs so the generic Schwab-only import below
-            // doesn't also write it as a second, unlinked SELL row.
-            const idx = schwabEquityTxs.indexOf(eq);
-            if (idx !== -1) schwabEquityTxs.splice(idx, 1);
+            removeFromEquityLists(eq);
             const cIdx = openCallsForAssignment.indexOf(call);
             if (cIdx !== -1) openCallsForAssignment.splice(cIdx, 1);
           } catch(e) { console.warn(`[auto-import] call assignment processing failed for ${eq.symbol}:`, e.message); }
@@ -1709,8 +1730,9 @@ export default async function handler(req, res) {
     // ── Import equity transactions ────────────────────────────────────────────
     let equityImported    = 0;
     const equityImportedRows = [];
-    // Schwab only — ETrade equity is excluded by design (see fetch block above, P11).
-    const allEquityTxs   = [...schwabEquityTxs];
+    // Both brokers — ETrade equity is no longer blanket-excluded (see fetch block
+    // above, P11); it's tagged via `account` instead, same as everywhere else.
+    const allEquityTxs   = [...schwabEquityTxs, ...etradeEquityTxs];
     if (allEquityTxs.length) {
       try {
         // Load existing stock_transaction IDs + composite fingerprints for dedup

@@ -231,9 +231,9 @@ describe("api/auto-import.js — covered-call wiring", () => {
     expect(autoImportSrc).toContain("await processCallAssignmentFromEquity(eq, call);");
   });
 
-  it("a matched equity SELL is removed from schwabEquityTxs so it isn't double-imported by the generic pipeline", () => {
+  it("a matched equity SELL is removed via removeFromEquityLists so it isn't double-imported by the generic pipeline (either broker)", () => {
     const callBlock = autoImportSrc.split("// Covered calls: assignment")[1]?.split("// Fallback:")[0] || "";
-    expect(callBlock).toContain("schwabEquityTxs.splice(idx, 1);");
+    expect(callBlock).toContain("removeFromEquityLists(eq);");
   });
 
   it("puts and calls share the same claimedContractIds/existingAssignmentFPs dedup state (one query, not two)", () => {
