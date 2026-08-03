@@ -5,6 +5,7 @@
 
 import crypto from "crypto";
 import { computeReconcileWindowStart } from "./_lib/reconcileWindow.js";
+import { computeClosePnl } from "./_lib/pnl.js";
 
 const SUPABASE_URL  = process.env.VITE_SUPABASE_URL;
 const SUPABASE_KEY  = process.env.VITE_SUPABASE_ANON_KEY;
@@ -400,10 +401,11 @@ async function handleAssignment(parsed) {
     : null;
 
   if (parent) {
-    const isSTO    = parent.opt_type === "STO";
-    const profit   = isSTO
-      ? Math.round(Math.abs(+parent.premium) * 100) / 100
-      : Math.round(-Math.abs(+parent.premium) * 100) / 100;
+    const isSTO = parent.opt_type === "STO";
+    // computeClosePnl generalizes the old isSTO branch exactly: STO premium is stored
+    // positive (credit) -> profit = premium - 0 = premium kept, +100%. BTO premium is
+    // stored negative (debit) -> profit = premium + 0 = premium lost, -100%.
+    const { profit, profitPct } = computeClosePnl(parent.opt_type, parent.premium, 0);
     const daysHeld = parent.date_exec
       ? Math.ceil((new Date(date_exec) - new Date(parent.date_exec)) / 86400000)
       : null;
@@ -413,8 +415,10 @@ async function handleAssignment(parsed) {
       cost_to_close: 0,
       close_date:    date_exec,
       profit,
-      profit_pct:    isSTO ? 1.0 : -1.0,
-      exercised:     true,
+      profit_pct:    profitPct,
+      exercised:     "Yes", // was boolean `true` — one of the sources of the exercised
+                            // column's Yes/true/No/null mix; see sql/normalize_exercised.sql
+      close_method:  "assigned",
       days_held:     daysHeld,
       notes:         `Auto-resolved: option assigned/exercised on ${date_exec}`,
     });
@@ -498,6 +502,114 @@ async function handleAssignment(parsed) {
   // Fallback — no match found, park as pending anomaly
   console.warn(`[handleAssignment] ⚠️ No open contract found for ${stock} $${strike} ${expires} (${account}) — routing to pending anomaly`);
   return { resolved: false };
+}
+
+// ── Wheel strategy: detect short-put assignment from a broker EQUITY BUY ──────
+// handleAssignment() above only fires when the broker sends an explicit "Option
+// Assigned" transaction. That marker isn't always present — often the broker just
+// posts a plain EQUITY BUY of the underlying at the strike and silently drops the
+// option, which is what caused ~10 historical assignments (OKLO, AMD) to need
+// hand-fixing. These functions detect that pattern instead of importing the equity
+// leg as an ordinary, unlinked purchase.
+
+// Pure match: does this equity BUY look like the assignment of one of the given
+// open short puts? price must equal strike (assignment always fills at strike, not
+// a market price) and quantity must equal put_qty*100, in the same account/symbol,
+// with the trade landing on or shortly after the put's expiry (weekend/holiday
+// settlement lag — mirrors the reconciliation window in computeReconcileWindowStart).
+function findAssignedPutForEquityBuy(equityTx, openPuts) {
+  if (equityTx?.transaction_type !== "BUY") return null;
+  if (!equityTx.symbol || !equityTx.account || equityTx.quantity == null || equityTx.price == null) return null;
+  const tradeDt = equityTx.trade_date ? new Date(equityTx.trade_date) : null;
+  if (!tradeDt || isNaN(tradeDt.getTime())) return null;
+  const tradeDate = tradeDt.toISOString().slice(0, 10);
+
+  const candidates = (Array.isArray(openPuts) ? openPuts : []).filter(put =>
+    put.opt_type === "STO" && put.type === "Put" && put.status === "Open" &&
+    put.account === equityTx.account &&
+    put.stock?.toUpperCase() === equityTx.symbol.toUpperCase() &&
+    Math.abs(+equityTx.quantity - (+put.qty * 100)) < 0.5 &&
+    Math.abs(+equityTx.price - +put.strike) < 0.01 &&
+    put.expires <= tradeDate &&
+    tradeDate <= addDaysToDateStr(put.expires, 3)
+  );
+  if (!candidates.length) return null;
+  // More than one match shouldn't normally happen (account+symbol+strike+qty+expiry
+  // window is already narrow) — prefer the most recently expired as the safest guess.
+  return candidates.reduce((a, b) => (a.expires >= b.expires ? a : b));
+}
+
+function addDaysToDateStr(dateStr, n) {
+  const d = new Date(dateStr + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+// Fallback signal when no equity transaction was ever matched: the put is simply
+// still Open, past its own expiry, and currently ITM (stock price < strike for a put).
+function isPutPastExpiryITM(put, currentPrice, today) {
+  if (!put || put.opt_type !== "STO" || put.type !== "Put" || put.status !== "Open") return false;
+  if (!put.expires || put.expires >= today) return false;
+  if (currentPrice == null) return false;
+  return currentPrice < +put.strike;
+}
+
+// Pure: the contracts PATCH body for closing an assigned short put. cost_to_close=0
+// and profit=premium (kept in full) since assignment doesn't cost anything to close —
+// the shares purchase is a separate stock_transactions event, not part of the option's
+// own P&L. profit_pct comes back from computeClosePnl as a fraction (e.g. 1.0 = 100%),
+// matching every other close path in this codebase — the UI multiplies by 100 to display.
+function buildAssignedPutClosePatch(put, closeDate) {
+  const { profit, profitPct } = computeClosePnl(put.opt_type, put.premium, 0);
+  const daysHeld = put.date_exec
+    ? Math.ceil((new Date(closeDate) - new Date(put.date_exec)) / 86400000)
+    : null;
+  return {
+    status:        "Closed",
+    cost_to_close: 0,
+    close_date:    closeDate,
+    profit,
+    profit_pct:    profitPct,
+    exercised:     "Yes",
+    close_method:  "assigned",
+    days_held:     daysHeld,
+    notes:         `Auto-resolved: put assigned on ${closeDate}`,
+  };
+}
+
+// Composite fingerprint for stock_transactions dedup — ETrade reissues a different
+// transaction id across fetches, so schwab_transaction_id alone isn't reliable.
+// Date is truncated to the day since trade_date may arrive as a full timestamp.
+function makeAssignmentEquityFP(r) {
+  const dateStr = r.trade_date
+    ? new Date(r.trade_date).toLocaleString("en-CA", { timeZone: "America/New_York" }).slice(0, 10)
+    : "";
+  return `${r.symbol || ""}|${r.transaction_type}|${dateStr}|${+r.quantity || 0}|${+r.price || 0}|${r.account || ""}`;
+}
+
+// Closes the put and links the real broker equity BUY as its stock_transactions row
+// (contract_id = the put's id) — the actual parsed transaction is reused as-is so its
+// account/symbol/quantity/price/net_amount/trade_date/settlement_date/broker id all
+// carry through unchanged; only contract_id and a clearer description are added.
+async function processPutAssignmentFromEquity(equityTx, put) {
+  const closeDate = new Date(equityTx.trade_date).toISOString().slice(0, 10);
+  const patch = buildAssignedPutClosePatch(put, closeDate);
+  await sbPatch("contracts", put.id, patch);
+
+  await sbPost("stock_transactions", {
+    ...equityTx,
+    contract_id: put.id,
+    description: `Assignment: ${put.stock} $${put.strike} Put — bought ${equityTx.quantity} shares at $${equityTx.price} (contract #${put.id})`,
+  }, "resolution=ignore-duplicates");
+
+  await sendPushover(
+    `🎯 ${put.stock} $${put.strike} Put Assigned`,
+    `Contract #${put.id} closed automatically.\n💰 Profit: +$${patch.profit.toFixed(2)} (full premium kept)\nBought ${equityTx.quantity} shares @ $${equityTx.price}\nAccount: ${put.account}\nExpiry: ${put.expires}`,
+    `${APP_URL}/?tab=contracts`, 0, "cashregister"
+  );
+
+  console.log(`[auto-import] put assignment detected from equity BUY: ${put.stock} $${put.strike} → contract #${put.id}, profit $${patch.profit.toFixed(2)}`);
+  return { put, profit: patch.profit };
 }
 
 // ── Match closer to open contract ─────────────────────────────────────────────
@@ -1165,10 +1277,14 @@ export default async function handler(req, res) {
     } catch(e) { console.warn("[auto-import] Schwab fetch failed:", e.message); }
 
     // ── Fetch ETrade ──────────────────────────────────────────────────────────
-    // Options only — ETrade equity transactions are NOT imported into stock_transactions.
-    // Both ETrade accounts (6917, 8222) are IRAs; mixing their equity activity with Schwab's
-    // taxable equity activity in the same table would corrupt tax reporting (P11, 2026-07-19).
-    const etradeTxs = [];
+    // Options + equity (equity only for wheel-assignment linking below — ETrade
+    // equity is still never imported into stock_transactions as ordinary activity.
+    // Both ETrade accounts (6917, 8222) are IRAs; mixing their equity activity with
+    // Schwab's taxable equity activity in the same table would corrupt tax reporting
+    // (P11, 2026-07-19). A put assignment's share purchase is a different, tagged
+    // write (contract_id set) via processPutAssignmentFromEquity, not that pipeline.
+    const etradeTxs       = [];
+    const etradeEquityTxs = [];
     try {
       const acctData = await etradeGet("/v1/accounts/list");
       const eAccts   = acctData?.AccountListResponse?.Accounts?.Account || [];
@@ -1184,7 +1300,9 @@ export default async function handler(req, res) {
           const txList = data?.TransactionListResponse?.Transaction || [];
           txList.forEach(tx => {
             const p = parseEtradeTx(tx, stocksData);
-            if (p) etradeTxs.push(p);
+            if (p) { etradeTxs.push(p); return; }
+            const eq = parseEtradeEquityTx(tx);
+            if (eq) etradeEquityTxs.push(eq);
           });
         } catch(e) { if (!e.message?.includes("204")) console.warn(`[auto-import] ETrade ${acct.accountIdKey}:`, e.message); }
       }
@@ -1437,6 +1555,84 @@ export default async function handler(req, res) {
       await sendPushover(title, msg, `${APP_URL}/?tab=contracts`, 0, sound);
     }
 
+    // ── Wheel strategy: detect short-put assignment from equity BUY ───────────
+    // Runs after the option-transaction loop above (which may have already closed
+    // some puts via an explicit "Option Assigned" transaction through handleAssignment)
+    // and reads a FRESH set of open STO Puts directly from the DB — the in-memory
+    // openContracts array is stale here since handleAssignment() queries its own copy
+    // and doesn't update it, so relying on openContracts could double-close a put.
+    try {
+      const openPutsForAssignment = await sbGet(
+        `contracts?opt_type=eq.STO&type=eq.Put&status=eq.Open&select=id,stock,strike,expires,qty,account,premium,date_exec,type,opt_type`
+      );
+      const candidateEquityBuys = [...schwabEquityTxs, ...etradeEquityTxs].filter(eq => eq.transaction_type === "BUY");
+
+      if (candidateEquityBuys.length && Array.isArray(openPutsForAssignment) && openPutsForAssignment.length) {
+        // Dedup on a composite fingerprint, not schwab_transaction_id alone — ETrade
+        // reissues a different transaction id for the same real-world fill across fetches.
+        const existingAssignmentRows = await sbGet(
+          `stock_transactions?contract_id=not.is.null&select=contract_id,schwab_transaction_id,symbol,transaction_type,trade_date,quantity,price,account`
+        );
+        const existingRows = Array.isArray(existingAssignmentRows) ? existingAssignmentRows : [];
+        const claimedContractIds  = new Set(existingRows.map(r => r.contract_id));
+        const existingAssignmentFPs = new Set(existingRows.map(makeAssignmentEquityFP));
+
+        for (const eq of candidateEquityBuys) {
+          if (existingAssignmentFPs.has(makeAssignmentEquityFP(eq))) continue; // already imported
+
+          const put = findAssignedPutForEquityBuy(eq, openPutsForAssignment);
+          if (!put || claimedContractIds.has(put.id)) continue;
+
+          try {
+            await processPutAssignmentFromEquity(eq, put);
+            claimedContractIds.add(put.id);
+            existingAssignmentFPs.add(makeAssignmentEquityFP(eq));
+            // Remove from schwabEquityTxs so the generic Schwab-only import below
+            // doesn't also write it as a second, unlinked BUY row.
+            const idx = schwabEquityTxs.indexOf(eq);
+            if (idx !== -1) schwabEquityTxs.splice(idx, 1);
+            const pIdx = openPutsForAssignment.indexOf(put);
+            if (pIdx !== -1) openPutsForAssignment.splice(pIdx, 1);
+          } catch(e) { console.warn(`[auto-import] put assignment processing failed for ${eq.symbol}:`, e.message); }
+        }
+      }
+
+      // Fallback: put simply past expiry, ITM, no assignment transaction ever matched
+      // (e.g. the equity leg hasn't posted yet, or never surfaces via the transactions API).
+      const todayForExpiry = new Date().toLocaleString("en-CA", { timeZone: "America/New_York" }).slice(0, 10);
+      for (const put of (Array.isArray(openPutsForAssignment) ? openPutsForAssignment : [])) {
+        const currentPrice = stocksData?.[put.stock?.toUpperCase()]?.currentPrice ?? null;
+        if (!isPutPastExpiryITM(put, currentPrice, todayForExpiry)) continue;
+        try {
+          await sbPatch("contracts", put.id, buildAssignedPutClosePatch(put, put.expires));
+          const alreadyLinked = await sbGet(`stock_transactions?contract_id=eq.${put.id}&limit=1`);
+          if (!Array.isArray(alreadyLinked) || !alreadyLinked.length) {
+            const sharesQty = (+put.qty || 0) * 100;
+            await sbPost("stock_transactions", {
+              contract_id:      put.id,
+              account:          put.account,
+              symbol:           put.stock,
+              transaction_type: "BUY",
+              asset_type:       "EQUITY",
+              quantity:         sharesQty,
+              price:            +put.strike,
+              net_amount:       -(+put.strike * sharesQty),
+              trade_date:       new Date(put.expires + "T16:00:00Z").toISOString(),
+              settlement_date:  null,
+              description:      `Assignment (inferred — past expiry, ITM, no broker transaction matched): bought ${sharesQty} shares of ${put.stock} at $${put.strike}`,
+              schwab_transaction_id: null,
+            }, "resolution=ignore-duplicates");
+          }
+          await sendPushover(
+            `🎯 ${put.stock} $${put.strike} Put Assigned (inferred)`,
+            `Contract #${put.id} closed automatically — past expiry, ITM, no broker equity transaction seen yet.\nAccount: ${put.account}\nExpiry: ${put.expires}`,
+            `${APP_URL}/?tab=contracts`, 0, "cashregister"
+          );
+          console.log(`[auto-import] put assignment inferred (past-expiry ITM fallback): ${put.stock} $${put.strike} → contract #${put.id}`);
+        } catch(e) { console.warn(`[auto-import] past-expiry-ITM fallback failed for contract ${put.id}:`, e.message); }
+      }
+    } catch(e) { console.warn("[auto-import] put assignment detection failed:", e.message); }
+
     // ── Import equity transactions ────────────────────────────────────────────
     let equityImported    = 0;
     const equityImportedRows = [];
@@ -1526,3 +1722,11 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: err.message });
   }
 }
+
+// Exported so tests import the real logic directly rather than a hand-mirrored copy —
+// this detection touches real money (share purchases, P&L), same reasoning as
+// api/chase-step.js's exports.
+export {
+  findAssignedPutForEquityBuy, isPutPastExpiryITM, buildAssignedPutClosePatch,
+  makeAssignmentEquityFP, addDaysToDateStr,
+};
