@@ -1550,7 +1550,6 @@ export default async function handler(req, res) {
 
     // ── Push notification for committed ──────────────────────────────────────
     if (committed.length) {
-      const opens  = committed.filter(t => ["STO","BTO"].includes(t.opt_type));
       const closes = committed.filter(t => ["BTC","STC"].includes(t.opt_type));
 
       // Calculate total profit on closed trades committed this run
@@ -1560,13 +1559,22 @@ export default async function handler(req, res) {
         return s + (t.profit || 0);
       }, 0);
 
+      // List the actual imported records (symbol, strike, call/put, qty, account,
+      // open/close) instead of just a count, capped so a big batch doesn't blow up
+      // the Pushover message body.
+      const MAX_LISTED_TX = 10;
+      const formatCommittedLine = t => {
+        const isOpen = ["STO","BTO"].includes(t.opt_type);
+        return `${isOpen ? "📤" : "✅"} ${t.stock} $${t.strike} ${t.type} x${t.qty} (${t.account}) — ${isOpen ? "open" : "close"}`;
+      };
+
       let msg = `${committed.length} transaction${committed.length > 1 ? "s" : ""} auto-committed.`;
-      if (opens.length)  msg += `\n📤 ${opens.length} open${opens.length > 1 ? "s" : ""}`;
-      if (closes.length) {
-        msg += `\n✅ ${closes.length} close${closes.length > 1 ? "s" : ""}`;
-        if (totalProfit !== 0) {
-          msg += `\n${totalProfit >= 0 ? "💰" : "📉"} Net P&L: ${totalProfit >= 0 ? "+" : ""}$${totalProfit.toFixed(2)}`;
-        }
+      msg += "\n" + committed.slice(0, MAX_LISTED_TX).map(formatCommittedLine).join("\n");
+      if (committed.length > MAX_LISTED_TX) {
+        msg += `\n…and ${committed.length - MAX_LISTED_TX} more`;
+      }
+      if (closes.length && totalProfit !== 0) {
+        msg += `\n${totalProfit >= 0 ? "💰" : "📉"} Net P&L: ${totalProfit >= 0 ? "+" : ""}$${totalProfit.toFixed(2)}`;
       }
 
       // Gamify: pick Pushover sound based on profit
