@@ -5,6 +5,7 @@
 import { computeClosePnl } from "./_lib/pnl.js";
 import { computeOrigDte, shouldBlockForLeapProtection } from "./_lib/leapGuard.js";
 import { isExpiryBlockedByEarnings } from "./_lib/earningsGuard.js";
+import { resolveCooldownMinutes, isWithinCooldown, buildNotificationDedupKey, makeNotificationLogLookupKey } from "./_lib/notificationCooldown.js";
 
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
 const SUPABASE_KEY = process.env.VITE_SUPABASE_ANON_KEY;
@@ -141,6 +142,16 @@ async function sendPushover(title, body, url, urlTitle, priority) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ token, user, title, message: body, priority: priority || 0, sound: priority >= 1 ? "cashregister" : "pushover", url, url_title: urlTitle }),
   });
+}
+
+// Records a sent notification for the unified cooldown (CLOSE_NOW / itm_warning /
+// sto_suggestion) — see api/_lib/notificationCooldown.js and sql/notification_cooldown.sql.
+async function upsertNotificationLog(dedupKey, alertType, sentAt) {
+  await fetch(`${SUPABASE_URL}/rest/v1/notification_log?on_conflict=dedup_key,alert_type`, {
+    method: "POST",
+    headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify({ dedup_key: dedupKey, alert_type: alertType, last_sent_at: sentAt }),
+  }).catch(e => console.warn(`[market-refresh] notification_log write failed for ${dedupKey}/${alertType}:`, e.message));
 }
 
 // ── DTE/OTM matrix lookup ─────────────────────────────────────────────────────
@@ -772,7 +783,9 @@ async function writeFactorValues(sigId, factors, capturedAt) {
 const RENOTIFY_DOLLARS  = 50;
 const RENOTIFY_PCT      = 5;   // percentage points
 const RENOTIFY_COOLDOWN = 90;  // minutes — was 60, raised to reduce alert frequency
-const CLOSE_NOW_COOLDOWN = 30; // minutes — CLOSE_NOW gets a shorter window since it's actionable
+// CLOSE_NOW and ITM_WARNING no longer go through shouldNotify() at all — they use
+// the unified cooldown (cooldownMinutes, default 60) further down instead. This
+// function now only ever sees APPROACHING/WHEEL_ITM/WHEEL_OTM/EXPIRY_WAIT.
 
 function shouldNotify(signal, lastNotif) {
   if (!lastNotif) return true;  // never notified
@@ -1669,6 +1682,27 @@ export default async function handler(req, res) {
       if (vix) console.log(`[market-refresh] VIX: ${vix.toFixed(2)}`);
     } catch(e) { console.warn("[market-refresh] VIX fetch failed:", e.message); }
 
+    // ── Notification cooldown (CLOSE_NOW / itm_warning / sto_suggestion) ──────
+    // Was firing on every 5-min refresh for the same ticker/contract — deliberately
+    // NOT reusing contracts.last_exit_alert_at (see sql/notification_cooldown.sql
+    // for why: that column belongs to the separate exit-plan mechanism below and
+    // sharing it would let a CLOSE_NOW alert silently suppress a real stop-loss
+    // alert later the same day). Replaces the old ad-hoc "once per day" dedup for
+    // sto_suggestion (col_prefs sentData) with the same mechanism.
+    let cooldownMinutes = 60;
+    const notificationLogByKey = {};
+    try {
+      const [cooldownRuleRes, notificationLogRes] = await Promise.all([
+        fetch(`${SUPABASE_URL}/rest/v1/signal_rules?rule_type=eq.notification_cooldown&limit=1`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }),
+        fetch(`${SUPABASE_URL}/rest/v1/notification_log?select=dedup_key,alert_type,last_sent_at`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }),
+      ]);
+      const cooldownRule = (await cooldownRuleRes.json())?.[0] || null;
+      cooldownMinutes = resolveCooldownMinutes(cooldownRule, 60);
+      for (const row of (await notificationLogRes.json().catch(() => []))) {
+        notificationLogByKey[makeNotificationLogLookupKey(row.dedup_key, row.alert_type)] = row.last_sent_at;
+      }
+    } catch(e) { console.warn("[market-refresh] notification cooldown load failed:", e.message); }
+
     // ── Evaluate signals ────────────────────────────────────────────────────
     const notifications = [];
 
@@ -1691,29 +1725,38 @@ export default async function handler(req, res) {
 
       console.log(`[signal] ${contract.stock} $${contract.strike} ${contract.type} — ask:${chainEntry?.ask} bid:${chainEntry?.bid} mid:${signal.mid?.toFixed(3)} costToClose:$${signal.costToClose} profit:${signal.profitPct?.toFixed(1)}% premium:$${contract.premium} level:${signal.level}`);
 
-      const lastNotif = sentData.contracts[String(contract.id)];
-      // CLOSE_NOW: notify at most once per CLOSE_NOW_COOLDOWN minutes regardless of auto rules
-      // (auto-execute handles the trade — Pushover is just FYI)
-      if (signal.level === "CLOSE_NOW" && lastNotif?.level === "CLOSE_NOW" && lastNotif?.sentAt) {
-        const minsSince = (Date.now() - new Date(lastNotif.sentAt).getTime()) / 60000;
-        if (minsSince < CLOSE_NOW_COOLDOWN) continue;
-      } else if (!shouldNotify(signal, lastNotif)) continue;
+      // CLOSE_NOW / ITM_WARNING: unified per-contract-per-alert-type cooldown
+      // (cooldownMinutes, default 60) — independent of each other and of every
+      // other contract, so an escalation or a different contract still notifies.
+      // APPROACHING/WHEEL_ITM/WHEEL_OTM/EXPIRY_WAIT keep the existing shouldNotify
+      // behavior (level-change bypass, once-per-day for WHEEL/EXPIRY_WAIT) — out
+      // of this feature's scope.
+      const cooldownAlertType = signal.level === "CLOSE_NOW" ? "close_now" : signal.level === "ITM_WARNING" ? "itm_warning" : null;
+      if (cooldownAlertType) {
+        const dedupKey = buildNotificationDedupKey({ contractId: contract.id });
+        const lastSentAt = notificationLogByKey[makeNotificationLogLookupKey(dedupKey, cooldownAlertType)];
+        if (isWithinCooldown(lastSentAt, cooldownMinutes)) continue;
+      } else if (!shouldNotify(signal, sentData.contracts[String(contract.id)])) continue;
 
       const notif = buildNotification(contract, signal, quotes);
-      notifications.push({ contract, signal, notif });
+      notifications.push({ contract, signal, notif, cooldownAlertType });
 
-      // Update state
-      sentData.contracts[String(contract.id)] = {
-        level: signal.level,
-        projectedProfit: signal.projectedProfit,
-        profitPct: signal.profitPct,
-        sentAt: lastRefresh,
-      };
+      if (cooldownAlertType) {
+        const dedupKey = buildNotificationDedupKey({ contractId: contract.id });
+        notificationLogByKey[makeNotificationLogLookupKey(dedupKey, cooldownAlertType)] = lastRefresh;
+      } else {
+        sentData.contracts[String(contract.id)] = {
+          level: signal.level,
+          projectedProfit: signal.projectedProfit,
+          profitPct: signal.profitPct,
+          sentAt: lastRefresh,
+        };
+      }
     }
 
     // ── Send notifications + log to signal_log ──────────────────────────────
     // etNow is hoisted to top-level scope above
-    for (const { contract, signal, notif } of notifications) {
+    for (const { contract, signal, notif, cooldownAlertType } of notifications) {
       const sigId = await logSignal({
         signal_type:          signal.level === "CLOSE_NOW" ? "close_now" : signal.level === "APPROACHING" ? "approaching" : "itm_warning",
         symbol:               contract.stock,
@@ -1745,6 +1788,9 @@ export default async function handler(req, res) {
         ? `${APP_URL}/?action=close&id=${contract.id}&signal_id=${sigId}`
         : notif.url;
       await sendPushover(notif.title, notif.body, closeUrl, "View Contract", notif.priority);
+      if (cooldownAlertType) {
+        await upsertNotificationLog(buildNotificationDedupKey({ contractId: contract.id }), cooldownAlertType, lastRefresh);
+      }
     }
 
     } // end isMarketOpen
@@ -2012,9 +2058,14 @@ export default async function handler(req, res) {
           matchingOpps.sort((a, b) => b.premiumEst - a.premiumEst);
           const top = matchingOpps.slice(0, 3);
 
-          // Dedupe: one push per symbol+account per day
-          const suggKey = `sto_pos_${symbol}_${account.replace(/\s+/g, "_")}`;
-          if (sentData.contracts[suggKey]?.sentAt?.slice(0, 10) === today) continue;
+          // Dedupe via the unified cooldown (cooldownMinutes, default 60) — replaces
+          // the old ad-hoc "once per symbol+account per day" col_prefs check, which
+          // wasn't holding (~7.7x/day, PAM 666ad1b1) because of the duplicate 5-min
+          // Market Refresh workflow race; that race is fixed (the duplicate workflow
+          // was removed), and this minute-based cooldown replaces the day-based one
+          // going forward so there's one mechanism, not two overlapping ones.
+          const suggDedupKey = buildNotificationDedupKey({ symbol, account });
+          if (isWithinCooldown(notificationLogByKey[makeNotificationLogLookupKey(suggDedupKey, "sto_suggestion")], cooldownMinutes)) continue;
 
           const sign  = changePct >= 0 ? "+" : "";
           const title = `💡 STO Opportunity — ${symbol} (${account})`;
@@ -2051,7 +2102,8 @@ export default async function handler(req, res) {
 
           const stoUrl = `${APP_URL}/?tab=stocks&ticker=${symbol}&strike=${top[0]?.strike ?? ""}&expiry=${top[0]?.expiry ?? ""}&qty=${suggestQty}&price=${top[0]?.mid?.toFixed(2) ?? ""}&account=${encodeURIComponent(account)}&action=sto${sigId ? `&signal_id=${sigId}` : ""}`;
           await sendPushover(title, lines.join("\n"), stoUrl, "Open in App", 0);
-          sentData.contracts[suggKey] = { sentAt: lastRefresh, symbol, account, suggestQty };
+          await upsertNotificationLog(suggDedupKey, "sto_suggestion", lastRefresh);
+          notificationLogByKey[makeNotificationLogLookupKey(suggDedupKey, "sto_suggestion")] = lastRefresh;
 
           // ── Write scoring_factor_values for this signal ───────────────────
           if (sigId) {
