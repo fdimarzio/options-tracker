@@ -3,6 +3,7 @@ import { fetchQuotes, fetchOpenPositionChains, findOptionForContract, fetchPosit
 import { BarChart, Bar, ComposedChart, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { createClient } from "@supabase/supabase-js";
 import { computeClosePnl } from "./lib/pnl.js";
+import { computeOrigDte, isLeapOrigDte } from "./lib/leapGuard.js";
 
 // ── Supabase client ───────────────────────────────────────────────────────────
 const supabase = createClient(
@@ -49,6 +50,7 @@ function toApp(row) {
     timeStopDte:         row.time_stop_dte != null ? +row.time_stop_dte : null,
     deltaStop:           row.delta_stop != null ? +row.delta_stop : null,
     lastExitAlertAt:     row.last_exit_alert_at || null,
+    entryDte:            row.entry_dte != null ? +row.entry_dte : null,
   };
 }
 function toDB(c) {
@@ -89,6 +91,17 @@ function toDB(c) {
     delta_stop:            c.deltaStop != null ? +c.deltaStop : null,
   };
 }
+
+// Display-only: does this contract qualify for the protect_leaps_ltcg guard (see
+// signal_rules, api/market-refresh.js's btc_auto scanner)? Mirrors the same
+// >365-original-DTE threshold — never used to make a trading decision here, just
+// to show the "held for LTCG" badge on qualifying open contracts.
+function isLeapProtectedContract(c) {
+  if (!c || c.status !== "Open") return false;
+  const origDte = computeOrigDte(c.entryDte, c.expires, c.dateExec);
+  return isLeapOrigDte(origDte);
+}
+
 function planToApp(row) {
   return {
     id:           row.id,
@@ -878,8 +891,8 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
     setSaving(null);
   };
 
-  const ruleTypeLabel = t => ({ sto: "STO Scanner", btc_auto: "Auto BTC", close_signal: "Close Signal" })[t] || t;
-  const ruleTypeColor = t => ({ sto: "#ffd166", btc_auto: "#00ff88", close_signal: "#58a6ff" })[t] || "#888";
+  const ruleTypeLabel = t => ({ sto: "STO Scanner", btc_auto: "Auto BTC", close_signal: "Close Signal", protect_leaps_ltcg: "LEAPS Protection" })[t] || t;
+  const ruleTypeColor = t => ({ sto: "#ffd166", btc_auto: "#00ff88", close_signal: "#58a6ff", protect_leaps_ltcg: "#c792ea" })[t] || "#888";
   const f$ = v => v != null ? "$" + (+v).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 }) : "—";
 
   const inner = (
@@ -971,6 +984,13 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
                     )}
                   </span>
                 </div>
+
+                {/* Plain-language description for rules with no dedicated editable fields */}
+                {rule.rule_type === "protect_leaps_ltcg" && (
+                  <div style={{marginBottom:12,padding:"6px 10px",background:"#c792ea08",border:"1px solid #c792ea20",borderRadius:6,fontFamily:"monospace",fontSize:10,color:th("#8b949e","#5a5248"),lineHeight:1.5}}>
+                    🔒 LEAPs (opened &gt;365 DTE) are never auto-closed by Skynet's BTC scanners — held for long-term capital gains, even once the remaining DTE has dropped well below 365.
+                  </div>
+                )}
 
                 {/* Stats row */}
                 <div style={{display:"flex",gap:16,marginBottom:12,flexWrap:"wrap"}}>
@@ -7746,7 +7766,7 @@ ${JSON.stringify(summary, null, 1)}`;
                       <tr key={c.id} className="rh" style={{borderTop:"1px solid #0d1117",cursor:"pointer",background:c.status==="Open"&&itmStatus==="ITM"?"#ff456005":c.status==="Open"&&itmStatus==="OTM"?"#00ff8803":"transparent"}} onClick={()=>setViewC(c)}>
                         {cols.filter(x=>x.show).map(col => {
                           switch(col.key) {
-                            case "ticker":  return <td key="ticker" className="sticky-col" style={{padding:"5px 8px",fontFamily:"monospace",fontWeight:700,color:c.parentId?"#58a6ff":th("#e6edf3","#0d0d0b"),fontSize:12}}>{c.stock||"—"}{c.parentId&&<span style={{fontSize:7,color:"#58a6ff",marginLeft:2}}>BTC</span>}</td>;
+                            case "ticker":  return <td key="ticker" className="sticky-col" style={{padding:"5px 8px",fontFamily:"monospace",fontWeight:700,color:c.parentId?"#58a6ff":th("#e6edf3","#0d0d0b"),fontSize:12}}>{c.stock||"—"}{c.parentId&&<span style={{fontSize:7,color:"#58a6ff",marginLeft:2}}>BTC</span>}{isLeapProtectedContract(c)&&<span title="Opened >365 DTE — never auto-closed by Skynet, held for long-term capital gains" style={{fontSize:7,color:"#c792ea",marginLeft:2,border:"1px solid #c792ea50",borderRadius:3,padding:"0 3px"}}>🔒 LTCG</span>}</td>;
                             case "contract":return <td key="contract" style={{padding:"5px 8px",fontFamily:"monospace",color:th("#8b949e","#5a5248"),fontSize:10,whiteSpace:"nowrap"}}>{fTitle(c)}</td>;
                             case "optType": return <td key="optType" style={{padding:"5px 8px"}}><Tag color={c.optType==="STO"?"green":c.optType==="BTC"?"amber":c.optType==="STC"?"blue":c.optType==="BTO"?"purple":"gray"}>{c.optType}</Tag></td>;
                             case "strike":  return <td key="strike" style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#b0bac6"}}>${c.strike}</td>;

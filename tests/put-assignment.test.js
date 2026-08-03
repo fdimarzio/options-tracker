@@ -11,7 +11,7 @@ import { describe, it, expect } from "vitest";
 import fs from "fs";
 import path from "path";
 import {
-  findAssignedPutForEquityBuy, isPutPastExpiryITM, buildAssignedPutClosePatch,
+  findAssignedPutForEquityBuy, isPutPastExpiryITM, buildAssignedOptionClosePatch,
   makeAssignmentEquityFP, addDaysToDateStr,
 } from "../api/auto-import.js";
 
@@ -178,10 +178,10 @@ describe("isPutPastExpiryITM — past-expiry ITM fallback", () => {
   });
 });
 
-describe("buildAssignedPutClosePatch", () => {
+describe("buildAssignedOptionClosePatch", () => {
   it("positive — assigned short put keeps its full premium: cost_to_close=0, profit=premium, profit_pct=1.0 (fraction)", () => {
     const put = makePut({ premium: 375.50 });
-    const patch = buildAssignedPutClosePatch(put, "2026-07-26");
+    const patch = buildAssignedOptionClosePatch(put, "2026-07-26");
     expect(patch.status).toBe("Closed");
     expect(patch.cost_to_close).toBe(0);
     expect(patch.profit).toBeCloseTo(375.50, 2);
@@ -195,20 +195,20 @@ describe("buildAssignedPutClosePatch", () => {
     // computeClosePnl is direction-aware; a short put's premium should always be
     // positive, but the formula itself doesn't special-case sign — worth pinning down.
     const put = makePut({ premium: -50, opt_type: "BTO" });
-    const patch = buildAssignedPutClosePatch(put, "2026-07-26");
+    const patch = buildAssignedOptionClosePatch(put, "2026-07-26");
     expect(patch.profit).toBeCloseTo(-50, 2);
     expect(patch.profit_pct).toBeCloseTo(-1.0, 4);
   });
 
   it("computes days_held from date_exec to close_date", () => {
     const put = makePut({ date_exec: "2026-07-01" });
-    const patch = buildAssignedPutClosePatch(put, "2026-07-26");
+    const patch = buildAssignedOptionClosePatch(put, "2026-07-26");
     expect(patch.days_held).toBe(25);
   });
 
   it("edge — days_held is null when date_exec is missing", () => {
     const put = makePut({ date_exec: null });
-    const patch = buildAssignedPutClosePatch(put, "2026-07-26");
+    const patch = buildAssignedOptionClosePatch(put, "2026-07-26");
     expect(patch.days_held).toBeNull();
   });
 });
@@ -273,7 +273,7 @@ describe("api/auto-import.js — wiring and P11 invariant", () => {
   });
 
   it("the assignment-linked stock_transactions write reuses the real parsed equity transaction (contract_id added, not a synthetic row)", () => {
-    expect(autoImportSrc).toContain("...equityTx,\n    contract_id: put.id,");
+    expect(autoImportSrc).toContain("...equityTx,\n    contract_id: option.id,");
   });
 
   it("dedup checks the composite fingerprint before attempting to match a put", () => {
@@ -285,7 +285,7 @@ describe("api/auto-import.js — wiring and P11 invariant", () => {
     expect(autoImportSrc).toContain("schwabEquityTxs.splice(idx, 1);");
   });
 
-  it("open puts for assignment detection are read fresh from the DB, not the possibly-stale in-memory openContracts", () => {
-    expect(autoImportSrc).toContain("contracts?opt_type=eq.STO&type=eq.Put&status=eq.Open&select=");
+  it("open puts and calls for assignment detection are read fresh from the DB in one query, not the possibly-stale in-memory openContracts", () => {
+    expect(autoImportSrc).toContain("contracts?opt_type=eq.STO&status=eq.Open&select=");
   });
 });
