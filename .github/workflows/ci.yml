@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run full Vitest suite
+        run: npm test
+
+      - name: List changed files vs base branch
+        run: |
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          git diff --name-only --diff-filter=ACMR "origin/${{ github.base_ref }}...HEAD" -- api/ | grep '\.js$' > changed_js.txt || true
+          git diff --name-only --diff-filter=ACMR "origin/${{ github.base_ref }}...HEAD" | grep '\.jsx$' > changed_jsx.txt || true
+          echo "Changed api/*.js files:"; cat changed_js.txt
+          echo "Changed *.jsx files:"; cat changed_jsx.txt
+
+      - name: node --check changed api/*.js (copied to .mjs for explicit ESM parsing)
+        run: |
+          if [ ! -s changed_js.txt ]; then echo "No api/*.js files changed — skipping"; exit 0; fi
+          status=0
+          while IFS= read -r f; do
+            [ -f "$f" ] || continue
+            tmp="$(mktemp --suffix=.mjs)"
+            cp "$f" "$tmp"
+            echo "node --check $f"
+            node --check "$tmp" || status=1
+            rm -f "$tmp"
+          done < changed_js.txt
+          exit $status
+
+      - name: esbuild changed .jsx files (syntax check, no bundling)
+        run: |
+          if [ ! -s changed_jsx.txt ]; then echo "No .jsx files changed — skipping"; exit 0; fi
+          status=0
+          while IFS= read -r f; do
+            [ -f "$f" ] || continue
+            echo "esbuild $f"
+            npx --yes esbuild "$f" --outfile=/tmp/esbuild-out.js || status=1
+          done < changed_jsx.txt
+          exit $status

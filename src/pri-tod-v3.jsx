@@ -4513,6 +4513,7 @@ export default function App() {
   const [planForm,setPlanForm]     = useState(null);
   const [pendingSignalId,setPendingSignalId] = useState(null); // signal_id from deep-link, triggers decision banner
   const [signalDecision,setSignalDecision]   = useState(null); // { decision, notes } once logged
+  const [appVersion,setAppVersion] = useState(null); // semver from public/version.json (see docs/RELEASING.md)
   // Auto-reload when a new version is deployed
   useEffect(() => {
     let currentVersion = null;
@@ -4520,6 +4521,7 @@ export default function App() {
       try {
         const res  = await fetch("/version.json?t=" + Date.now());
         const data = await res.json();
+        setAppVersion(data.version || null);
         if (!currentVersion) {
           currentVersion = data.v;           // first load — store current version
         } else if (data.v !== currentVersion) {
@@ -7029,6 +7031,7 @@ ${JSON.stringify(summary, null, 1)}`;
                 ].map(x=>(
                   <button key={x.label} onClick={x.fn} style={{display:"flex",alignItems:"center",gap:9,width:"100%",padding:"9px 13px",background:"transparent",border:"none",borderBottom:"1px solid #1c2128",color:th("#c9d1d9","#1a1a18"),fontSize:12,textAlign:"left"}}><span style={{fontSize:13}}>{x.icon}</span>{x.label}</button>
                 ))}
+                <div style={{padding:"7px 13px",fontSize:9,fontFamily:"monospace",color:"#555",textAlign:"center"}}>v{appVersion || "—"}</div>
               </div>
             )}
           </div>
