@@ -1666,10 +1666,10 @@ export default async function handler(req, res) {
       console.log(`[market-refresh] outside market hours (${etForGate.toTimeString().slice(0,5)} ET) — skipping all signal notifications`);
     }
 
-    // option_snapshots purging is handled by the standalone option-snapshot-purge
-    // GitHub Actions job (scripts/option-snapshot-purge.js) on its own daily schedule —
-    // see P6, 2026-07-19. Removed from here: the old 9:30-9:35am ET window gate silently
-    // stopped firing whenever a cron tick landed even slightly outside it (confirmed via
+    // option_snapshots purging is handled by pg_cron (job "purge_option_snapshots",
+    // calls purge_option_snapshots_batch directly every 15 min) — see P6, 2026-07-19.
+    // Removed from here: the old 9:30-9:35am ET window gate silently stopped firing
+    // whenever a cron tick landed even slightly outside it (confirmed via
     // ecosystem_heartbeat — last successful run was 2026-07-09, 10 days before this fix).
 
     // ── Hoist etNow and vix to top-level scope — used by all scanner blocks ──
@@ -3134,7 +3134,11 @@ export default async function handler(req, res) {
             `${APP_URL}/?tab=analytics`, "Check Analytics", 1
           );
         } else {
-          await fetch(`${SUPABASE_URL}/rest/v1/portfolio_snapshots`, {
+          // on_conflict=snapshot_date required — see iv_history note above; without it
+          // merge-duplicates targets the PK (id), not portfolio_snapshots_snapshot_date_key,
+          // and every retry for today's date (e.g. etradeLooksStale re-checks) 409s instead
+          // of updating the row.
+          await fetch(`${SUPABASE_URL}/rest/v1/portfolio_snapshots?on_conflict=snapshot_date`, {
             method: "POST",
             headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
             body: JSON.stringify({
