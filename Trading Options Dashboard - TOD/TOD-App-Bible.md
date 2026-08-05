@@ -1,3 +1,7 @@
+---
+tags: [reference, index, tod]
+---
+
 # TOD — Trading Options Dashboard
 ## App Bible: The Complete Reference
 
@@ -389,3 +393,7 @@ Claude can only READ from the mirror (`pam_tasks` in PRI). All writes must be gi
 | June 5-6, 2026 | DANI Run 4 (9M snapshots, 42 scenarios), Skynet live, market hours bug fixed after-hours orders, PAM sync built, 12 DB tables created |
 | May 2026 | Auto-STO/BTC wired, Schwab/ETrade integrations, SAGE scoring model rebuilt, Pushover notifications |
 | April 2026 | Initial app build, contract tracking, import tab, dashboard |
+
+## Related
+
+[[TOD-Overview]] [[START-HERE]] [[Database-Schema]] [[Tech-Stack]] [[Golden-Rules]] [[Skynet]]

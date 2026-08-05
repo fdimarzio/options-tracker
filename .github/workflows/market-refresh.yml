@@ -2,8 +2,6 @@ name: Market Refresh
 
 on:
   schedule:
-    # Market refresh: every 5 min Mon-Fri 9:30-16:00 ET (13:30-20:00 UTC)
-    - cron: '*/5 13-20 * * 1-5'
     # Token keeper: daily at 8am ET (12:00 UTC) — resets 7-day refresh token window
     - cron: '0 12 * * *'
     # ETrade pre-expiry renew: daily at 11:50pm ET (3:50 UTC) — before midnight expiry
@@ -15,35 +13,11 @@ on:
     - cron: '0 13 * * 0,6'
   workflow_dispatch:
 
+# Daytime market-refresh/chain-refresh/auto-import curls removed — cron-jobs.org
+# now owns those (Market Refresh, Chain Refresh, Auto Import jobs hitting the same
+# Vercel endpoints). This workflow keeps only what cron-jobs.org doesn't cover:
+# the Schwab refresh-token 7-day keepalive and weekend settlement reconciliation.
 jobs:
-  refresh:
-    if: github.event.schedule == '*/5 13-20 * * 1-5' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    timeout-minutes: 4
-
-    steps:
-      - name: Refresh quotes and chains
-        run: |
-          BASE_URL="https://options-tracker-five.vercel.app"
-          SECRET="${{ secrets.CRON_SECRET }}"
-
-          for i in 1 2 3 4; do
-            echo "--- Refresh $i of 4 ---"
-            curl -s -H "x-cron-secret: $SECRET" "$BASE_URL/api/market-refresh?force=1"
-            echo ""
-
-            if [ $i -eq 1 ]; then
-              echo "Fetching chains..."
-              curl -s -H "x-cron-secret: $SECRET" --max-time 15 "$BASE_URL/api/chain-refresh"
-              echo ""
-              echo "Checking for new transactions..."
-              curl -s -H "x-cron-secret: $SECRET" --max-time 20 "$BASE_URL/api/auto-import"
-              echo ""
-            fi
-
-            if [ $i -lt 4 ]; then sleep 60; fi
-          done
-
   token-keeper:
     if: github.event.schedule == '0 12 * * *' || github.event.schedule == '50 3 * * *' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -72,6 +46,9 @@ jobs:
           echo "Token refreshed successfully."
 
       - name: Renew ETrade access token
+        # cron-jobs.org's Extend Etrade Token job already covers this. A nightly-expired
+        # ETrade token here is expected/redundant, not fatal — must not fail the job.
+        continue-on-error: true
         run: |
           echo "Renewing ETrade token..."
           RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \

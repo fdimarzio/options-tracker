@@ -67,6 +67,35 @@ function buildAuthHeader(method, url, oauthToken, oauthTokenSecret, extraParams 
     .join(", ");
 }
 
+// ── Classify WHY an ETrade call failed ─────────────────────────────────────────
+// ETrade's OAuth1.0a errors surface via the WWW-Authenticate header's oauth_problem
+// param and/or an XML error body — never a clean JSON field. Callers (market-refresh's
+// token-keeper, dashboards, alerts) need to distinguish "re-auth required" (token_expired,
+// token_rejected) from "consumer key/signature broken" (signature_invalid, consumer_key_*)
+// since the fix is completely different (OAuth flow vs 1-800-387-2331 consumer-key reset).
+const OAUTH_PROBLEM_CODES = [
+  "token_expired", "token_rejected", "token_used", "token_revoked",
+  "signature_invalid", "signature_method_rejected",
+  "consumer_key_unknown", "consumer_key_rejected",
+  "nonce_used", "timestamp_refused", "version_rejected", "parameter_absent",
+];
+
+function classifyEtradeError(res, bodyText) {
+  const wwwAuth = res?.headers?.get?.("www-authenticate") || "";
+  const problemMatch = /oauth_problem="?([\w_]+)"?/i.exec(wwwAuth) || /oauth_problem="?([\w_]+)"?/i.exec(bodyText || "");
+  if (problemMatch && OAUTH_PROBLEM_CODES.includes(problemMatch[1])) return problemMatch[1];
+
+  const text = (bodyText || "").toLowerCase();
+  if (text.includes("signature_invalid") || text.includes("invalid signature")) return "signature_invalid";
+  if (text.includes("token_expired") || text.includes("token has expired"))     return "token_expired";
+  if (text.includes("consumer_key"))                                            return "consumer_key_invalid";
+
+  // No explicit problem code — 401/XML body from ETrade almost always means the
+  // access token is no good anymore (expired/revoked), not a signature bug.
+  if (res?.status === 401 || (bodyText || "").trim().startsWith("<")) return "token_expired";
+  return "unknown";
+}
+
 // ── Signed ETrade GET ─────────────────────────────────────────────────────────
 
 async function etradeGet(path, queryParams = {}) {
@@ -75,7 +104,7 @@ async function etradeGet(path, queryParams = {}) {
   });
   const t = (await r.json())?.[0]?.cols;
   if (!t?.accessToken || !t?.accessTokenSecret) {
-    throw new Error("No ETrade tokens — visit /api/etrade?action=auth to authorize");
+    throw Object.assign(new Error("No ETrade tokens — visit /api/etrade?action=auth to authorize"), { reason: "no_token" });
   }
 
   const urlBase    = `${ETRADE_BASE}${path}`;
@@ -87,16 +116,18 @@ async function etradeGet(path, queryParams = {}) {
   const text = await res.text();
 
   if (text.trim().startsWith("<")) {
-    throw new Error(`ETrade returned XML (status ${res.status}) — token may have expired. Visit /api/etrade?action=auth. Preview: ${text.slice(0, 200)}`);
+    const reason = classifyEtradeError(res, text);
+    throw Object.assign(new Error(`ETrade returned XML (status ${res.status}, reason: ${reason}). Visit /api/etrade?action=auth. Preview: ${text.slice(0, 200)}`), { reason });
   }
 
   let data;
   try { data = JSON.parse(text); }
-  catch (e) { throw new Error(`Non-JSON response (status ${res.status}): ${text.slice(0, 200)}`); }
+  catch (e) { throw Object.assign(new Error(`Non-JSON response (status ${res.status}): ${text.slice(0, 200)}`), { reason: "unknown" }); }
 
   if (!res.ok) {
-    const msg = data?.Error?.message || data?.message || JSON.stringify(data);
-    throw new Error(`ETrade API ${res.status}: ${msg}`);
+    const msg    = data?.Error?.message || data?.message || JSON.stringify(data);
+    const reason = classifyEtradeError(res, msg);
+    throw Object.assign(new Error(`ETrade API ${res.status}: ${msg}`), { reason });
   }
   return data;
 }
@@ -332,7 +363,7 @@ export default async function handler(req, res) {
         headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` },
       });
       const t = (await tokenRes.json())?.[0]?.cols;
-      if (!t?.accessToken) return res.status(500).json({ error: "No ETrade token found — re-authorize first at /api/etrade?action=auth" });
+      if (!t?.accessToken) return res.status(500).json({ error: "No ETrade token found — re-authorize first at /api/etrade?action=auth", reason: "no_token" });
 
       // Check if token was saved today (ETrade tokens expire at midnight ET)
       const savedAt   = new Date(t.savedAt || 0);
@@ -345,6 +376,7 @@ export default async function handler(req, res) {
         await notifyReauth("ETrade token expired (previous day) — manual re-auth required");
         return res.status(401).json({
           error: "ETrade token expired — re-authorize at /api/etrade?action=auth",
+          reason: "token_expired",
           reAuthUrl: `${APP_URL}/api/etrade?action=auth`,
           savedAt: t.savedAt,
         });
@@ -355,7 +387,10 @@ export default async function handler(req, res) {
       const authHeader  = buildAuthHeader("GET", renewUrl, t.accessToken, t.accessTokenSecret);
       const renewRes    = await fetch(renewUrl, { headers: { Authorization: authHeader, Accept: "application/x-www-form-urlencoded" } });
       const renewText   = await renewRes.text();
-      if (!renewRes.ok) throw new Error(`ETrade renew failed (${renewRes.status}): ${renewText}`);
+      if (!renewRes.ok) {
+        const reason = classifyEtradeError(renewRes, renewText);
+        throw Object.assign(new Error(`ETrade renew failed (${renewRes.status}, reason: ${reason}): ${renewText}`), { reason });
+      }
       // ETrade returns "Access Token has been renewed" on success
       const renewed  = { ...t, renewedAt: new Date().toISOString() };
 
@@ -792,6 +827,10 @@ export default async function handler(req, res) {
 
   } catch (err) {
     console.error("[etrade]", err.message);
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: err.message, reason: err.reason || "unknown" });
   }
 }
+
+// Exported so tests import the real classification logic directly rather than a
+// hand-mirrored copy — same reasoning as auto-import.js's assignment-detection exports.
+export { classifyEtradeError };

@@ -56,16 +56,16 @@ describe("ecosystem_heartbeat upsert is idempotent on (agent_name)", () => {
   });
 });
 
-describe("Market Refresh GitHub Actions — single workflow, no duplicate race", () => {
+describe("Market Refresh GitHub Actions — scheduler consolidation (cron-jobs.org owns daytime refresh)", () => {
   const workflowsDir = path.resolve(".github/workflows");
   const files = fs.readdirSync(workflowsDir).filter(f => f.endsWith(".yml") || f.endsWith(".yaml"));
 
-  it("positive — exactly one workflow triggers /api/market-refresh on the */5 cron", () => {
+  it("positive — no GitHub Actions workflow curls /api/market-refresh anymore", () => {
     const matches = files.filter(f => {
       const content = fs.readFileSync(path.join(workflowsDir, f), "utf8");
-      return /cron:\s*['"]\*\/5 13-20 \* \* 1-5['"]/.test(content) && content.includes("/api/market-refresh");
+      return content.includes("/api/market-refresh");
     });
-    expect(matches).toEqual(["market-refresh.yml"]);
+    expect(matches).toEqual([]);
   });
 
   it("negative — the old duplicate market-refresh-workflow.yml no longer exists", () => {
