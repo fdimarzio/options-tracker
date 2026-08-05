@@ -129,9 +129,9 @@ describe("no-op when there's nothing to reconcile", () => {
 });
 
 describe(".github/workflows/market-refresh.yml — weekend runs", () => {
-  it("adds a Sat/Sun morning schedule without removing the weekday schedule", () => {
-    expect(workflowSrc).toMatch(/cron:\s*['"]\*\/5 13-20 \* \* 1-5['"]/); // weekday schedule intact
-    expect(workflowSrc).toMatch(/cron:\s*['"]0 13 \* \* 0,6['"]/);       // new weekend schedule
+  it("keeps the weekend schedule; the weekday */5 market-refresh schedule is gone (moved to cron-jobs.org)", () => {
+    expect(workflowSrc).not.toMatch(/cron:\s*['"]\*\/5 13-20 \* \* 1-5['"]/); // weekday schedule removed
+    expect(workflowSrc).toMatch(/cron:\s*['"]0 13 \* \* 0,6['"]/);           // weekend schedule intact
   });
 
   it("the weekend job calls auto-import for reconciliation", () => {
