@@ -1128,15 +1128,20 @@ describe("Claude API — response parsing", () => {
 });
 
 describe("Auto-STO scanner", () => {
-  it("only processes whitelisted tickers (autoSto=true)", () => {
+  // Whitelist is now derived from holdings (>=100 shares), not a manual
+  // per-ticker flag — see api/_lib/tickerUniverse.js. autoSto===false is still
+  // honored as an explicit opt-out kill switch. Covered by
+  // tests/ticker-universe.test.js in detail; this just confirms the shape.
+  it("processes tickers with >=100 shares, minus explicit opt-outs (autoSto=false)", () => {
     const stocksData = {
-      AAPL: { autoSto: true,  sharesSchwab: 200 },
-      NVDA: { autoSto: false, sharesSchwab: 100 },
-      AMZN: { autoSto: true,  sharesSchwab: 700, sharesEtrade: 300 },
-      JPM:  { autoSto: null,  sharesSchwab: 100 },
+      AAPL: { sharesByAcct: { "Schwab 3866": 200 } },
+      NVDA: { autoSto: false, sharesByAcct: { "Schwab 3866": 100 } }, // explicit opt-out
+      AMZN: { sharesByAcct: { "Schwab 3866": 700, "ETrade 6917": 300 } },
+      JPM:  { sharesByAcct: { "Schwab 3866": 50 } }, // under 100 shares
     };
     const whitelist = Object.entries(stocksData)
-      .filter(([, sd]) => sd?.autoSto === true)
+      .filter(([, sd]) => Object.values(sd.sharesByAcct || {}).reduce((a, b) => a + b, 0) >= 100)
+      .filter(([, sd]) => sd?.autoSto !== false)
       .map(([sym]) => sym.toUpperCase());
     expect(whitelist).toContain("AAPL");
     expect(whitelist).toContain("AMZN");

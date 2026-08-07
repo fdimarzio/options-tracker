@@ -6,6 +6,7 @@ import { computeClosePnl } from "./_lib/pnl.js";
 import { computeOrigDte, shouldBlockForLeapProtection } from "./_lib/leapGuard.js";
 import { isExpiryBlockedByEarnings } from "./_lib/earningsGuard.js";
 import { resolveCooldownMinutes, isWithinCooldown, buildNotificationDedupKey, makeNotificationLogLookupKey } from "./_lib/notificationCooldown.js";
+import { deriveTickerUniverse } from "./_lib/tickerUniverse.js";
 
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
 const SUPABASE_KEY = process.env.VITE_SUPABASE_ANON_KEY;
@@ -2157,13 +2158,16 @@ export default async function handler(req, res) {
       if (!stoRuleAuto) {
         console.log("[auto-sto] No enabled STO rule found");
       } else {
-        // Build whitelist from stocksData (autoSto=true tickers)
-        const autoStoWhitelist = Object.entries(updatedSD)
-          .filter(([, sd]) => sd?.autoSto === true)
-          .map(([sym]) => sym.toUpperCase());
+        // Build whitelist from the same derived universe chain-refresh.js uses,
+        // so chain coverage and auto-STO scanning never drift out of sync — any
+        // ticker with >=100 shares across accounts is eligible unless explicitly
+        // opted out (autoSto === false) in the Stocks tab.
+        const { autoStoEligible } = deriveTickerUniverse({ stocksData: updatedSD, contracts, watchlistTickers });
+        const autoStoWhitelist = autoStoEligible;
+        console.log(`[auto-sto] eligible tickers (>=100sh, not opted out): ${autoStoWhitelist.join(", ") || "none"}`);
 
         if (!autoStoWhitelist.length) {
-          console.log("[auto-sto] No tickers whitelisted — enable autoSto in Stocks tab");
+          console.log("[auto-sto] No tickers eligible — need >=100 shares in stocks_data and autoSto !== false");
         } else {
           const isDryRun   = stoRuleAuto.dry_run !== false;
           const minChange  = +(stoRuleAuto.min_change_pct ?? 0.5);
