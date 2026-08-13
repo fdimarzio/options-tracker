@@ -2,6 +2,8 @@
 // Fetches option chains for all open positions and saves to Supabase
 // Uses parallel fetches to stay well under Vercel's 10s timeout
 
+import { deriveTickerUniverse } from "./_lib/tickerUniverse.js";
+
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
 const SUPABASE_KEY = process.env.VITE_SUPABASE_ANON_KEY;
 const SUPABASE_SVC_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_ANON_KEY; // service key for token rows
@@ -62,20 +64,29 @@ export default async function handler(req, res) {
 
     // Fetch open contracts
     const cRes = await fetch(`${SUPABASE_URL}/rest/v1/contracts?select=stock,expires&status=eq.Open`, {
-      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+      headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` },
     });
     const contracts = await cRes.json();
 
-    // Fetch autoSto tickers from stocks_data
+    // Fetch holdings (shares/sharesByAcct + autoSto) from stocks_data
     const sdRes = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.stocks_data`, {
-      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+      headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` },
     });
     const sdBlob = (await sdRes.json())?.[0]?.cols || {};
-    const autoStoTickers = Object.entries(sdBlob)
-      .filter(([sym, v]) => sym !== "__cash__" && v?.autoSto === true)
-      .map(([sym]) => sym.toUpperCase());
 
-    console.log(`[chain-refresh] autoSto tickers: ${autoStoTickers.join(", ") || "none"}`);
+    // Fetch watchlist tickers (chain coverage for suggestions only)
+    const wlRes = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.watchlist`, {
+      headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` },
+    });
+    const watchlistTickers = (await wlRes.json())?.[0]?.cols?.tickers || [];
+
+    const { chainUniverse, coveredCallEligible, openPositionTickers, watchlist } =
+      deriveTickerUniverse({ stocksData: sdBlob, contracts, watchlistTickers });
+
+    console.log(`[chain-refresh] covered-call eligible (>=100sh): ${coveredCallEligible.join(", ") || "none"}`);
+    console.log(`[chain-refresh] open position tickers: ${openPositionTickers.join(", ") || "none"}`);
+    console.log(`[chain-refresh] watchlist tickers: ${watchlist.join(", ") || "none"}`);
+    console.log(`[chain-refresh] resolved chain universe (${chainUniverse.length}): ${chainUniverse.join(", ") || "none"}`);
 
     // Generate all Mon/Wed/Fri expirations for the next 16 days
     // High-volume tickers (AMZN, NVDA, AAPL etc) expire MWF; others expire Fri only
@@ -98,24 +109,29 @@ export default async function handler(req, res) {
     const upcomingExpiries = nextExpiryDates(16);
     console.log(`[chain-refresh] expiry dates to fetch: ${upcomingExpiries.join(", ")}`);
 
-    // Deduplicate ticker|expiry pairs — open contracts + autoSto tickers x upcoming expiries
+    // Deduplicate ticker|expiry pairs:
+    //   (a) each open, non-expired contract's own exact expiry (covers LEAPS and
+    //       other non-MWF dates for positions already being managed)
+    //   (b) the full resolved chain universe x the upcoming MWF expiry ladder
+    const today = new Date().toISOString().slice(0, 10);
     const seen = new Set();
     const pairs = [];
 
     for (const c of (Array.isArray(contracts) ? contracts : [])) {
-      if (!c.stock || !c.expires) continue;
-      const key = `${c.stock.toUpperCase()}|${c.expires}`;
-      if (!seen.has(key)) { seen.add(key); pairs.push({ ticker: c.stock.toUpperCase(), expiry: c.expires, key }); }
+      if (!c.stock || !c.expires || c.expires < today) continue;
+      const ticker = c.stock.toUpperCase();
+      const key = `${ticker}|${c.expires}`;
+      if (!seen.has(key)) { seen.add(key); pairs.push({ ticker, expiry: c.expires, key }); }
     }
 
-    for (const ticker of autoStoTickers) {
+    for (const ticker of chainUniverse) {
       for (const expiry of upcomingExpiries) {
         const key = `${ticker}|${expiry}`;
         if (!seen.has(key)) { seen.add(key); pairs.push({ ticker, expiry, key }); }
       }
     }
 
-    if (!pairs.length) return res.status(200).json({ ok: true, chains: 0, message: "No open contracts or autoSto tickers" });
+    if (!pairs.length) return res.status(200).json({ ok: true, chains: 0, message: "No open contracts or holdings in the chain universe" });
 
     // Fetch all chains IN PARALLEL — this is the key fix vs sequential awaits
     const results = await Promise.allSettled(
@@ -137,7 +153,7 @@ export default async function handler(req, res) {
     const lastRefresh = new Date().toISOString();
     await fetch(`${SUPABASE_URL}/rest/v1/col_prefs`, {
       method: "POST",
-      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
+      headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
       body: JSON.stringify({ id: "last_chain_refresh", cols: { chains: chainData, lastRefresh }, updated_at: lastRefresh }),
     });
 

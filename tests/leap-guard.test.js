@@ -49,8 +49,14 @@ describe("shouldBlockForLeapProtection", () => {
     expect(result.blocked).toBe(false);
   });
 
-  it("boundary — exactly 365 DTE is NOT a LEAP (threshold is strictly > 365)", () => {
+  it("boundary — exactly 365 DTE IS a LEAP (threshold is >= 365)", () => {
     const result = shouldBlockForLeapProtection({ origDte: 365, ruleEnabled: true, dryRun: false });
+    expect(result.isLeap).toBe(true);
+    expect(result.blocked).toBe(true);
+  });
+
+  it("boundary — 364 DTE is NOT a LEAP", () => {
+    const result = shouldBlockForLeapProtection({ origDte: 364, ruleEnabled: true, dryRun: false });
     expect(result.isLeap).toBe(false);
     expect(result.blocked).toBe(false);
   });
