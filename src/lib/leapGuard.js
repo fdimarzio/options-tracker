@@ -14,5 +14,5 @@ export function computeOrigDte(entryDte, expires, dateExec) {
 }
 
 export function isLeapOrigDte(origDte) {
-  return origDte != null && origDte > LEAP_ORIG_DTE_THRESHOLD;
+  return origDte != null && origDte >= LEAP_ORIG_DTE_THRESHOLD;
 }

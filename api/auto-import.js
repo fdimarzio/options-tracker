@@ -885,6 +885,8 @@ async function commitTx(parsed, matchId, openContracts, stocksData, committedClo
             : ["STO","STC"].includes(parsed.opt_type) ?  Math.abs(parsed.premium || 0)
             : parsed.premium,
     date_exec: parsed.date_exec,
+    entry_dte: parsed.entry_dte != null ? +parsed.entry_dte
+             : Math.round((new Date(parsed.expires) - new Date(parsed.date_exec)) / 86400000),
     settlement_date: parsed.settlement_date || null,
     account:  parsed.account,
     status:   ["BTC","STC","ASSIGNED"].includes(parsed.opt_type) ? "Closed" : "Open",

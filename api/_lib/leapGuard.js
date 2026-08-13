@@ -1,6 +1,6 @@
 // api/_lib/leapGuard.js
 // LEAPS long-term-cap-gains protection for the Skynet auto-BTC scanner.
-// A contract opened with > 365 DTE stays protected from routine profit-threshold
+// A contract opened with >= 365 DTE stays protected from routine profit-threshold
 // auto-close for its entire life, even once its remaining DTE has dropped well
 // below 365 — the ORIGINAL DTE at open is what matters, not the current one.
 const LEAP_ORIG_DTE_THRESHOLD = 365;
@@ -16,6 +16,6 @@ export function computeOrigDte(entryDte, expires, dateExec) {
 // enabled=true, dry_run=false when the row exists; both default true/protecting
 // if the row doesn't exist yet, since this guard fails safe, not open).
 export function shouldBlockForLeapProtection({ origDte, ruleEnabled = true, dryRun = false }) {
-  const isLeap = origDte > LEAP_ORIG_DTE_THRESHOLD;
+  const isLeap = origDte >= LEAP_ORIG_DTE_THRESHOLD;
   return { isLeap, blocked: isLeap && ruleEnabled && !dryRun };
 }

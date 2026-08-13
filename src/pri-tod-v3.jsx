@@ -94,7 +94,7 @@ function toDB(c) {
 
 // Display-only: does this contract qualify for the protect_leaps_ltcg guard (see
 // signal_rules, api/market-refresh.js's btc_auto scanner)? Mirrors the same
-// >365-original-DTE threshold — never used to make a trading decision here, just
+// >=365-original-DTE threshold — never used to make a trading decision here, just
 // to show the "held for LTCG" badge on qualifying open contracts.
 function isLeapProtectedContract(c) {
   if (!c || c.status !== "Open") return false;
@@ -988,7 +988,7 @@ function SignalRulesModal({ supabase, onClose, inline = false }) {
                 {/* Plain-language description for rules with no dedicated editable fields */}
                 {rule.rule_type === "protect_leaps_ltcg" && (
                   <div style={{marginBottom:12,padding:"6px 10px",background:"#c792ea08",border:"1px solid #c792ea20",borderRadius:6,fontFamily:"monospace",fontSize:10,color:th("#8b949e","#5a5248"),lineHeight:1.5}}>
-                    🔒 LEAPs (opened &gt;365 DTE) are never auto-closed by Skynet's BTC scanners — held for long-term capital gains, even once the remaining DTE has dropped well below 365.
+                    🔒 LEAPs (opened 365+ DTE) are never auto-closed by Skynet's BTC scanners — held for long-term capital gains, even once the remaining DTE has dropped well below 365.
                   </div>
                 )}
 

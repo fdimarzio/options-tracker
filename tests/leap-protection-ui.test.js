@@ -2,7 +2,7 @@
 // Surfaces the protect_leaps_ltcg signal_rule in the UI (Skynet rules tab +
 // contracts view badge) — display only, no trading-logic change. computeOrigDte/
 // isLeapOrigDte are imported directly from src/lib/leapGuard.js (the client mirror
-// of api/_lib/leapGuard.js, same >365-DTE threshold the btc_auto scanner enforces
+// of api/_lib/leapGuard.js, same >=365-DTE threshold the btc_auto scanner enforces
 // server-side); the thin "is this contract protected" wrapper is mirrored locally,
 // matching this repo's convention for logic embedded in pri-tod-v3.jsx (see
 // tests/utils.test.js's "Expiry Today scenario classification (UI)" block).
@@ -38,9 +38,10 @@ describe("computeOrigDte (client)", () => {
 describe("isLeapOrigDte", () => {
   it("positive — 400 DTE is a LEAP", () => expect(isLeapOrigDte(400)).toBe(true));
   it("negative — 7 DTE (a normal weekly) is not a LEAP", () => expect(isLeapOrigDte(7)).toBe(false));
-  it("boundary — exactly 365 is NOT a LEAP (threshold is strictly > 365, matches the backend guard)", () => {
-    expect(isLeapOrigDte(365)).toBe(false);
+  it("boundary — exactly 365 IS a LEAP (threshold is >= 365, matches the backend guard)", () => {
+    expect(isLeapOrigDte(365)).toBe(true);
   });
+  it("boundary — 364 is NOT a LEAP", () => expect(isLeapOrigDte(364)).toBe(false));
   it("boundary — 366 is a LEAP", () => expect(isLeapOrigDte(366)).toBe(true));
   it("edge — null origDte is never a LEAP", () => expect(isLeapOrigDte(null)).toBe(false));
 });
@@ -79,7 +80,7 @@ describe("src/pri-tod-v3.jsx — Skynet rules tab wiring", () => {
   });
 
   it("shows the plain-language description for the rule", () => {
-    expect(appSrc).toContain("LEAPs (opened &gt;365 DTE) are never auto-closed by Skynet's BTC scanners");
+    expect(appSrc).toContain("LEAPs (opened 365+ DTE) are never auto-closed by Skynet's BTC scanners");
   });
 
   it("the contracts table shows a 🔒 LTCG badge driven by isLeapProtectedContract", () => {
