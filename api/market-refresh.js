@@ -2876,11 +2876,66 @@ export default async function handler(req, res) {
             });
             if (blocked) {
               console.log(`[btc_auto] LEAP protection — ${ticker} $${contract.strike} opened at ${origDte} DTE, held for LTCG, not auto-closed (profit ${profitPct.toFixed(1)}% ≥ ${contractMinProfit}%)`);
-              await sendPushover(
-                `🔒 LEAP ${ticker} hit ${Math.round(contractMinProfit)}% — held for LTCG, not closed`,
-                `${ticker} $${contract.strike} ${contract.type} ${expires} opened at ${origDte} DTE — auto-BTC skipped to preserve long-term cap gains. Close manually if desired.`,
-                `${APP_URL}/?tab=contracts`, "View in App", 0
-              ).catch(()=>{});
+
+              // Dedup — was firing on every 5-min scan for the same held LEAP (WDC
+              // $870 Call 2027-06-17 alerting every cycle, PAM e7b6a4bc). Namespaced
+              // ("leap_protect|") key into the same notifications_sent col_prefs blob
+              // (sentData) the auto-STO scanner uses for its once/day dedup, so this
+              // can't collide with the CLOSE_NOW/ITM_WARNING dedup, which keys
+              // sentData.contracts on the bare contract id (see ~line 1749). Resets
+              // daily with sentData itself, so at most one alert/day per LEAP.
+              const leapAlertKey        = `leap_protect|${contract.id}`;
+              const alreadyAlertedToday = sentData.contracts[leapAlertKey]?.sentAt?.slice(0, 10) === today;
+
+              if (alreadyAlertedToday) {
+                console.log(`[btc_auto] LEAP protection alert for ${ticker} $${contract.strike} already sent today — suppressing`);
+              } else {
+                const sigId = await logSignal({
+                  signal_type:          "leap_protection",
+                  symbol:               ticker,
+                  account:              contract.account,
+                  contract_id:          contract.id,
+                  stock_price:          quotes[ticker]?.lastPrice,
+                  change_pct:           quotes[ticker]?.changePct != null ? quotes[ticker].changePct * 100 : null,
+                  strike:               contract.strike,
+                  expires:              contract.expires,
+                  dte:                  Math.ceil((new Date(expires) - new Date()) / 86400000),
+                  profit_at_signal:     openedVal - currentVal,
+                  profit_pct_at_signal: profitPct,
+                  rule_id:              leapProtectRule?.id ?? null,
+                  pushed:               true,
+                });
+                await writeFactorValues(sigId, {
+                  change_pct:           quotes[ticker]?.changePct != null ? quotes[ticker].changePct * 100 : null,
+                  dte:                  Math.ceil((new Date(expires) - new Date()) / 86400000),
+                  profit_pct_at_signal: profitPct,
+                  time_of_day:          etNowForBtc.getHours() * 60 + etNowForBtc.getMinutes(),
+                }, lastRefresh);
+                await sendPushover(
+                  `🔒 LEAP ${ticker} hit ${Math.round(contractMinProfit)}% — held for LTCG, not closed`,
+                  `${ticker} $${contract.strike} ${contract.type} ${expires} opened at ${origDte} DTE — auto-BTC skipped to preserve long-term cap gains. Close manually if desired.`,
+                  `${APP_URL}/?tab=contracts`, "View in App", 0
+                ).catch(()=>{});
+                sentData.contracts[leapAlertKey] = { sentAt: lastRefresh, symbol: ticker, account: contract.account };
+                // Persist immediately — the btc_auto scanner runs after both existing
+                // "Save notification state" writes (~1861, ~2141), so without this the
+                // mutation above never reaches Supabase and next cycle re-fetches a
+                // stale blob that never saw today's alert, defeating the dedup entirely.
+                await fetch(`${SUPABASE_URL}/rest/v1/col_prefs`, {
+                  method: "POST",
+                  headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
+                  body: JSON.stringify({ id: "notifications_sent", cols: sentData, updated_at: lastRefresh }),
+                }).catch(e => console.warn("[btc_auto] notifications_sent save failed:", e.message));
+
+                // Also register under the shared notification_cooldown infra (rule
+                // 10, notification_log table) alongside close_now/itm_warning/
+                // sto_suggestion, so leap_protection shows up in that same coverage
+                // for observability/tooling — the once/day gate above is what
+                // actually stops the spam; this is bookkeeping, not a second gate.
+                const leapDedupKey = buildNotificationDedupKey({ contractId: contract.id });
+                await upsertNotificationLog(leapDedupKey, "leap_protection", lastRefresh).catch(()=>{});
+                notificationLogByKey[makeNotificationLogLookupKey(leapDedupKey, "leap_protection")] = lastRefresh;
+              }
               continue;
             }
             if (isLeap) {
