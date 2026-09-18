@@ -487,10 +487,24 @@ export default async function handler(req, res) {
 
           // Prefer full NAV from RealTimeValues; fall back through several observed field names —
           // do not assume a single field name is stable across account types/API versions.
-          const value = +(rtv.totalAccountValue || rtv.netMv || computed.totalAccountValue || computed.accountBalance || computed.accountValue || 0);
+          let value = +(rtv.totalAccountValue || rtv.netMv || computed.totalAccountValue || computed.accountBalance || computed.accountValue || 0);
           const cash  = +(computed.cashBalance || computed.netCash || computed.cashAvailableForInvestment || 0);
 
-          if (!(value > 0)) throw new Error(`balance response had no usable NAV field (Computed keys: ${Object.keys(computed).join(",")})`);
+          if (!(value > 0)) {
+            // No usable NAV field in the balance response — fall back to positions + cash,
+            // same as action=positions does, instead of throwing and forcing a carry-forward.
+            console.warn(`[etrade balance] ${accountName} balance response had no usable NAV field (Computed keys: ${Object.keys(computed).join(",")}) — falling back to positions+cash`);
+            try {
+              const port = await etradeGet(`/v1/accounts/${acct.accountIdKey}/portfolio`);
+              const positions = port?.PortfolioResponse?.AccountPortfolio?.[0]?.Position || [];
+              const positionsValue = positions.reduce((sum, p) => sum + (+(p.marketValue || 0)), 0);
+              value = positionsValue + cash;
+              console.log(`[etrade balance] ${accountName} NAV (fallback positions sum): $${value} (positions:${positionsValue} cash:${cash})`);
+            } catch (e2) {
+              console.warn(`[etrade balance] ${accountName} positions fallback also failed:`, e2.message);
+            }
+            if (!(value > 0)) throw new Error(`balance response had no usable NAV field, and positions fallback also failed (Computed keys: ${Object.keys(computed).join(",")})`);
+          }
 
           results.push({ accountId: acct.accountId, accountIdKey: acct.accountIdKey, account: accountName, ok: true, value, cash });
         } catch (e) {
