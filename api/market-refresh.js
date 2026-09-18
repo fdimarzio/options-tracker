@@ -3162,15 +3162,19 @@ export default async function handler(req, res) {
         let totalValue = (schwabValue || 0) + (etradeValue || 0);
 
         // Get prior snapshot for daily change
-        const yest = await fetch(`${SUPABASE_URL}/rest/v1/portfolio_snapshots?order=snapshot_date.desc&limit=1&select=total_value`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }).then(r => r.json());
+        const yest = await fetch(`${SUPABASE_URL}/rest/v1/portfolio_snapshots?order=snapshot_date.desc&limit=1&select=total_value,etrade_stale`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }).then(r => r.json());
         const prevValue = yest?.[0]?.total_value ? +yest[0].total_value : null;
+        const prevEtradeStale = !!yest?.[0]?.etrade_stale;
         let dailyChange  = prevValue ? Math.round((totalValue - prevValue) * 100) / 100 : null;
         let dailyChangePct = prevValue ? Math.round((dailyChange / prevValue) * 10000) / 100 : null;
 
         // Outlier guard — a fresh (non-carried-forward) ETrade pull implying a huge swing is
         // more likely a bad pull than a real move. Don't persist it silently: carry forward
         // ETrade instead and flag stale, so one bad pull can't poison the graph again.
-        if (!etradeStale && prevValue && Math.abs(dailyChangePct) > SNAPSHOT_OUTLIER_PCT) {
+        // Skip the guard when the prior snapshot's ETrade side was itself stale/carried-forward —
+        // otherwise a correct fresh pull looks like an outlier vs. a stale baseline and gets
+        // carried forward again, a self-perpetuating lock (see 65-day freeze incident, 2026-09).
+        if (!etradeStale && !prevEtradeStale && prevValue && Math.abs(dailyChangePct) > SNAPSHOT_OUTLIER_PCT) {
           console.warn(`[snapshot] outlier guard tripped: |Δ%|=${Math.abs(dailyChangePct)} > ${SNAPSHOT_OUTLIER_PCT}% — carrying forward ETrade value instead of writing fresh pull`);
           const cf = await carryForward("etrade_value", "etrade_cash");
           etradeValue = cf.value; etradeCash = cf.cash; etradeStale = true;
