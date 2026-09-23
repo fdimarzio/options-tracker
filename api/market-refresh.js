@@ -3134,12 +3134,15 @@ export default async function handler(req, res) {
         // ETrade account value — per-account balance fetch with explicit ok/error per account.
         // Any account failure means the combined total is untrustworthy (missing part of the
         // picture), so we carry forward the whole ETrade side rather than write a partial sum.
+        // `accounts` only contains funded (allowlisted) accounts — stray/unfunded ones come back
+        // in `ignored` and never count as a failure.
         let etradeValue = null, etradeCash = null, etradeStale = false;
         try {
           const etRes  = await fetch(`${APP_URL}/api/etrade?action=balance&secret=${process.env.CRON_SECRET}`);
           const etData = etRes.ok ? await etRes.json() : null;
           const accts  = Array.isArray(etData?.accounts) ? etData.accounts : [];
           const failed = accts.filter(a => !a.ok);
+          if (etData?.ignored?.length) console.log(`[snapshot] ETrade ignoring non-funded account(s): ${etData.ignored.join(", ")}`);
           if (!etRes.ok) throw new Error(`balance API returned HTTP ${etRes.status}`);
           if (!accts.length) throw new Error("balance API returned no accounts");
           if (failed.length) throw new Error(`account(s) failed: ${failed.map(a => `${a.account}: ${a.error}`).join("; ")}`);
