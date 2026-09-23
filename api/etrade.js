@@ -474,9 +474,18 @@ export default async function handler(req, res) {
       const acctData = await etradeGet("/v1/accounts/list");
       const accounts = acctData?.AccountListResponse?.Accounts?.Account || [];
       const results  = [];
+      const ignored  = [];
 
       for (const acct of accounts) {
         const accountName = ACCOUNT_NAMES[String(acct.accountId)] || `ETrade ${String(acct.accountId).slice(-4)}`;
+        // Only funded accounts (ACCOUNT_NAMES allowlist) count toward NAV. A stray/unfunded
+        // account ETrade lists (e.g. 5707) is skipped entirely — not fetched, not a failure —
+        // so it can't force the snapshot to carry forward the whole ETrade side.
+        if (!ACCOUNT_NAMES[String(acct.accountId)]) {
+          console.log(`[etrade balance] ${accountName} not in funded-account allowlist — ignoring`);
+          ignored.push(accountName);
+          continue;
+        }
         try {
           const bal      = await etradeGet(`/v1/accounts/${acct.accountIdKey}/balance`, { instType: "BROKERAGE", realTimeNAV: "true" });
           const computed = bal?.BalanceResponse?.Computed ?? {};
@@ -494,16 +503,24 @@ export default async function handler(req, res) {
             // No usable NAV field in the balance response — fall back to positions + cash,
             // same as action=positions does, instead of throwing and forcing a carry-forward.
             console.warn(`[etrade balance] ${accountName} balance response had no usable NAV field (Computed keys: ${Object.keys(computed).join(",")}) — falling back to positions+cash`);
+            let positionsOk = false;
             try {
               const port = await etradeGet(`/v1/accounts/${acct.accountIdKey}/portfolio`);
               const positions = port?.PortfolioResponse?.AccountPortfolio?.[0]?.Position || [];
               const positionsValue = positions.reduce((sum, p) => sum + (+(p.marketValue || 0)), 0);
               value = positionsValue + cash;
+              positionsOk = true;
               console.log(`[etrade balance] ${accountName} NAV (fallback positions sum): $${value} (positions:${positionsValue} cash:${cash})`);
             } catch (e2) {
               console.warn(`[etrade balance] ${accountName} positions fallback also failed:`, e2.message);
             }
-            if (!(value > 0)) throw new Error(`balance response had no usable NAV field, and positions fallback also failed (Computed keys: ${Object.keys(computed).join(",")})`);
+            // Legitimately empty account: the balance response parsed and actually carries NAV
+            // fields that are zero, and positions confirm nothing held → a real $0, not a failure.
+            const navFieldPresent = [rtv.totalAccountValue, rtv.netMv, computed.totalAccountValue, computed.accountBalance, computed.accountValue]
+              .some(v => v != null && v !== "" && Number.isFinite(+v));
+            if (value === 0 && navFieldPresent && positionsOk) {
+              console.log(`[etrade balance] ${accountName} is genuinely empty (NAV fields present and zero) — value 0`);
+            } else if (!(value > 0)) throw new Error(`balance response had no usable NAV field, and positions fallback also failed (Computed keys: ${Object.keys(computed).join(",")})`);
           }
 
           results.push({ accountId: acct.accountId, accountIdKey: acct.accountIdKey, account: accountName, ok: true, value, cash });
@@ -514,7 +531,7 @@ export default async function handler(req, res) {
       }
 
       const allOk = results.length > 0 && results.every(r => r.ok);
-      return res.status(200).json({ ok: allOk, accounts: results });
+      return res.status(200).json({ ok: allOk, accounts: results, ignored });
     }
 
     if (action === "accounts") {
