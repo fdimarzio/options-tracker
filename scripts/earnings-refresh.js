@@ -46,15 +46,19 @@ async function getActiveSymbols() {
 // Returns { nextEarnings, prevEarnings } (either may be null) for a symbol from
 // FMP's historical earnings calendar, which mixes past actuals and future estimates.
 async function fetchEarningsForSymbol(symbol) {
-  const url = `https://financialmodelingprep.com/api/v3/historical/earning_calendar/${encodeURIComponent(symbol)}?apikey=${FMP_API_KEY}`;
+  // FMP stable per-symbol earnings (past + upcoming). The old
+  // /api/v3/historical/earning_calendar endpoint is legacy/premium-gated and was
+  // erroring for every symbol, silently leaving earnings_dates empty.
+  const url = `https://financialmodelingprep.com/stable/earnings?symbol=${encodeURIComponent(symbol)}&apikey=${FMP_API_KEY}`;
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`FMP ${res.status} for ${symbol}`);
+  if (!res.ok) throw new Error(`FMP ${res.status} for ${symbol}: ${(await res.text()).slice(0,120)}`);
   const rows = await res.json();
   if (!Array.isArray(rows) || !rows.length) return { nextEarnings: null, prevEarnings: null };
 
   const today = new Date().toISOString().slice(0, 10);
-  const future = rows.filter(r => r.date >= today).sort((a, b) => a.date.localeCompare(b.date));
-  const past   = rows.filter(r => r.date <  today).sort((a, b) => b.date.localeCompare(a.date));
+  const dated  = rows.filter(r => r && r.date);
+  const future = dated.filter(r => r.date >= today).sort((a, b) => a.date.localeCompare(b.date));
+  const past   = dated.filter(r => r.date <  today).sort((a, b) => b.date.localeCompare(a.date));
   return {
     nextEarnings: future[0]?.date ?? null,
     prevEarnings: past[0]?.date ?? null,
@@ -124,6 +128,12 @@ async function main() {
     }
   }
   console.log(`[earnings-refresh] done — ${updated} updated, ${failed} failed`);
+
+  if (symbols.length > 0 && updated === 0) {
+    await notify("❌ earnings-refresh wrote nothing", `${failed}/${symbols.length} symbols failed — FMP endpoint/plan issue. earnings_dates NOT updated.`);
+    console.error(`[earnings-refresh] FATAL: 0 of ${symbols.length} symbols updated — failing the run so it is visible`);
+    process.exit(1);
+  }
 
   const straddling = await flagStraddlingShorts(earningsBySymbol);
   if (straddling.length) {
