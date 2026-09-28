@@ -14,7 +14,7 @@
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
-const FMP_API_KEY  = process.env.FMP_API_KEY;
+const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
 const PUSHOVER_API_TOKEN = process.env.PUSHOVER_API_TOKEN;
 const PUSHOVER_USER_KEY  = process.env.PUSHOVER_USER_KEY;
 
@@ -22,8 +22,8 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
   console.error("Missing SUPABASE_URL/VITE_SUPABASE_URL or SUPABASE_SERVICE_KEY");
   process.exit(1);
 }
-if (!FMP_API_KEY) {
-  console.error("Missing FMP_API_KEY");
+if (!FINNHUB_API_KEY) {
+  console.error("Missing FINNHUB_API_KEY");
   process.exit(1);
 }
 
@@ -43,19 +43,19 @@ async function getActiveSymbols() {
   return [...symbols];
 }
 
-// FMP's per-symbol earnings endpoint is premium-gated (HTTP 402 "Special Endpoint"
-// for most symbols on the current plan). The bulk earnings-calendar (date range, no
-// symbol filter) is available where per-symbol is not, so pull it once and index by
-// symbol, then look each active symbol up locally.
+// FMP's earnings endpoints (per-symbol AND bulk calendar) are premium-gated on the
+// current plan (HTTP 402). Finnhub's earnings calendar is on the free tier (60 req/min),
+// so pull it once for a date range and index by symbol, then look each symbol up locally.
 async function fetchEarningsCalendar() {
   const now  = Date.now();
-  const from = new Date(now - 200 * 86400000).toISOString().slice(0, 10);
-  const to   = new Date(now + 400 * 86400000).toISOString().slice(0, 10);
-  const url  = `https://financialmodelingprep.com/stable/earnings-calendar?from=${from}&to=${to}&apikey=${FMP_API_KEY}`;
+  const from = new Date(now - 120 * 86400000).toISOString().slice(0, 10);
+  const to   = new Date(now + 180 * 86400000).toISOString().slice(0, 10);
+  const url  = `https://finnhub.io/api/v1/calendar/earnings?from=${from}&to=${to}&token=${FINNHUB_API_KEY}`;
   const res  = await fetch(url);
-  if (!res.ok) throw new Error(`FMP earnings-calendar ${res.status}: ${(await res.text()).slice(0,160)}`);
-  const rows = await res.json();
-  if (!Array.isArray(rows)) throw new Error(`FMP earnings-calendar non-array: ${JSON.stringify(rows).slice(0,160)}`);
+  if (!res.ok) throw new Error(`Finnhub earnings-calendar ${res.status}: ${(await res.text()).slice(0,160)}`);
+  const data = await res.json();
+  const rows = Array.isArray(data?.earningsCalendar) ? data.earningsCalendar : null;
+  if (!rows) throw new Error(`Finnhub earnings-calendar unexpected shape: ${JSON.stringify(data).slice(0,160)}`);
   const bySymbol = new Map();
   for (const r of rows) {
     if (!r || !r.symbol || !r.date) continue;
@@ -81,7 +81,7 @@ async function upsertEarnings(symbol, nextEarnings, prevEarnings) {
     headers: { ...HEADERS, Prefer: "resolution=merge-duplicates,return=minimal" },
     body: JSON.stringify({
       symbol, next_earnings: nextEarnings, prev_earnings: prevEarnings,
-      source: "fmp", updated_at: new Date().toISOString(),
+      source: "finnhub", updated_at: new Date().toISOString(),
     }),
   });
   if (!res.ok) throw new Error(`earnings_dates upsert failed for ${symbol}: ${res.status} ${await res.text()}`);
