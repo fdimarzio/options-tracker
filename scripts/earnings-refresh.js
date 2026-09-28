@@ -126,6 +126,36 @@ async function flagStraddlingShorts(earningsBySymbol) {
   return straddling;
 }
 
+// Heads-up alert: any active symbol whose next earnings is within 10 days, so Frank can
+// be careful when trading manually around it. Fires once per earnings event, deduped in
+// col_prefs row `earnings_prealert` ({ SYMBOL: earnings_date_already_alerted }).
+async function flagUpcomingEarnings(earningsBySymbol) {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const horizon  = new Date(Date.now() + 10 * 86400000).toISOString().slice(0, 10);
+  const pref = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.earnings_prealert`, { headers: HEADERS })
+    .then(r => r.json()).catch(() => []);
+  const alerted = (pref && pref[0] && pref[0].cols) || {};
+  const due = [];
+  for (const [symbol, next] of Object.entries(earningsBySymbol)) {
+    if (!next) continue;
+    if (next >= todayStr && next <= horizon && alerted[symbol] !== next) {
+      due.push({ symbol, next });
+      alerted[symbol] = next;
+    }
+  }
+  if (due.length) {
+    due.sort((a, b) => a.next.localeCompare(b.next));
+    const lines = due.map(d => `${d.symbol} — ${d.next}`);
+    await notify("📅 Earnings within 10 days", `Be careful trading around these:\n${lines.join("\n")}`);
+    await fetch(`${SUPABASE_URL}/rest/v1/col_prefs`, {
+      method: "POST",
+      headers: { ...HEADERS, Prefer: "resolution=merge-duplicates" },
+      body: JSON.stringify({ id: "earnings_prealert", cols: alerted, updated_at: new Date().toISOString() }),
+    }).catch(() => {});
+  }
+  return due;
+}
+
 async function main() {
   const symbols = await getActiveSymbols();
   console.log(`[earnings-refresh] refreshing ${symbols.length} active symbols: ${symbols.join(", ")}`);
@@ -136,7 +166,7 @@ async function main() {
     console.log(`[earnings-refresh] Finnhub returned earnings for ${calendar.size} of ${symbols.length} symbols`);
   } catch (e) {
     console.error(`[earnings-refresh] FATAL: earnings-calendar fetch failed — ${e.message}`);
-    await notify("❌ earnings-refresh failed", `FMP earnings-calendar error: ${e.message}. earnings_dates NOT updated.`);
+    await notify("❌ earnings-refresh failed", `Finnhub earnings-calendar error: ${e.message}. earnings_dates NOT updated.`);
     process.exit(1);
   }
 
@@ -163,7 +193,7 @@ async function main() {
   console.log(`[earnings-refresh] done — ${updated} updated, ${notInCalendar} not-in-calendar, ${failed} failed`);
 
   if (symbols.length > 0 && updated === 0) {
-    await notify("❌ earnings-refresh wrote nothing", `0/${symbols.length} updated (${notInCalendar} not in calendar, ${failed} errored) — FMP plan/endpoint issue. earnings_dates NOT updated.`);
+    await notify("❌ earnings-refresh wrote nothing", `0/${symbols.length} updated (${notInCalendar} not in calendar, ${failed} errored) — Finnhub returned nothing / provider issue. earnings_dates NOT updated.`);
     console.error(`[earnings-refresh] FATAL: 0 of ${symbols.length} symbols updated — failing the run so it is visible`);
     process.exit(1);
   }
@@ -171,6 +201,11 @@ async function main() {
   const straddling = await flagStraddlingShorts(earningsBySymbol);
   if (straddling.length) {
     console.log(`[earnings-refresh] ${straddling.length} open short(s) straddle an upcoming earnings date — Pushover sent`);
+  }
+
+  const upcoming = await flagUpcomingEarnings(earningsBySymbol);
+  if (upcoming.length) {
+    console.log(`[earnings-refresh] ${upcoming.length} symbol(s) with earnings within 10 days — Pushover sent`);
   }
 }
 
