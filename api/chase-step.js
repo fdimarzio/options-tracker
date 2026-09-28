@@ -501,6 +501,20 @@ async function processOrder(order, { token, chaseParams, dryRun, stocksData, vix
   return { orderId: order.id, action: "step", fromPrice: historyEntry.from_price, toPrice };
 }
 
+// ── Ecosystem heartbeat (same upsert shape as market-refresh.js) ──────────────
+// chase-runner polls every ~5 min in market hours, so a heartbeat on every poll is
+// the liveness signal; notes carry the terminal state of that poll.
+async function writeHeartbeat(status, notes) {
+  const now = new Date().toISOString();
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/ecosystem_heartbeat?on_conflict=agent_name`, {
+      method: "POST",
+      headers: { ...SB_HEADERS, Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify({ agent_name: "chase", last_run_at: now, status, notes: String(notes).slice(0, 200), updated_at: now }),
+    });
+  } catch (e) { console.warn("[heartbeat] chase write failed:", e.message); }
+}
+
 // ── Handler ────────────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -516,6 +530,7 @@ export default async function handler(req, res) {
     const chaseRule = (await chaseRuleRes.json())?.[0] || null;
 
     if (!chaseRule?.enabled) {
+      await writeHeartbeat("ok", "chase rule disabled");
       return res.status(200).json({ ok: true, skipped: true, reason: "chase rule disabled" });
     }
 
@@ -525,11 +540,13 @@ export default async function handler(req, res) {
     const scRows = await fetch(`${SUPABASE_URL}/rest/v1/skynet_controls?limit=1`, { headers: SB_HEADERS }).then(r => r.json()).catch(() => []);
     const masterEnabled = (scRows?.[0]?.master_enabled) !== false;
     if (!masterEnabled) {
+      await writeHeartbeat("ok", "Skynet master switch off");
       return res.status(200).json({ ok: true, skipped: true, reason: "Skynet master switch off" });
     }
 
     // Market-hours gate — no steps outside RTH.
     if (!isMarketHours()) {
+      await writeHeartbeat("ok", "outside market hours");
       return res.status(200).json({ ok: true, skipped: true, reason: "outside market hours" });
     }
 
@@ -544,6 +561,7 @@ export default async function handler(req, res) {
     const stocksData = (await stocksDataRes.json())?.[0]?.cols || {};
 
     if (!Array.isArray(orders) || !orders.length) {
+      await writeHeartbeat("ok", "processed 0");
       return res.status(200).json({ ok: true, processed: 0, dryRun });
     }
 
@@ -572,9 +590,11 @@ export default async function handler(req, res) {
       }
     }
 
+    await writeHeartbeat("ok", `processed ${results.length}${dryRun ? " (dry-run)" : ""}`);
     return res.status(200).json({ ok: true, processed: results.length, dryRun, results });
   } catch (err) {
     console.error("[chase-step]", err.message);
+    await writeHeartbeat("error", err.message);
     return res.status(500).json({ error: err.message });
   }
 }

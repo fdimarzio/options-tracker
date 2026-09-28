@@ -50,6 +50,18 @@ async function fetchChain(token, ticker, expiry) {
   return { calls, puts };
 }
 
+// ── Ecosystem heartbeat (same upsert shape as market-refresh.js) ──────────────
+async function writeHeartbeat(status, notes) {
+  const now = new Date().toISOString();
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/ecosystem_heartbeat?on_conflict=agent_name`, {
+      method: "POST",
+      headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify({ agent_name: "chain-refresh", last_run_at: now, status, notes: String(notes).slice(0, 200), updated_at: now }),
+    });
+  } catch (e) { console.warn("[heartbeat] chain-refresh write failed:", e.message); }
+}
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   if (req.method === "OPTIONS") return res.status(200).end();
@@ -131,7 +143,10 @@ export default async function handler(req, res) {
       }
     }
 
-    if (!pairs.length) return res.status(200).json({ ok: true, chains: 0, message: "No open contracts or holdings in the chain universe" });
+    if (!pairs.length) {
+      await writeHeartbeat("ok", "no open contracts");
+      return res.status(200).json({ ok: true, chains: 0, message: "No open contracts or holdings in the chain universe" });
+    }
 
     // Fetch all chains IN PARALLEL — this is the key fix vs sequential awaits
     const results = await Promise.allSettled(
@@ -158,9 +173,11 @@ export default async function handler(req, res) {
     });
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    await writeHeartbeat("ok", `${Object.keys(chainData).length} chains`);
     res.status(200).json({ ok: true, time: lastRefresh, chains: Object.keys(chainData).length, failed, elapsed: `${elapsed}s` });
   } catch (err) {
     console.error("[chain-refresh]", err.message);
+    await writeHeartbeat("error", err.message);
     res.status(500).json({ error: err.message });
   }
 }

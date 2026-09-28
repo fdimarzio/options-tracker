@@ -389,6 +389,15 @@ export default async function handler(req, res) {
       const renewText   = await renewRes.text();
       if (!renewRes.ok) {
         const reason = classifyEtradeError(renewRes, renewText);
+        // Ecosystem heartbeat (same upsert shape as market-refresh.js)
+        try {
+          const nowHb = new Date().toISOString();
+          await fetch(`${SUPABASE_URL}/rest/v1/ecosystem_heartbeat?on_conflict=agent_name`, {
+            method: "POST",
+            headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" },
+            body: JSON.stringify({ agent_name: "extend-etrade-token", last_run_at: nowHb, status: "error", notes: String(`${reason} (${renewRes.status})`).slice(0, 200), updated_at: nowHb }),
+          });
+        } catch (e) { console.warn("[heartbeat] extend-etrade-token write failed:", e.message); }
         throw Object.assign(new Error(`ETrade renew failed (${renewRes.status}, reason: ${reason}): ${renewText}`), { reason });
       }
       // ETrade returns "Access Token has been renewed" on success
@@ -399,6 +408,16 @@ export default async function handler(req, res) {
         headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
         body: JSON.stringify({ id: "etrade_tokens", cols: renewed, updated_at: new Date().toISOString() }),
       });
+
+      // Ecosystem heartbeat (same upsert shape as market-refresh.js)
+      try {
+        const nowHb = new Date().toISOString();
+        await fetch(`${SUPABASE_URL}/rest/v1/ecosystem_heartbeat?on_conflict=agent_name`, {
+          method: "POST",
+          headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({ agent_name: "extend-etrade-token", last_run_at: nowHb, status: "ok", notes: "renewed", updated_at: nowHb }),
+        });
+      } catch (e) { console.warn("[heartbeat] extend-etrade-token write failed:", e.message); }
 
       return res.status(200).json({ ok: true, message: "ETrade token renewed successfully", renewedAt: renewed.renewedAt });
     }

@@ -65,6 +65,9 @@ const CHECKS = [
   { name: "job: snapshot_purge",               sev: "warning",  marketHoursOnly: false, run: () => heartbeatFresh("snapshot_purge", 8 * 24 * 60) },
   { name: "data: earnings_dates fresh",        sev: "warning",  marketHoursOnly: false, run: () => rowFresh("earnings_dates", "updated_at", 26 * 60) },
   { name: "data: portfolio snapshot recent",   sev: "warning",  marketHoursOnly: false, run: () => dateFresh("portfolio_snapshots", "snapshot_date", 2) },
+  { name: "cron: chain-refresh",               sev: "critical", marketHoursOnly: true,  run: () => heartbeatFresh("chain-refresh", 30) },
+  { name: "cron: chase",                        sev: "warning",  marketHoursOnly: true,  run: () => heartbeatFresh("chase", 30) },
+  { name: "job: extend-etrade-token",          sev: "warning",  marketHoursOnly: false, run: () => heartbeatFresh("extend-etrade-token", 26 * 60) },
 ];
 
 async function notify(title, message, priority = 0) {
