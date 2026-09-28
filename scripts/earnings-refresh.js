@@ -43,26 +43,36 @@ async function getActiveSymbols() {
   return [...symbols];
 }
 
-// Returns { nextEarnings, prevEarnings } (either may be null) for a symbol from
-// FMP's historical earnings calendar, which mixes past actuals and future estimates.
-async function fetchEarningsForSymbol(symbol) {
-  // FMP stable per-symbol earnings (past + upcoming). The old
-  // /api/v3/historical/earning_calendar endpoint is legacy/premium-gated and was
-  // erroring for every symbol, silently leaving earnings_dates empty.
-  const url = `https://financialmodelingprep.com/stable/earnings?symbol=${encodeURIComponent(symbol)}&apikey=${FMP_API_KEY}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`FMP ${res.status} for ${symbol}: ${(await res.text()).slice(0,120)}`);
+// FMP's per-symbol earnings endpoint is premium-gated (HTTP 402 "Special Endpoint"
+// for most symbols on the current plan). The bulk earnings-calendar (date range, no
+// symbol filter) is available where per-symbol is not, so pull it once and index by
+// symbol, then look each active symbol up locally.
+async function fetchEarningsCalendar() {
+  const now  = Date.now();
+  const from = new Date(now - 200 * 86400000).toISOString().slice(0, 10);
+  const to   = new Date(now + 400 * 86400000).toISOString().slice(0, 10);
+  const url  = `https://financialmodelingprep.com/stable/earnings-calendar?from=${from}&to=${to}&apikey=${FMP_API_KEY}`;
+  const res  = await fetch(url);
+  if (!res.ok) throw new Error(`FMP earnings-calendar ${res.status}: ${(await res.text()).slice(0,160)}`);
   const rows = await res.json();
-  if (!Array.isArray(rows) || !rows.length) return { nextEarnings: null, prevEarnings: null };
+  if (!Array.isArray(rows)) throw new Error(`FMP earnings-calendar non-array: ${JSON.stringify(rows).slice(0,160)}`);
+  const bySymbol = new Map();
+  for (const r of rows) {
+    if (!r || !r.symbol || !r.date) continue;
+    const s = String(r.symbol).toUpperCase();
+    if (!bySymbol.has(s)) bySymbol.set(s, []);
+    bySymbol.get(s).push(r.date);
+  }
+  return bySymbol;
+}
 
-  const today = new Date().toISOString().slice(0, 10);
-  const dated  = rows.filter(r => r && r.date);
-  const future = dated.filter(r => r.date >= today).sort((a, b) => a.date.localeCompare(b.date));
-  const past   = dated.filter(r => r.date <  today).sort((a, b) => b.date.localeCompare(a.date));
-  return {
-    nextEarnings: future[0]?.date ?? null,
-    prevEarnings: past[0]?.date ?? null,
-  };
+// From one symbol's earnings dates, pick the next upcoming and the most recent past.
+function pickEarnings(dates) {
+  const today  = new Date().toISOString().slice(0, 10);
+  const sorted = [...new Set(dates)].sort();
+  const future = sorted.filter(d => d >= today);
+  const past   = sorted.filter(d => d <  today);
+  return { nextEarnings: future[0] ?? null, prevEarnings: past[past.length - 1] ?? null };
 }
 
 async function upsertEarnings(symbol, nextEarnings, prevEarnings) {
@@ -114,11 +124,28 @@ async function main() {
   const symbols = await getActiveSymbols();
   console.log(`[earnings-refresh] refreshing ${symbols.length} active symbols: ${symbols.join(", ")}`);
 
+  let calendar;
+  try {
+    calendar = await fetchEarningsCalendar();
+    console.log(`[earnings-refresh] FMP calendar returned ${calendar.size} symbols`);
+  } catch (e) {
+    console.error(`[earnings-refresh] FATAL: earnings-calendar fetch failed — ${e.message}`);
+    await notify("❌ earnings-refresh failed", `FMP earnings-calendar error: ${e.message}. earnings_dates NOT updated.`);
+    process.exit(1);
+  }
+
   const earningsBySymbol = {};
-  let updated = 0, failed = 0;
+  let updated = 0, failed = 0, notInCalendar = 0;
   for (const symbol of symbols) {
     try {
-      const { nextEarnings, prevEarnings } = await fetchEarningsForSymbol(symbol);
+      const dates = calendar.get(symbol) || [];
+      if (!dates.length) {
+        notInCalendar++;
+        earningsBySymbol[symbol] = null;
+        console.warn(`[earnings-refresh] ${symbol}: no earnings in calendar window`);
+        continue;
+      }
+      const { nextEarnings, prevEarnings } = pickEarnings(dates);
       await upsertEarnings(symbol, nextEarnings, prevEarnings);
       earningsBySymbol[symbol] = nextEarnings;
       updated++;
@@ -127,10 +154,10 @@ async function main() {
       failed++;
     }
   }
-  console.log(`[earnings-refresh] done — ${updated} updated, ${failed} failed`);
+  console.log(`[earnings-refresh] done — ${updated} updated, ${notInCalendar} not-in-calendar, ${failed} failed`);
 
   if (symbols.length > 0 && updated === 0) {
-    await notify("❌ earnings-refresh wrote nothing", `${failed}/${symbols.length} symbols failed — FMP endpoint/plan issue. earnings_dates NOT updated.`);
+    await notify("❌ earnings-refresh wrote nothing", `0/${symbols.length} updated (${notInCalendar} not in calendar, ${failed} errored) — FMP plan/endpoint issue. earnings_dates NOT updated.`);
     console.error(`[earnings-refresh] FATAL: 0 of ${symbols.length} symbols updated — failing the run so it is visible`);
     process.exit(1);
   }
