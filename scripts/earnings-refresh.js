@@ -43,25 +43,31 @@ async function getActiveSymbols() {
   return [...symbols];
 }
 
-// FMP's earnings endpoints (per-symbol AND bulk calendar) are premium-gated on the
-// current plan (HTTP 402). Finnhub's earnings calendar is on the free tier (60 req/min),
-// so pull it once for a date range and index by symbol, then look each symbol up locally.
-async function fetchEarningsCalendar() {
+// Finnhub's free bulk (all-companies) calendar returns an incomplete set, so query it
+// per-symbol — ~12 tiny calls, well under the 60/min free limit. One symbol's failure is
+// logged and skipped, not fatal; the 0-updated guard in main() still fails the run loud
+// if every symbol fails (e.g. bad key).
+async function fetchEarningsCalendar(symbols) {
   const now  = Date.now();
   const from = new Date(now - 120 * 86400000).toISOString().slice(0, 10);
   const to   = new Date(now + 180 * 86400000).toISOString().slice(0, 10);
-  const url  = `https://finnhub.io/api/v1/calendar/earnings?from=${from}&to=${to}&token=${FINNHUB_API_KEY}`;
-  const res  = await fetch(url);
-  if (!res.ok) throw new Error(`Finnhub earnings-calendar ${res.status}: ${(await res.text()).slice(0,160)}`);
-  const data = await res.json();
-  const rows = Array.isArray(data?.earningsCalendar) ? data.earningsCalendar : null;
-  if (!rows) throw new Error(`Finnhub earnings-calendar unexpected shape: ${JSON.stringify(data).slice(0,160)}`);
   const bySymbol = new Map();
-  for (const r of rows) {
-    if (!r || !r.symbol || !r.date) continue;
-    const s = String(r.symbol).toUpperCase();
-    if (!bySymbol.has(s)) bySymbol.set(s, []);
-    bySymbol.get(s).push(r.date);
+  for (const symbol of symbols) {
+    try {
+      const url = `https://finnhub.io/api/v1/calendar/earnings?symbol=${encodeURIComponent(symbol)}&from=${from}&to=${to}&token=${FINNHUB_API_KEY}`;
+      const res = await fetch(url);
+      if (!res.ok) { console.warn(`[earnings-refresh] ${symbol}: Finnhub HTTP ${res.status} ${(await res.text()).slice(0,100)}`); continue; }
+      const data = await res.json();
+      const rows = Array.isArray(data?.earningsCalendar) ? data.earningsCalendar : [];
+      for (const r of rows) {
+        if (!r || !r.symbol || !r.date) continue;
+        const s = String(r.symbol).toUpperCase();
+        if (!bySymbol.has(s)) bySymbol.set(s, []);
+        bySymbol.get(s).push(r.date);
+      }
+    } catch (e) {
+      console.warn(`[earnings-refresh] ${symbol}: Finnhub error ${e.message}`);
+    }
   }
   return bySymbol;
 }
@@ -126,8 +132,8 @@ async function main() {
 
   let calendar;
   try {
-    calendar = await fetchEarningsCalendar();
-    console.log(`[earnings-refresh] FMP calendar returned ${calendar.size} symbols`);
+    calendar = await fetchEarningsCalendar(symbols);
+    console.log(`[earnings-refresh] Finnhub returned earnings for ${calendar.size} of ${symbols.length} symbols`);
   } catch (e) {
     console.error(`[earnings-refresh] FATAL: earnings-calendar fetch failed — ${e.message}`);
     await notify("❌ earnings-refresh failed", `FMP earnings-calendar error: ${e.message}. earnings_dates NOT updated.`);
