@@ -3228,7 +3228,14 @@ export default async function handler(req, res) {
           // Once-per-day alert when either side is stale (carried forward), so a live-pull
           // failure (e.g. expired ETrade OAuth token) can't go unnoticed for weeks like the
           // $110,558 freeze did — that bug was invisible because nothing ever alerted on it.
-          if (schwabStale || etradeStale) {
+          // ETrade OAuth expires every night; Frank re-authorizes around 8am ET, so an
+          // ETrade-only stale snapshot before ~10am ET is the expected daily gap, not an incident.
+          // Still alert if Schwab is stale (separate weekly token, abnormal), if it's past the
+          // re-auth window and ETrade is still stale (a real failure), or if ETrade was already
+          // stale on the prior snapshot (multi-day freeze — the 65-day incident).
+          const _etHourET = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" })).getHours();
+          const etradeExpectedMorningStale = etradeStale && !schwabStale && !prevEtradeStale && _etHourET < 10;
+          if ((schwabStale || etradeStale) && !etradeExpectedMorningStale) {
             const alertKey = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.portfolio_stale_alert`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }).then(r => r.json()).catch(() => []);
             const lastAlertedDate = alertKey?.[0]?.cols?.date;
             if (lastAlertedDate !== snapDate) {
