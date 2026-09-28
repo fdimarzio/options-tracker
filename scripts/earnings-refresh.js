@@ -101,6 +101,18 @@ async function notify(title, message) {
   }).catch(() => {});
 }
 
+// Write this job's heartbeat so the watchdog can see it ran (and whether it succeeded).
+async function heartbeat(status, notes) {
+  try {
+    const now = new Date().toISOString();
+    await fetch(`${SUPABASE_URL}/rest/v1/ecosystem_heartbeat?on_conflict=agent_name`, {
+      method: "POST",
+      headers: { ...HEADERS, Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify({ agent_name: "earnings-refresh", last_run_at: now, status, notes: String(notes).slice(0, 200), updated_at: now }),
+    });
+  } catch (e) { console.warn("[heartbeat] write failed:", e.message); }
+}
+
 // Optional BTC-side check: flag open short (STO) positions whose expiry now
 // straddles an upcoming earnings date, for manual review — this script doesn't
 // close or modify anything, only alerts.
@@ -167,6 +179,7 @@ async function main() {
   } catch (e) {
     console.error(`[earnings-refresh] FATAL: earnings-calendar fetch failed — ${e.message}`);
     await notify("❌ earnings-refresh failed", `Finnhub earnings-calendar error: ${e.message}. earnings_dates NOT updated.`);
+    await heartbeat("error", `calendar fetch failed: ${e.message}`);
     process.exit(1);
   }
 
@@ -195,6 +208,7 @@ async function main() {
   if (symbols.length > 0 && updated === 0) {
     await notify("❌ earnings-refresh wrote nothing", `0/${symbols.length} updated (${notInCalendar} not in calendar, ${failed} errored) — Finnhub returned nothing / provider issue. earnings_dates NOT updated.`);
     console.error(`[earnings-refresh] FATAL: 0 of ${symbols.length} symbols updated — failing the run so it is visible`);
+    await heartbeat("error", `0/${symbols.length} updated`);
     process.exit(1);
   }
 
@@ -207,6 +221,8 @@ async function main() {
   if (upcoming.length) {
     console.log(`[earnings-refresh] ${upcoming.length} symbol(s) with earnings within 10 days — Pushover sent`);
   }
+
+  await heartbeat("ok", `${updated} updated, ${notInCalendar} no-earnings, ${failed} failed`);
 }
 
 main().catch(e => { console.error("[earnings-refresh] Fatal:", e.message); process.exit(1); });
