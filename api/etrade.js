@@ -372,8 +372,30 @@ export default async function handler(req, res) {
       const sameDay   = savedAtET.toDateString() === nowET.toDateString();
 
       if (!sameDay) {
-        // Token is from a previous day — must fully re-authorize
-        await notifyReauth("ETrade token expired (previous day) — manual re-auth required");
+        // Token is from a previous day — must fully re-authorize.
+        // De-noise the push: fire at most ONCE/day and only at/after 9am ET, so the
+        // ~6am renew cron doesn't nag before Frank re-auths ~8am ET. Shares the
+        // col_prefs id='etrade_reauth_warn' dedup key with market-refresh.js so the
+        // two paths never double-nag. Response/return below is unchanged.
+        const hourET   = nowET.getHours();
+        const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+        let lastNotified;
+        try {
+          const warnRes  = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.etrade_reauth_warn`, {
+            headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` },
+          });
+          lastNotified = (await warnRes.json())?.[0]?.cols?.lastNotified;
+        } catch (e) { console.warn("[etrade] reauth-warn read failed:", e.message); }
+        if (hourET >= 9 && lastNotified !== todayStr) {
+          await notifyReauth("ETrade token expired (previous day) — manual re-auth required");
+          try {
+            await fetch(`${SUPABASE_URL}/rest/v1/col_prefs`, {
+              method: "POST",
+              headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
+              body: JSON.stringify({ id: "etrade_reauth_warn", cols: { lastNotified: todayStr }, updated_at: new Date().toISOString() }),
+            });
+          } catch (e) { console.warn("[etrade] reauth-warn upsert failed:", e.message); }
+        }
         return res.status(401).json({
           error: "ETrade token expired — re-authorize at /api/etrade?action=auth",
           reason: "token_expired",

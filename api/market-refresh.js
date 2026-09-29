@@ -1227,9 +1227,21 @@ export default async function handler(req, res) {
         const savedET  = new Date(new Date(etToken.savedAt).toLocaleString("en-US", { timeZone: "America/New_York" }));
         const sameDay  = savedET.toDateString() === nowET.toDateString();
         const hourET   = nowET.getHours();
-        // Alert once in the morning (9-10am ET) if token is stale
+        // Alert once in the morning (9-10am ET) if token is stale. Dedup once/day
+        // via col_prefs id='etrade_reauth_warn' — the SAME key api/etrade.js renew
+        // uses — so the two re-auth paths never double-nag on a given day.
         if (!sameDay && hourET >= 9 && hourET < 10) {
-          await sendPushover("⚠️ ETrade Re-Auth Required", `Token from ${savedET.toDateString()} — tap to re-authorize before market open`, `${APP_URL}/api/etrade?action=auth&secret=${process.env.CRON_SECRET}`, "Re-Authorize ETrade", 1);
+          const warnRes  = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.etrade_reauth_warn`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } });
+          const warnData = (await warnRes.json())?.[0]?.cols;
+          const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+          if (warnData?.lastNotified !== todayStr) {
+            await sendPushover("⚠️ ETrade Re-Auth Required", `Token from ${savedET.toDateString()} — tap to re-authorize before market open`, `${APP_URL}/api/etrade?action=auth&secret=${process.env.CRON_SECRET}`, "Re-Authorize ETrade", 1);
+            await fetch(`${SUPABASE_URL}/rest/v1/col_prefs`, {
+              method: "POST",
+              headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
+              body: JSON.stringify({ id: "etrade_reauth_warn", cols: { lastNotified: todayStr }, updated_at: new Date().toISOString() }),
+            });
+          }
         }
       }
     } catch(e) { console.warn("[market-refresh] ETrade token check failed:", e.message); }
