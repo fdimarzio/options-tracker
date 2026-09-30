@@ -3165,7 +3165,7 @@ export default async function handler(req, res) {
         let totalValue = (schwabValue || 0) + (etradeValue || 0);
 
         // Get prior snapshot for daily change
-        const yest = await fetch(`${SUPABASE_URL}/rest/v1/portfolio_snapshots?order=snapshot_date.desc&limit=1&select=total_value,etrade_stale`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }).then(r => r.json());
+        const yest = await fetch(`${SUPABASE_URL}/rest/v1/portfolio_snapshots?snapshot_date=lt.${snapDate}&order=snapshot_date.desc&limit=1&select=total_value,etrade_stale`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }).then(r => r.json());
         const prevValue = yest?.[0]?.total_value ? +yest[0].total_value : null;
         const prevEtradeStale = !!yest?.[0]?.etrade_stale;
         let dailyChange  = prevValue ? Math.round((totalValue - prevValue) * 100) / 100 : null;
