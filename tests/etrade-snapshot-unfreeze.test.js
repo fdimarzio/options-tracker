@@ -96,8 +96,12 @@ async function fetchRouter(url, init = {}) {
     return makeRes({ positions: [] });
   }
 
-  // ── ETrade live balance for the snapshot writer — a fresh, correct pull ────
+  // ── ETrade live balance for the snapshot writer — a fresh, correct pull, or a
+  // failed pull (expired token) when the scenario wants ETrade to carry forward ──
   if (url.includes("/api/etrade") && url.includes("action=balance")) {
+    if (scenario.etradeBalanceFails) {
+      return makeRes({ accounts: [{ accountId: "1", account: "ETrade 1234", ok: false, error: "token_expired" }] });
+    }
     return makeRes({
       accounts: [
         { accountId: "1", account: "ETrade 1234", ok: true, value: scenario.freshEtradeNav, cash: 10000 },
@@ -105,14 +109,25 @@ async function fetchRouter(url, init = {}) {
     });
   }
 
-  // ── Portfolio snapshot: does today's row already exist? (no — force a fresh write) ─
+  // ── Portfolio snapshot: does today's row already exist? Default no (force a fresh
+  // write); a scenario may supply an existing stale row to model a same-day re-run. ─
   if (url.includes("/rest/v1/portfolio_snapshots") && url.includes("snapshot_date=eq.")) {
-    return makeRes([]);
+    return makeRes(scenario.existingTodayRow ?? []);
   }
 
   // ── Portfolio snapshot: prior day's row, for daily-change + outlier-guard baseline ─
+  // The fixed handler scopes this lookup with `snapshot_date=lt.<today>` so it can never
+  // read today's own just-written row. We branch on that filter so the test can prove the
+  // exclusion: with the filter present we hand back the REAL prior day; without it (the old
+  // buggy query) we'd hand back today's own row — a different total that fails the assertions.
   if (url.includes("/rest/v1/portfolio_snapshots") && url.includes("select=total_value,etrade_stale")) {
-    return makeRes([{ total_value: scenario.prevTotalValue, etrade_stale: scenario.prevEtradeStale }]);
+    if (url.includes("snapshot_date=lt.")) {
+      return makeRes([{ total_value: scenario.prevTotalValue, etrade_stale: scenario.prevEtradeStale }]);
+    }
+    return makeRes([{
+      total_value:  scenario.todayOwnTotalValue  ?? scenario.prevTotalValue,
+      etrade_stale: scenario.todayOwnEtradeStale ?? scenario.prevEtradeStale,
+    }]);
   }
 
   // ── carryForward() lookups (last known-good, non-stale value) ──────────────
@@ -184,6 +199,10 @@ describe("portfolio snapshot — ETrade outlier guard vs. stale baseline", () =>
     return writes[writes.length - 1]?.body;
   }
 
+  function staleAlertSent() {
+    return calls.some(c => c.url.includes("api.pushover.net") && c.body?.title?.includes("Portfolio snapshot stale"));
+  }
+
   it("accepts a fresh correct ETrade pull when the prior snapshot was stale, instead of re-freezing it (regression: 65-day $110,558 freeze)", async () => {
     scenario = {
       prevEtradeStale: true,      // prior snapshot was carried-forward / frozen
@@ -213,5 +232,78 @@ describe("portfolio snapshot — ETrade outlier guard vs. stale baseline", () =>
     expect(written, "expected a portfolio_snapshots write").toBeTruthy();
     expect(written.etrade_stale).toBe(true);
     expect(written.etrade_value).toBe(480000); // carried forward from carryForward() mock
+  });
+
+  // ── Regression: prior-snapshot lookup must exclude today (6am false-alarm bug) ──
+  // On a same-day re-run (etradeLooksStale keeps the block re-firing), the prior-snapshot
+  // lookup used to select the newest row overall — which by then is TODAY's own just-written
+  // row. That made prevValue/prevEtradeStale reflect today itself: daily_change collapsed to
+  // ~0 (comparing today to itself) and prevEtradeStale echoed today's stale flag instead of the
+  // real prior day. Fix: scope the lookup with `snapshot_date=lt.<today>`.
+  it("scopes the prior-snapshot lookup to before today, so a same-day re-run reads the real prior day (not today's own row)", async () => {
+    scenario = {
+      existingTodayRow: [{ id: 1, etrade_value: 110000, etrade_stale: true }], // today's row exists & looks stale → block re-runs
+      prevEtradeStale: false,       // the REAL prior day was a good, live value
+      prevTotalValue: 685000,       // yesterday's total
+      freshEtradeNav: 487000,       // today's fresh, correct ETrade pull (→ total 687000)
+      todayOwnTotalValue: 687000,   // what an un-scoped lookup would wrongly return (today's own row)
+      todayOwnEtradeStale: true,    // …with today's own stale flag
+    };
+
+    await runHandler();
+
+    // The lookup URL is scoped to before today and still ordered newest-first.
+    const priorLookup = calls.find(c =>
+      c.url.includes("/rest/v1/portfolio_snapshots") && c.url.includes("select=total_value,etrade_stale"));
+    expect(priorLookup, "expected a prior-snapshot lookup").toBeTruthy();
+    expect(priorLookup.url).toContain("snapshot_date=lt.");
+    expect(priorLookup.url).toContain("order=snapshot_date.desc");
+
+    // daily_change is computed against the REAL prior day (685000), not today itself (→ 0).
+    const written = snapshotWriteBody();
+    expect(written, "expected a portfolio_snapshots write").toBeTruthy();
+    expect(written.total_value).toBe(687000);
+    expect(written.etrade_stale).toBe(false);   // fresh pull accepted (guard sees prior day fresh, tiny Δ%)
+    expect(written.daily_change).toBe(2000);    // 687000 − 685000, NOT 0 (would be 687000 − 687000 if it re-read today's row)
+  });
+
+  // ── Morning-stale alert suppression (the ~6am false alarm) ────────────────────
+  // ETrade OAuth tokens require same-day renewal, so ETrade carries forward every morning
+  // until re-auth (~10am ET). That expected gap shouldn't page. The alert is suppressed only
+  // when ETrade is the SOLE stale side, the prior day's ETrade was fresh (a one-morning gap,
+  // not a freeze), and it's before 10am ET — a genuine multi-day freeze still alerts. The
+  // prior-day-fresh signal relies on the yest lookup excluding today's own row (fix above).
+  it("does NOT alert on expected morning ETrade staleness (ETrade-only, prior day fresh, before 10am ET)", async () => {
+    vi.setSystemTime(new Date("2026-09-17T13:00:00Z")); // 9:00am ET
+    scenario = {
+      etradeBalanceFails: true,   // ETrade token not yet renewed → carries forward, etrade_stale=true
+      prevEtradeStale: false,     // the REAL prior day's ETrade was fresh → this is a one-morning gap
+      prevTotalValue: 680000,
+    };
+
+    await runHandler();
+
+    // The row is still written (staleness is recorded), but no page goes out.
+    const written = snapshotWriteBody();
+    expect(written, "expected a portfolio_snapshots write").toBeTruthy();
+    expect(written.etrade_stale).toBe(true);
+    expect(written.schwab_stale).toBe(false);
+    expect(staleAlertSent()).toBe(false);
+  });
+
+  it("STILL alerts on a genuine multi-day freeze (ETrade stale this morning AND the prior day)", async () => {
+    vi.setSystemTime(new Date("2026-09-17T13:00:00Z")); // 9:00am ET — same early window
+    scenario = {
+      etradeBalanceFails: true,   // ETrade stale again today
+      prevEtradeStale: true,      // …and it was already stale yesterday → a real freeze, not a morning gap
+      prevTotalValue: 680000,
+    };
+
+    await runHandler();
+
+    const written = snapshotWriteBody();
+    expect(written, "expected a portfolio_snapshots write").toBeTruthy();
+    expect(written.etrade_stale).toBe(true);
+    expect(staleAlertSent()).toBe(true);
   });
 });

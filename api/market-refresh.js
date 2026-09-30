@@ -3177,7 +3177,7 @@ export default async function handler(req, res) {
         let totalValue = (schwabValue || 0) + (etradeValue || 0);
 
         // Get prior snapshot for daily change
-        const yest = await fetch(`${SUPABASE_URL}/rest/v1/portfolio_snapshots?order=snapshot_date.desc&limit=1&select=total_value,etrade_stale`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }).then(r => r.json());
+        const yest = await fetch(`${SUPABASE_URL}/rest/v1/portfolio_snapshots?snapshot_date=lt.${snapDate}&order=snapshot_date.desc&limit=1&select=total_value,etrade_stale`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }).then(r => r.json());
         const prevValue = yest?.[0]?.total_value ? +yest[0].total_value : null;
         const prevEtradeStale = !!yest?.[0]?.etrade_stale;
         let dailyChange  = prevValue ? Math.round((totalValue - prevValue) * 100) / 100 : null;
@@ -3240,7 +3240,17 @@ export default async function handler(req, res) {
           // Once-per-day alert when either side is stale (carried forward), so a live-pull
           // failure (e.g. expired ETrade OAuth token) can't go unnoticed for weeks like the
           // $110,558 freeze did — that bug was invisible because nothing ever alerted on it.
-          if (schwabStale || etradeStale) {
+          //
+          // ETrade OAuth tokens require same-day renewal, so ETrade routinely carries forward
+          // every morning until re-auth (~10am ET). That expected morning gap isn't a failure
+          // worth paging on — but a genuine multi-day freeze IS. Suppress the alert only when
+          // ETrade is the SOLE stale side, the prior day's ETrade was fresh (a fresh one-morning
+          // gap, not a freeze — relies on the prevEtradeStale fix that excludes today's own row),
+          // and it's still early. Schwab staleness, both sides stale, or a prior-day-also-stale
+          // ETrade (a real freeze) all still alert.
+          const hourET = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" })).getHours();
+          const etradeExpectedMorningStale = etradeStale && !schwabStale && !prevEtradeStale && hourET < 10;
+          if ((schwabStale || etradeStale) && !etradeExpectedMorningStale) {
             const alertKey = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.portfolio_stale_alert`, { headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` } }).then(r => r.json()).catch(() => []);
             const lastAlertedDate = alertKey?.[0]?.cols?.date;
             if (lastAlertedDate !== snapDate) {
