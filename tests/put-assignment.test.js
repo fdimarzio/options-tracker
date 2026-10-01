@@ -15,7 +15,11 @@ import {
   makeAssignmentEquityFP, addDaysToDateStr,
 } from "../api/auto-import.js";
 
-const autoImportSrc = fs.readFileSync(path.resolve("api/auto-import.js"), "utf8");
+// Normalize CRLF -> LF so source-text assertions that span lines (e.g. the `...equityTx,\n
+// contract_id` spread below) match regardless of the working copy's line endings. The repo
+// stores LF; a Windows checkout (autocrlf) has CRLF, which would otherwise break a literal
+// "\n" .toContain even though CI (LF) passes.
+const autoImportSrc = fs.readFileSync(path.resolve("api/auto-import.js"), "utf8").replace(/\r\n/g, "\n");
 
 function makePut(overrides = {}) {
   return {
@@ -272,8 +276,23 @@ describe("api/auto-import.js — wiring and P11 invariant", () => {
     expect(autoImportSrc).toContain("const allEquityTxs   = [...schwabEquityTxs, ...etradeEquityTxs];");
   });
 
-  it("the assignment-linked stock_transactions write reuses the real parsed equity transaction (contract_id added, not a synthetic row)", () => {
+  it("real-match path: the assignment-linked stock_transactions write reuses the real parsed equity transaction (spreads equityTx, adds contract_id — not a synthetic row)", () => {
+    // closeAndLinkOptionAssignment() runs when a real broker EQUITY trade matched the
+    // assignment: the parsed equityTx is reused as-is so account/symbol/qty/price/net_amount/
+    // dates/broker id all carry through, with only contract_id + a clearer description added.
     expect(autoImportSrc).toContain("...equityTx,\n    contract_id: option.id,");
+  });
+
+  it("inferred path: when there is NO broker equity trade (past-expiry ITM), handleAssignment synthesizes a fresh ASSIGNMENT row (no equityTx to reuse)", () => {
+    // The inferred fallback has no real broker transaction to spread — it computes the
+    // share event from the option itself — so it builds a fresh stock_transactions row
+    // tagged transaction_type: "ASSIGNMENT" rather than reusing an equityTx.
+    // handleAssignment() ends where the next top-level function begins
+    // (findAssignedOptionForEquityTx) — bound to that so the block doesn't bleed into
+    // closeAndLinkOptionAssignment (the real-match path, which DOES spread equityTx).
+    const handleAssignmentBlock = autoImportSrc.split("async function handleAssignment(")[1]?.split("function findAssignedOptionForEquityTx")[0] || "";
+    expect(handleAssignmentBlock).toContain('transaction_type: "ASSIGNMENT"');
+    expect(handleAssignmentBlock).not.toContain("...equityTx,");
   });
 
   it("dedup checks the composite fingerprint before attempting to match a put", () => {

@@ -495,9 +495,9 @@ describe("toOutcome — chase_log outcome vocabulary", () => {
 // does not.
 describe("chase_log wiring in api/chase-step.js", () => {
   const meaningfulBranches = [
-    ["filled (race-guard status check)", /reason: "filled".*\n.*await logChaseAction/],
+    ["filled (race-guard status check)", /await logChaseAction\(order, \{ fromPrice: order\.limit_price, toPrice: [^,]+, outcome: "filled"/],
     ["cancelled_at_broker",              /chase_status: "cancelled" \}\),\s*\n\s*\}\);\s*\n\s*await logChaseAction/],
-    ["partial_fill",                     /reason: "partial_fill".*\n.*await logChaseAction/],
+    ["partial_fill",                     /await logChaseAction\(order, \{ fromPrice: order\.limit_price, toPrice: order\.limit_price, outcome: "partial_fill"/],
     ["expired",                          /await logChaseAction\(order, \{ fromPrice: order\.limit_price, toPrice: order\.limit_price, outcome: toOutcome\("expired"/],
     ["guard_exit",                       /outcome: toOutcome\("guard_exit"/],
     ["guard_pause",                      /outcome: "rested", dryRun, stepNum, minIntervalSecs \}\);\s*\n\s*return \{ orderId: order\.id, action: "guard_pause"/],
