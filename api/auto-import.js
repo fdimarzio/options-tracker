@@ -309,19 +309,40 @@ function parseSchwabEquityTx(tx, accountNumber) {
     : null;
 
   let txType;
+  let equityItem; // the recognised security leg (EQUITY/ETF/MUTUAL_FUND) on a TRADE
   if (type === "TRADE") {
     // Equity buy or sell — must have a recognisable equity item
-    const equityItem = items.find(i => ["EQUITY","ETF","MUTUAL_FUND"].includes(i.instrument?.assetType));
-    if (!equityItem) return null;
+    equityItem = items.find(i => ["EQUITY","ETF","MUTUAL_FUND"].includes(i.instrument?.assetType));
+    if (!equityItem) {
+      // Was `return null`, which silently discarded the trade — that dropped the
+      // 2026-06-11 PANW/TKO/UPS sells. Surface it as an anomaly for manual review
+      // instead of losing it. Inserted into import_anomalies at the call site.
+      return {
+        _anomaly:              true,
+        anomaly_type:          "equity_trade_unparsed",
+        schwab_transaction_id: String(tx.activityId),
+        stock: null, type: null, opt_type: null, strike: null, expires: null,
+        qty: null, premium: null,
+        date_exec:             dateExec,
+        account:               accountNumber ? `Schwab ${String(accountNumber).slice(-4)}` : "Schwab",
+        notes:                 `Schwab TRADE with no EQUITY/ETF/MUTUAL_FUND item — not parsed (desc: ${desc || "n/a"})`,
+        raw:                   tx,
+      };
+    }
     txType = netAmt < 0 ? "BUY" : "SELL";
   } else {
     txType = SCHWAB_EQUITY_TYPE_MAP[type] ?? "OTHER";
   }
 
-  const equityItem = items.find(i => i.instrument?.symbol);
-  const symbol     = equityItem?.instrument?.symbol?.trim().toUpperCase() || null;
-  const quantity   = equityItem ? Math.abs(equityItem.amount || 0) || null : null;
-  const price      = equityItem?.price || (quantity && netAmt ? Math.round(Math.abs(netAmt / quantity) * 10000) / 10000 : null);
+  // Symbol/quantity/price come from the recognised security leg. On a TRADE that's
+  // `equityItem` above; previously this re-derived from the FIRST item carrying any
+  // symbol, which on a TRADE is the CURRENCY_USD cash leg — mislabeling 12 historical
+  // rows with the wrong symbol/quantity/price. For non-TRADE activity (dividends,
+  // transfers, …) there's no equity leg, so fall back to the first item with a symbol.
+  const secLeg   = equityItem || items.find(i => i.instrument?.symbol);
+  const symbol   = secLeg?.instrument?.symbol?.trim().toUpperCase() || null;
+  const quantity = secLeg ? Math.abs(secLeg.amount || 0) || null : null;
+  const price    = secLeg?.price || (quantity && netAmt ? Math.round(Math.abs(netAmt / quantity) * 10000) / 10000 : null);
 
   return {
     schwab_transaction_id: String(tx.activityId),
@@ -717,8 +738,10 @@ async function commitTx(parsed, matchId, openContracts, stocksData, committedClo
       await sbPatch("contracts", existingCloser.id, {
         qty:     newQty,
         premium: newPremium,
-        ...(profit    != null ? { profit }     : {}),
-        ...(profitPct != null ? { profit_pct: profitPct } : {}),
+        // profit/profit_pct deliberately NOT written to the closer row — realized P&L
+        // lives solely on the parent opener (patched just below). Writing it here is the
+        // double-count the 50-row backfill migration cleans up. close_date likewise stays
+        // null on the closer. Canonical rule: pri-tod-v3.jsx:4269 / `originals` at :4980.
         ...(daysHeld  != null ? { days_held: daysHeld }  : {}),
         notes: `${existingCloser.notes ? existingCloser.notes + "\n" : ""}Split fill merged: +${parsed.qty} @ $${parsed.premium} (tx: ${parsed.schwab_transaction_id})`,
       });
@@ -890,6 +913,12 @@ async function commitTx(parsed, matchId, openContracts, stocksData, committedClo
     settlement_date: parsed.settlement_date || null,
     account:  parsed.account,
     status:   ["BTC","STC","ASSIGNED"].includes(parsed.opt_type) ? "Closed" : "Open",
+    // Realized P&L and close_date live ONLY on the parent opener — stamped there when a
+    // closer matches it below. A freshly inserted row never carries them, and a BTC/STC
+    // closer must stay profit=null/close_date=null so it can't double-count in ad-hoc P&L
+    // queries. Canonical rule: see pri-tod-v3.jsx:4269 and the `originals` filter at :4980.
+    profit:     null,
+    close_date: null,
     price_at_execution: parsed.price_at_execution,
     exercised: parsed.exercised || "No",
     created_via: "Auto Import",
@@ -1299,6 +1328,7 @@ export default async function handler(req, res) {
     // ── Fetch Schwab ──────────────────────────────────────────────────────────
     const schwabTxs       = [];
     const schwabEquityTxs = [];
+    const schwabEquityAnomalies = []; // TRADEs with no recognised security leg (see parseSchwabEquityTx)
     try {
       const token    = await getValidToken();
       const accts    = await fetch(`${SCHWAB_BASE}/trader/v1/accounts/accountNumbers`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } }).then(r => r.json());
@@ -1319,7 +1349,8 @@ export default async function handler(req, res) {
             console.log("[auto-import] Schwab EXPIRY raw:", JSON.stringify({ type: tx.type, desc: tx.description, netAmount: tx.netAmount, items: tx.transferItems?.map(i => ({ effect: i.positionEffect, assetType: i.instrument?.assetType, symbol: i.instrument?.underlyingSymbol })) }));
           }
           const eq = parseSchwabEquityTx(tx, acct.accountNumber);
-          if (eq) schwabEquityTxs.push(eq);
+          if (eq?._anomaly) schwabEquityAnomalies.push(eq);
+          else if (eq) schwabEquityTxs.push(eq);
         });
       }
     } catch(e) { console.warn("[auto-import] Schwab fetch failed:", e.message); }
@@ -1402,6 +1433,12 @@ export default async function handler(req, res) {
     const committed       = [];
     const anomalies       = [];
     const committedClosers = {}; // tracks BTC/STC inserts for split fill merging
+
+    // Equity TRADEs with no recognised security leg were collected during the Schwab
+    // fetch above — surface them through the normal anomaly pipeline (saved to
+    // import_anomalies + Pushover) instead of silently dropping them. See
+    // parseSchwabEquityTx; this fixes the lost 2026-06-11 PANW/TKO/UPS sells.
+    if (schwabEquityAnomalies.length) anomalies.push(...schwabEquityAnomalies);
 
     for (const tx of allTxs) {
       // Handle EXPIRED — close the matching STO/BTO with full profit/loss
@@ -1829,4 +1866,5 @@ export {
   findAssignedPutForEquityBuy, findAssignedCallForEquitySell, findAssignedOptionForEquityTx,
   isPutPastExpiryITM, isCallPastExpiryITM, isOptionPastExpiryITM,
   buildAssignedOptionClosePatch, makeAssignmentEquityFP, addDaysToDateStr,
+  parseSchwabEquityTx,
 };
