@@ -7,6 +7,59 @@ bump-on-release process.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-01
+
+Bundles everything landed on `main` since v1.0.0 (2026-08-02): a watchdog for
+the scheduled-job ecosystem, the earnings-refresh move to Finnhub, snapshot-alert
+de-noising, covered-call/chase/LEAPS work merged from the feature branch, and the
+Schwab realized-G/L reconciliation fixes to the auto-importer.
+
+### Added
+- Watchdog (Phase 1 + 2a): a health monitor over the scheduled-job ecosystem —
+  flags stale/failed cron jobs and stale data, with per-job heartbeats for
+  chain-refresh, chase, and extend-etrade-token (plus checks and tests).
+- Covered-call assignment handling, chase-engine ETrade cancel routing, and
+  LEAPS long-term-cap-gains surfacing in the UI.
+- Earnings heads-up: a Pushover alert when a covered name's earnings is within
+  10 days.
+- Auto-import Pushover notifications now list the actual imported records
+  instead of a bare count.
+- Completed the `stock_transactions` ledger (resolves P11): ETrade equity flows
+  in guarded by account, plus FEE handling and a since-date backfill.
+- Chain-refresh and auto-STO universe is now derived from current holdings
+  rather than manual per-symbol flags.
+- ETrade failure-reason classification (token_expired / signature_invalid /
+  consumer_key_rejected) so outages are diagnosable.
+
+### Changed
+- earnings-refresh: switched from the (now fully gated) FMP calendar to
+  Finnhub's free earnings calendar, queried per-symbol.
+- Trimmed `market-refresh.yml` to only what cron-jobs.org doesn't cover and
+  removed a redundant GitHub Actions option-snapshot purge.
+
+### Fixed
+- The recurring ~6am "Portfolio snapshot stale" false alarm: suppress the
+  expected morning ETrade-stale window, and stop the prior-snapshot lookup from
+  re-reading today's own just-written row on morning re-runs.
+- earnings-refresh silently no-op'd on a dead FMP endpoint; added a fail-loud
+  guard.
+- LEAP-protection alert spam (dedup + logging + cooldown-rule coverage); LEAP
+  threshold corrected to ≥365 DTE and `entry_dte` always populated on import.
+- ETrade snapshot freeze: stale-baseline outlier guard + balance NAV fallback,
+  and stray/empty accounts no longer stale the whole snapshot.
+- Idempotent `portfolio_snapshots` upsert + `trade_orders` open_method
+  detection.
+- auto-import equity parser attributed the wrong symbol (CURRENCY_USD cash leg
+  instead of the security) on Schwab TRADEs; 12 historical rows corrected.
+- auto-import silently dropped equity TRADEs with no recognized security item
+  (lost the 2026-06-11 PANW/TKO/UPS sells); now logged to import_anomalies.
+- BTC/STC closer rows no longer carry realized profit/close_date — P&L lives
+  solely on the parent opener, preventing double-counts in ad-hoc queries.
+
+### Data
+- Backfilled 3 missing Schwab sells (2026-06-11); relabeled 7 CURRENCY_USD
+  rows; nulled profit on 50 historical closer rows.
+
 ## [1.0.0] - 2026-08-02
 
 Baseline release — bundles the fixes and features shipped 2026-08-01 through
