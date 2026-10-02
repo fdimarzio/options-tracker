@@ -2068,6 +2068,20 @@ export default async function handler(req, res) {
           const suggDedupKey = buildNotificationDedupKey({ symbol, account });
           if (isWithinCooldown(notificationLogByKey[makeNotificationLogLookupKey(suggDedupKey, "sto_suggestion")], cooldownMinutes)) continue;
 
+          // After-hours / weekend gate: only PUSH suggestions during market hours on a
+          // weekday. The quotes they're built from go stale after the 4pm ET close, so
+          // pushing then is just noise (AMD pushed 13:25/14:25/15:25/16:25 ET — only the
+          // 13:25 was on a live quote). This block, unlike the auto-order scanner below,
+          // was never inside the isMarketOpen gate. Nothing trades off-hours regardless —
+          // the auto-order block has its own market-hours gate — so this is notification
+          // noise only. Still log the signal (pushed:false) for analytics, matching the
+          // momentum/earnings suppressors above.
+          const etDow = etNow.getDay();
+          if (!isMarketOpen || etDow === 0 || etDow === 6) {
+            await logSignal({ signal_type: "sto_suggestion", symbol, account, stock_price: stockPrice, change_pct: changePct, vix, time_of_day: etNow.toTimeString().slice(0, 8), day_of_week: etDow, suggested_qty: suggestQty, rule_id: rule?.id ?? null, pushed: false, notes: "after-hours/weekend suppressed" });
+            continue;
+          }
+
           const sign  = changePct >= 0 ? "+" : "";
           const title = `💡 STO Opportunity — ${symbol} (${account})`;
           const lines = [
