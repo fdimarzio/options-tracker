@@ -1,0 +1,5 @@
+# Normalize line endings: store all text files as LF in the repo and check them out
+# as LF on every platform. Root fix for the CRLF-vs-LF brittleness that made
+# source-text tests falsely fail on Windows working copies (the "main is red" phantom —
+# see the v1.1.0 green-main work). Git auto-detects binary files and leaves them alone.
+* text=auto eol=lf
