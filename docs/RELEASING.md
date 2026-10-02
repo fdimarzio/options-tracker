@@ -41,10 +41,19 @@ stable to refer to, not to signal compatibility to external consumers.
    (if you've been logging them there as you go) or write the entries now,
    under a new `## [X.Y.Z] - YYYY-MM-DD` heading. Keep-a-Changelog format —
    group under `Added` / `Changed` / `Fixed` / `Removed` as needed.
-4. Bump `"version"` in `package.json` to match.
-5. Commit both together:
+4. Bump `"version"` in `package.json` to match, then regenerate
+   `public/version.json` so the committed file stays in sync:
    ```
-   git add package.json CHANGELOG.md
+   node scripts/stamp-version.js
+   ```
+   CI runs `npm test` (just `test:unit`, which does **not** re-stamp), and
+   `tests/version.test.js` asserts `public/version.json.version` equals
+   `package.json`'s version — so a bump committed without the regenerated
+   `public/version.json` turns CI red. (The production build is safe either way
+   now — see step 8 — but keep the committed file in sync.)
+5. Commit all three together:
+   ```
+   git add package.json public/version.json CHANGELOG.md
    git commit -m "chore: release vX.Y.Z"
    git push origin main
    ```
@@ -57,10 +66,15 @@ stable to refer to, not to signal compatibility to external consumers.
    --notes-file <(sed -n '/## \[X.Y.Z\]/,/## \[/p' CHANGELOG.md)` or just
    paste the same changelog section into the GitHub UI) — gives the tag a
    visible page and makes `git log`/GitHub's release list line up.
-8. The version now shows in the app's menu footer (`v1.0.0`) after the next
-   build picks up `public/version.json` — that file is regenerated from
-   `package.json` at build time by `scripts/stamp-version.js`, wired into
-   `npm run build`. No manual step needed beyond the version bump in step 4.
+8. The version shows in the app's menu footer (`v1.0.0`) once the next build
+   picks up `public/version.json`, which `scripts/stamp-version.js` regenerates
+   from `package.json`. The `build` script runs that stamp **before**
+   `test:unit` (`stamp-version → test:unit → vite build`), so bumping the
+   version can never fail the production build on a stale `public/version.json`
+   — the regression that broke the first v1.1.0 deploy, when `test:unit` ran
+   first and `version.test.js` tripped on the not-yet-stamped file. The commit
+   in step 5 still includes the regenerated `public/version.json` so CI (which
+   runs `test:unit` on its own, without stamping) stays green too.
 
 ## Rolling back a release
 
