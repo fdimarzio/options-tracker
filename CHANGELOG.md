@@ -7,6 +7,21 @@ bump-on-release process.
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-10-01
+
+### Fixed
+- STO-suggestion notifications ("💡 STO Opportunity") no longer push after the
+  4pm ET close or on weekends. The push sat outside the market-hours gate and
+  fired on stale post-close quotes (e.g. AMD at 13:25/14:25/15:25/16:25 ET —
+  only the first on a live quote); it's now gated to market hours on a weekday.
+  The auto-order path was already gated, so nothing traded off-hours — this was
+  notification noise only.
+- Release build ordering: `npm run build` now runs `stamp-version` before
+  `test:unit` (was the reverse), so bumping the app version no longer fails the
+  production build on a not-yet-regenerated `public/version.json` — the
+  regression that broke the first v1.1.0 deploy. `docs/RELEASING.md` updated to
+  regenerate and commit `public/version.json` alongside each version bump.
+
 ## [1.1.0] - 2026-10-01
 
 Bundles everything landed on `main` since v1.0.0 (2026-08-02): a watchdog for
