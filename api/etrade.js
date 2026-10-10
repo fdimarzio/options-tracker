@@ -271,14 +271,13 @@ export default async function handler(req, res) {
 
     // ── Auth step 1 ───────────────────────────────────────────────────────────
     if (action === "auth") {
-      const callbackUrl = `${APP_URL}/api/etrade?action=callback`;
       const url = `${ETRADE_BASE}/oauth/request_token`;
       const oauthParams = {
         oauth_consumer_key:     CONSUMER_KEY,
         oauth_signature_method: "HMAC-SHA1",
         oauth_timestamp:        Math.floor(Date.now() / 1000).toString(),
         oauth_nonce:            crypto.randomBytes(16).toString("hex"),
-        oauth_callback:         callbackUrl,
+        oauth_callback:         "oob",
       };
       const paramString = Object.keys(oauthParams).sort()
         .map(k => `${pctEncode(k)}=${pctEncode(oauthParams[k])}`).join("&");
@@ -307,21 +306,17 @@ export default async function handler(req, res) {
           <h2 style="color:#4fc3f7">ETrade Authorization</h2>
           <p>1. Click the link below to authorize on ETrade:</p>
           <p><a href="${authorizeUrl}" style="color:#00ff88;font-size:14px">${authorizeUrl}</a></p>
-          <p style="margin-top:16px;color:#58a6ff">After you click <strong>Accept</strong> on ETrade, you'll be redirected back here automatically.</p>
-          <details style="margin-top:24px;color:#3a4050">
-            <summary style="cursor:pointer;color:#555">Manual fallback (if redirect doesn't work)</summary>
-            <p style="margin-top:8px;color:#e6edf3">If ETrade shows a verifier code instead of redirecting, paste it below:</p>
-            <form method="GET" action="/api/etrade" style="margin-top:8px">
-              <input type="hidden" name="action" value="callback" />
-              <input type="hidden" name="oauth_token" value="${requestToken}" />
-              <input name="oauth_verifier" placeholder="Paste verifier code here"
-                style="background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:8px 12px;font-family:monospace;font-size:14px;width:300px" />
-              <button type="submit"
-                style="margin-left:8px;background:#00ff88;color:#010409;border:none;border-radius:4px;padding:8px 16px;font-family:monospace;font-weight:700;cursor:pointer">
-                Connect →
-              </button>
-            </form>
-          </details>
+          <p>2. After accepting, paste the verifier code below:</p>
+          <form method="GET" action="/api/etrade" style="margin-top:8px">
+            <input type="hidden" name="action" value="callback" />
+            <input type="hidden" name="oauth_token" value="${requestToken}" />
+            <input name="oauth_verifier" placeholder="Paste verifier code here"
+              style="background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:8px 12px;font-family:monospace;font-size:14px;width:300px" />
+            <button type="submit"
+              style="margin-left:8px;background:#00ff88;color:#010409;border:none;border-radius:4px;padding:8px 16px;font-family:monospace;font-weight:700;cursor:pointer">
+              Connect →
+            </button>
+          </form>
         </body></html>
       `);
     }
