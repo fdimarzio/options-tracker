@@ -76,12 +76,19 @@ async function automateETradeAuth(authorizeUrl) {
 
   const browser = await chromium.launch({
     headless: !HEADED,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-blink-features=AutomationControlled",
+    ],
   });
 
   const context = await browser.newContext({
-    userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     viewport: { width: 1280, height: 800 },
+    extraHTTPHeaders: {
+      "Accept-Language": "en-US,en;q=0.9",
+    },
   });
 
   const page = await context.newPage();
@@ -89,7 +96,7 @@ async function automateETradeAuth(authorizeUrl) {
   try {
     // Navigate to ETrade authorize page
     log("Step 3: Navigating to ETrade authorize page...");
-    await page.goto(authorizeUrl, { waitUntil: "networkidle", timeout: 30000 });
+    await page.goto(authorizeUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
     await screenshot(page, "01-authorize-page");
 
     // Check if we need to log in
@@ -113,7 +120,7 @@ async function automateETradeAuth(authorizeUrl) {
       await loginBtn.click();
 
       // Wait for navigation after login
-      await page.waitForLoadState("networkidle", { timeout: 30000 });
+      await page.waitForLoadState("domcontentloaded", { timeout: 30000 });
       await screenshot(page, "03-after-login");
 
       // Check for security question / 2FA
@@ -147,7 +154,7 @@ async function automateETradeAuth(authorizeUrl) {
     log("  Clicked Accept");
 
     // Wait for the verifier code page
-    await page.waitForLoadState("networkidle", { timeout: 15000 });
+    await page.waitForLoadState("domcontentloaded", { timeout: 15000 });
     await screenshot(page, "05-verifier-page");
 
     // Read the verifier code — ETrade shows it on the page after accepting
