@@ -7,6 +7,35 @@ bump-on-release process.
 
 ## [Unreleased]
 
+### Added
+- Automatic monthly broker reconciliation (Phase 1). A new scheduled job
+  (`scripts/monthly-reconcile.js`, `.github/workflows/monthly-reconcile.yml`)
+  reconciles the app's records against BOTH Schwab and ETrade across ALL
+  transaction types the app stores, so reconciliation no longer has to be
+  remembered and run by hand — it alerts (Pushover) only when something doesn't
+  tie, and stays quiet when everything reconciles cleanly (watchdog-style
+  transition-only alerting, deduped via `col_prefs` id `monthly_reconcile_state`).
+  Each run writes a `reconciliation_runs` history row (`sql/reconciliation_runs.sql`,
+  apply manually) and an `ecosystem_heartbeat` so the Watchdog can see it ran.
+  - New broker- and transaction-type-agnostic reconciliation engine
+    (`api/_lib/reconcileEngine.js`) generalizing the two prior one-off reconcilers
+    (`reconcile.cjs` Schwab-options-only; `scripts/reconcile-statements.js`
+    Schwab-equity-only): normalizes app + broker records, matches by broker txn
+    id / exact key / amount-tolerant fuzzy key, and classifies statement-only /
+    app-only / amount-mismatch discrepancies, with a diff against the previously
+    reconciled state. Fully unit-tested (`tests/reconcile-engine.test.js`).
+  - Closes the ETrade gap: statement discovery now walks every `statements/etrade-*`
+    account folder (the old path looked only for a single `statements/etrade`
+    that never existed, so ETrade went entirely unreconciled).
+  - Identify-only by design: the job never modifies transaction/contract history
+    to force a balance, never touches broker credentials/tokens, and never
+    places or modifies a trade. Enforced by `tests/monthly-reconcile-wiring.test.js`.
+  - Note for review: the per-broker statement-line regexes in
+    `extractStatementTxns` are heuristic (same caveat the original carried) and
+    should be validated against a real Schwab/ETrade statement before each
+    broker's reconciliation is fully trusted; until then an unrecognized
+    statement format surfaces a coverage gap rather than a false "clean".
+
 ## [1.1.1] - 2026-10-01
 
 ### Fixed
