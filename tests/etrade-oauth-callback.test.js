@@ -9,29 +9,17 @@ const etradeSrc = readFileSync(resolve(__dirname, "../api/etrade.js"), "utf-8");
 const watchdogSrc = readFileSync(resolve(__dirname, "../scripts/watchdog.js"), "utf-8");
 const ddlSrc = readFileSync(resolve(__dirname, "../sql/etrade_auth_log.sql"), "utf-8");
 
-describe("ETrade OAuth callback redirect", () => {
-  it("uses a real callback URL instead of oob", () => {
-    // The oauth_callback should point to the app's callback endpoint
-    expect(etradeSrc).toContain('oauth_callback:         callbackUrl');
-    expect(etradeSrc).toContain("const callbackUrl = `${APP_URL}/api/etrade?action=callback`");
-    // Should NOT contain the old oob callback
-    expect(etradeSrc).not.toContain('oauth_callback:         "oob"');
+describe("ETrade OAuth auth flow", () => {
+  it("uses oob callback (ETrade rejects custom callback URLs)", () => {
+    expect(etradeSrc).toContain('oauth_callback:         "oob"');
   });
 
-  it("still has a manual fallback paste form", () => {
-    // The auth page should have a fallback for manual verifier entry
-    expect(etradeSrc).toContain("Manual fallback");
+  it("has a verifier paste form", () => {
     expect(etradeSrc).toContain('name="oauth_verifier"');
     expect(etradeSrc).toContain("Paste verifier code here");
   });
 
-  it("tells the user about automatic redirect", () => {
-    expect(etradeSrc).toContain("redirected back here automatically");
-  });
-
-  it("callback handler reads oauth_verifier from query params (works for both redirect and manual)", () => {
-    // The existing callback handler already reads from req.query, so it handles
-    // both ETrade redirect (?action=callback&oauth_verifier=X) and the manual form
+  it("callback handler reads oauth_verifier from query params", () => {
     expect(etradeSrc).toContain("oauth_verifier: oauthVerifier");
     expect(etradeSrc).toContain("req.query");
   });
