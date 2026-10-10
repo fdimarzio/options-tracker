@@ -48,6 +48,24 @@ async function rowFresh(table, tsCol, maxAgeMin) {
   return { ok: true, detail: `fresh ${Math.round(ageMin)}m` };
 }
 
+// ETrade auth health: last successful callback or renew within maxAgeMin.
+// Falls back gracefully if the etrade_auth_log table doesn't exist yet (returns ok).
+async function etradeAuthHealthy(maxAgeMin) {
+  try {
+    const rows = await sbGet(
+      `etrade_auth_log?select=action,success,created_at&success=eq.true&action=in.(callback,renew)&order=created_at.desc&limit=1`
+    );
+    if (!rows || !rows.length) return { ok: false, detail: "no successful ETrade auth ever logged" };
+    const ageMin = (Date.now() - new Date(rows[0].created_at).getTime()) / MIN;
+    if (ageMin > maxAgeMin) return { ok: false, detail: `last successful auth ${Math.round(ageMin)}m ago (SLA ${maxAgeMin}m)` };
+    return { ok: true, detail: `${rows[0].action} ${Math.round(ageMin)}m ago` };
+  } catch (e) {
+    // Table may not exist yet (DDL not applied) — don't fail the watchdog
+    if (e.message?.includes("404") || e.message?.includes("42P01")) return { ok: true, detail: "auth_log table not yet created" };
+    return { ok: false, detail: `auth check error: ${e.message}` };
+  }
+}
+
 // A table's newest DATE column is within maxAgeDays.
 async function dateFresh(table, dateCol, maxAgeDays) {
   const rows = await sbGet(`${table}?select=${dateCol}&order=${dateCol}.desc&limit=1`);
@@ -68,6 +86,7 @@ const CHECKS = [
   { name: "cron: chain-refresh",               sev: "critical", marketHoursOnly: true,  run: () => heartbeatFresh("chain-refresh", 30) },
   { name: "cron: chase",                        sev: "warning",  marketHoursOnly: true,  run: () => heartbeatFresh("chase", 30) },
   { name: "job: extend-etrade-token",          sev: "warning",  marketHoursOnly: false, run: () => heartbeatFresh("extend-etrade-token", 26 * 60) },
+  { name: "auth: etrade-auth-health",          sev: "critical", marketHoursOnly: false, run: () => etradeAuthHealthy(26 * 60) },
 ];
 
 async function notify(title, message, priority = 0) {

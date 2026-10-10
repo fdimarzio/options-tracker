@@ -212,6 +212,22 @@ function parseTx(tx) {
   };
 }
 
+// ── Auth logging ─────────────────────────────────────────────────────────────
+async function logAuthAttempt({ action, success, errorReason = null, tokenExpiry = null }) {
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/etrade_auth_log`, {
+      method: "POST",
+      headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+      body: JSON.stringify({
+        action,
+        success,
+        error_reason: errorReason ? String(errorReason).slice(0, 500) : null,
+        token_expiry: tokenExpiry,
+      }),
+    });
+  } catch (e) { console.warn("[etrade auth log] write failed:", e.message); }
+}
+
 // ── Handler ───────────────────────────────────────────────────────────────────
 async function notifyReauth(message) {
   const token = process.env.PUSHOVER_API_TOKEN;
@@ -255,13 +271,14 @@ export default async function handler(req, res) {
 
     // ── Auth step 1 ───────────────────────────────────────────────────────────
     if (action === "auth") {
+      const callbackUrl = `${APP_URL}/api/etrade?action=callback`;
       const url = `${ETRADE_BASE}/oauth/request_token`;
       const oauthParams = {
         oauth_consumer_key:     CONSUMER_KEY,
         oauth_signature_method: "HMAC-SHA1",
         oauth_timestamp:        Math.floor(Date.now() / 1000).toString(),
         oauth_nonce:            crypto.randomBytes(16).toString("hex"),
-        oauth_callback:         "oob",
+        oauth_callback:         callbackUrl,
       };
       const paramString = Object.keys(oauthParams).sort()
         .map(k => `${pctEncode(k)}=${pctEncode(oauthParams[k])}`).join("&");
@@ -283,23 +300,28 @@ export default async function handler(req, res) {
       if (!requestToken) return res.status(500).send(`<pre>No oauth_token in response:\n${authBody}</pre>`);
 
       await saveTokens({ requestToken, requestTokenSecret: requestSecret, stage: "pending" });
+      await logAuthAttempt({ action: "auth_start", success: true });
       const authorizeUrl = `https://us.etrade.com/e/t/etws/authorize?key=${CONSUMER_KEY}&token=${requestToken}`;
       return res.status(200).send(`
         <html><body style="font-family:monospace;background:#0d1117;color:#e6edf3;padding:40px;max-width:600px">
           <h2 style="color:#4fc3f7">ETrade Authorization</h2>
           <p>1. Click the link below to authorize on ETrade:</p>
-          <p><a href="${authorizeUrl}" target="_blank" style="color:#00ff88;font-size:14px">${authorizeUrl}</a></p>
-          <p style="margin-top:20px">2. ETrade will show you a <strong style="color:#ffd166">verifier code</strong>. Paste it below:</p>
-          <form method="GET" action="/api/etrade" style="margin-top:12px">
-            <input type="hidden" name="action" value="callback" />
-            <input type="hidden" name="oauth_token" value="${requestToken}" />
-            <input name="oauth_verifier" placeholder="Paste verifier code here"
-              style="background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:8px 12px;font-family:monospace;font-size:14px;width:300px" />
-            <button type="submit"
-              style="margin-left:8px;background:#00ff88;color:#010409;border:none;border-radius:4px;padding:8px 16px;font-family:monospace;font-weight:700;cursor:pointer">
-              Connect →
-            </button>
-          </form>
+          <p><a href="${authorizeUrl}" style="color:#00ff88;font-size:14px">${authorizeUrl}</a></p>
+          <p style="margin-top:16px;color:#58a6ff">After you click <strong>Accept</strong> on ETrade, you'll be redirected back here automatically.</p>
+          <details style="margin-top:24px;color:#3a4050">
+            <summary style="cursor:pointer;color:#555">Manual fallback (if redirect doesn't work)</summary>
+            <p style="margin-top:8px;color:#e6edf3">If ETrade shows a verifier code instead of redirecting, paste it below:</p>
+            <form method="GET" action="/api/etrade" style="margin-top:8px">
+              <input type="hidden" name="action" value="callback" />
+              <input type="hidden" name="oauth_token" value="${requestToken}" />
+              <input name="oauth_verifier" placeholder="Paste verifier code here"
+                style="background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:8px 12px;font-family:monospace;font-size:14px;width:300px" />
+              <button type="submit"
+                style="margin-left:8px;background:#00ff88;color:#010409;border:none;border-radius:4px;padding:8px 16px;font-family:monospace;font-weight:700;cursor:pointer">
+                Connect →
+              </button>
+            </form>
+          </details>
         </body></html>
       `);
     }
@@ -340,18 +362,29 @@ export default async function handler(req, res) {
       const ar         = await fetch(url, { headers: { Authorization: authHeader, Accept: "application/x-www-form-urlencoded" } });
       const accessBody = await ar.text();
       if (!ar.ok || accessBody.startsWith("<")) {
+        await logAuthAttempt({ action: "callback", success: false, errorReason: `access_token exchange failed (${ar.status}): ${accessBody.slice(0, 200)}` });
         return res.status(500).send(`<pre>Failed to get access token (${ar.status}):\n${accessBody}</pre>`);
       }
       const params       = new URLSearchParams(accessBody);
       const accessToken  = params.get("oauth_token");
       const accessSecret = params.get("oauth_token_secret");
-      if (!accessToken) return res.status(500).send(`<pre>No access token:\n${accessBody}</pre>`);
+      if (!accessToken) {
+        await logAuthAttempt({ action: "callback", success: false, errorReason: `No access token in response: ${accessBody.slice(0, 200)}` });
+        return res.status(500).send(`<pre>No access token:\n${accessBody}</pre>`);
+      }
+
+      // ETrade OAuth 1.0a tokens expire at midnight ET
+      const nowET = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
+      const midnightET = new Date(nowET);
+      midnightET.setHours(24, 0, 0, 0);
+      const tokenExpiry = new Date(midnightET.getTime() - (nowET.getTime() - Date.now())).toISOString();
 
       await saveTokens({ accessToken, accessTokenSecret: accessSecret, stage: "authorized" });
+      await logAuthAttempt({ action: "callback", success: true, tokenExpiry });
       return res.status(200).send(`
         <html><body style="font-family:monospace;background:#0d1117;color:#00ff88;padding:40px">
           <h2>✓ ETrade Connected Successfully</h2>
-          <p>Tokens saved to Supabase.</p>
+          <p>Tokens saved to Supabase. Expires ~midnight ET.</p>
           <a href="/" style="color:#58a6ff">← Back to App</a>
         </body></html>
       `);
@@ -373,6 +406,7 @@ export default async function handler(req, res) {
 
       if (!sameDay) {
         // Token is from a previous day — must fully re-authorize
+        await logAuthAttempt({ action: "renew", success: false, errorReason: "token_expired (previous day)" });
         await notifyReauth("ETrade token expired (previous day) — manual re-auth required");
         return res.status(401).json({
           error: "ETrade token expired — re-authorize at /api/etrade?action=auth",
@@ -389,6 +423,7 @@ export default async function handler(req, res) {
       const renewText   = await renewRes.text();
       if (!renewRes.ok) {
         const reason = classifyEtradeError(renewRes, renewText);
+        await logAuthAttempt({ action: "renew", success: false, errorReason: `${reason} (${renewRes.status})` });
         // Ecosystem heartbeat (same upsert shape as market-refresh.js)
         try {
           const nowHb = new Date().toISOString();
@@ -402,6 +437,10 @@ export default async function handler(req, res) {
       }
       // ETrade returns "Access Token has been renewed" on success
       const renewed  = { ...t, renewedAt: new Date().toISOString() };
+      // Token good until midnight ET
+      const midnightET2 = new Date(new Date(nowET).setHours(24, 0, 0, 0));
+      const tokenExpiry = new Date(midnightET2.getTime() - (nowET.getTime() - Date.now())).toISOString();
+      await logAuthAttempt({ action: "renew", success: true, tokenExpiry });
 
       await fetch(`${SUPABASE_URL}/rest/v1/col_prefs`, {
         method: "POST",
