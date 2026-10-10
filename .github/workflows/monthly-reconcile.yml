@@ -1,0 +1,39 @@
+name: Monthly Broker Reconciliation
+
+on:
+  schedule:
+    # 2nd of each month, 13:20 UTC (~9:20am ET) — a couple of days in so the
+    # prior month's broker statements have posted. Off the :00/:30 marks on
+    # purpose. Reconciles the just-finished calendar month by default.
+    - cron: '20 13 2 * *'
+  workflow_dispatch:
+    inputs:
+      month:
+        description: 'Month to reconcile (YYYY-MM). Blank = previous calendar month.'
+        required: false
+        default: ''
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Run monthly reconciliation
+        env:
+          VITE_SUPABASE_URL: https://ufagnokxmetushstgrip.supabase.co
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
+          PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
+        run: |
+          if [ -n "${{ github.event.inputs.month }}" ]; then
+            node scripts/monthly-reconcile.js --month=${{ github.event.inputs.month }}
+          else
+            node scripts/monthly-reconcile.js
+          fi
