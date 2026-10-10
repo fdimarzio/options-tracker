@@ -18,10 +18,11 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install Playwright
-        run: |
-          npm install playwright
-          npx playwright install chromium --with-deps
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
 
       - name: Run ETrade auto-auth
         env:

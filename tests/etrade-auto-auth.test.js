@@ -22,7 +22,7 @@ describe("ETrade auto-auth script", () => {
   });
 
   it("uses Playwright chromium", () => {
-    expect(scriptSrc).toContain('from "playwright"');
+    expect(scriptSrc).toContain('from "@playwright/test"');
     expect(scriptSrc).toContain("chromium.launch");
   });
 
@@ -90,7 +90,7 @@ describe("ETrade auto-auth workflow", () => {
   });
 
   it("installs Playwright", () => {
-    expect(workflowSrc).toContain("playwright install chromium");
+    expect(workflowSrc).toContain("playwright install");
   });
 
   it("passes required secrets as env vars", () => {

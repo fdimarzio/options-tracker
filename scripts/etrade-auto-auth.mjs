@@ -20,7 +20,7 @@
 //   node scripts/etrade-auto-auth.mjs
 //   node scripts/etrade-auto-auth.mjs --headed    # visible browser for debugging
 
-import { chromium } from "playwright";
+import { chromium } from "@playwright/test";
 
 const APP_URL         = process.env.APP_URL || "https://options-tracker-five.vercel.app";
 const ETRADE_USERNAME = process.env.ETRADE_WEB_USERNAME;
