@@ -305,7 +305,7 @@ export default async function handler(req, res) {
         <html><body style="font-family:monospace;background:#0d1117;color:#e6edf3;padding:40px;max-width:600px">
           <h2 style="color:#4fc3f7">ETrade Authorization</h2>
           <p>1. Click the link below to authorize on ETrade:</p>
-          <p><a href="${authorizeUrl}" style="color:#00ff88;font-size:14px">${authorizeUrl}</a></p>
+          <p><a href="${authorizeUrl}" target="_blank" style="color:#00ff88;font-size:14px">${authorizeUrl}</a></p>
           <p>2. After accepting, paste the verifier code below:</p>
           <form method="GET" action="/api/etrade" style="margin-top:8px">
             <input type="hidden" name="action" value="callback" />
