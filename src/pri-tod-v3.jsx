@@ -4,6 +4,7 @@ import { BarChart, Bar, ComposedChart, LineChart, Line, XAxis, YAxis, CartesianG
 import { createClient } from "@supabase/supabase-js";
 import { computeClosePnl } from "./lib/pnl.js";
 import { computeOrigDte, isLeapOrigDte } from "./lib/leapGuard.js";
+import { computeAnnualizedReturn } from "./lib/annualizedReturn.js";
 
 // ── Supabase client ───────────────────────────────────────────────────────────
 const supabase = createClient(
@@ -313,6 +314,73 @@ const KPI = ({label,value,sub,color="#00ff88"}) => (
     {sub && <div style={{fontSize:8,color:th("#2a3040","#6b5f55"),marginTop:1,fontFamily:"monospace"}}>{sub}</div>}
   </div>
 );
+// Annualized YTD portfolio return (withdrawal/deposit-aware) + the options strategy's
+// contribution, with a transparent breakdown so the numbers can be audited at a glance.
+// `data` is the output of computeAnnualizedReturn (see src/lib/annualizedReturn.js).
+const AnnualizedReturnCard = ({ data }) => {
+  const fPct = (v) => (v == null ? "—" : (v >= 0 ? "+" : "") + (v * 100).toFixed(1) + "%");
+  const pctColor = (v) => (v == null ? th("#3a4050", "#8a7e74") : v > 0 ? "#00ff88" : v < 0 ? "#ff4560" : th("#3a4050", "#8a7e74"));
+  const Row = ({ label, value, color }) => (
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "2px 0" }}>
+      <span style={{ fontSize: 9, color: th("#3a4050", "#8a7e74"), fontFamily: "monospace" }}>{label}</span>
+      <span style={{ fontSize: 10, color: color || th("#c9d1d9", "#1a1a18"), fontFamily: "monospace" }}>{value}</span>
+    </div>
+  );
+  if (!data || !data.ok) {
+    return (
+      <div style={{ background: th("#0a0e14", "#f8f3eb"), border: "1px solid #ff9f1c25", borderRadius: 8, padding: "10px 14px" }}>
+        <div style={{ fontFamily: "monospace", fontSize: 8, color: "#ff9f1c", letterSpacing: "0.08em", marginBottom: 6 }}>📈 ANNUALIZED RETURN (YTD)</div>
+        <div style={{ fontSize: 11, color: th("#c9d1d9", "#1a1a18"), fontFamily: "monospace", lineHeight: 1.5 }}>
+          Not enough data to compute a trustworthy return.
+        </div>
+        {data?.gaps?.length > 0 && (
+          <ul style={{ margin: "6px 0 0", paddingLeft: 16 }}>
+            {data.gaps.map((g, i) => (
+              <li key={i} style={{ fontSize: 9, color: th("#3a4050", "#8a7e74"), fontFamily: "monospace", marginBottom: 2 }}>{g}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  }
+  const d = data;
+  return (
+    <div style={{ background: th("#0a0e14", "#f8f3eb"), border: "1px solid #00ff8815", borderRadius: 8, padding: "10px 14px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
+        <div style={{ fontFamily: "monospace", fontSize: 8, color: "#ff9f1c", letterSpacing: "0.08em" }}>📈 ANNUALIZED RETURN (YTD) — {d.year}</div>
+        <div style={{ fontFamily: "monospace", fontSize: 7, color: th("#2a3040", "#6b5f55") }}>withdrawal-aware · {d.daysElapsed}d</div>
+      </div>
+      <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginBottom: 10 }}>
+        <div>
+          <div style={{ fontSize: 7, color: th("#3a4050", "#8a7e74"), fontFamily: "monospace", letterSpacing: "0.06em" }}>PORTFOLIO ANNUALIZED</div>
+          <div style={{ fontSize: 24, fontWeight: 700, color: pctColor(d.annualizedReturn), fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.1 }}>{fPct(d.annualizedReturn)}</div>
+          <div style={{ fontSize: 8, color: th("#2a3040", "#6b5f55"), fontFamily: "monospace" }}>{fPct(d.ytdReturn)} YTD actual</div>
+        </div>
+        <div>
+          <div style={{ fontSize: 7, color: th("#3a4050", "#8a7e74"), fontFamily: "monospace", letterSpacing: "0.06em" }}>OPTIONS ANNUALIZED</div>
+          <div style={{ fontSize: 24, fontWeight: 700, color: pctColor(d.optionsAnnualized), fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.1 }}>{fPct(d.optionsAnnualized)}</div>
+          <div style={{ fontSize: 8, color: th("#2a3040", "#6b5f55"), fontFamily: "monospace" }}>{fPct(d.optionsReturnYTD)} YTD · of portfolio capital</div>
+        </div>
+      </div>
+      <div style={{ borderTop: "1px solid #1c2128", paddingTop: 6 }}>
+        <div style={{ fontSize: 7, color: th("#2a3040", "#6b5f55"), fontFamily: "monospace", letterSpacing: "0.06em", marginBottom: 3 }}>HOW IT'S CALCULATED</div>
+        <Row label={`Starting value${d.startFromYearOpen ? " (Jan 1)" : " (" + d.startMonth + ")"}`} value={f$0(d.startValue)} />
+        {d.deposits > 0 && <Row label="+ Deposits" value={f$0(d.deposits)} color="#58a6ff" />}
+        {d.withdrawals > 0 && <Row label="− Withdrawals / distributions" value={f$0(d.withdrawals)} color="#ff4560" />}
+        <Row label="Realized options P&L" value={fSign0(d.optionsProfitYTD)} color={d.optionsProfitYTD >= 0 ? "#00ff88" : "#ff4560"} />
+        <Row label="Current / ending value" value={f$0(d.endValue)} />
+        <Row label="Investment gain (ex-cash-flows)" value={fSign0(d.gain)} color={d.gain >= 0 ? "#00ff88" : "#ff4560"} />
+      </div>
+      {d.gaps?.length > 0 && (
+        <ul style={{ margin: "6px 0 0", paddingLeft: 16 }}>
+          {d.gaps.map((g, i) => (
+            <li key={i} style={{ fontSize: 8, color: "#ff9f1c", fontFamily: "monospace", marginBottom: 2 }}>{g}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+};
 const FL = ({children,req}) => (
   <div style={{fontSize:9,color:"#4a5568",fontFamily:"monospace",marginBottom:3,textTransform:"uppercase",letterSpacing:"0.06em"}}>
     {children}{req && <span style={{color:"#ff4560",marginLeft:2}}>*</span>}
@@ -5697,6 +5765,24 @@ export default function App() {
   const profitYTD = profitDateMode === "accounting"
     ? accountingByPeriod(allF, thisYear)
     : closedC.filter(c=>profitDateField(c)?.startsWith(thisYear)).reduce((s,c)=>s+(c.profit||0),0);
+  // ── Annualized YTD portfolio return (withdrawal/deposit-aware). Shown on Dashboard and
+  // Analytics. Pulls month-end totals + cash flows (distrib = withdrawals, deposit =
+  // contributions) from balance_history, and realized options P&L from profitYTD. ──────
+  const annualizedReturnData = (() => {
+    const yr = +thisYear;
+    const keys = new Set([`${yr-1}-12`, nowMonthKey, ...Object.keys(balHistoryInline||{})]);
+    const monthTotals = {};
+    const cashFlows = {};
+    keys.forEach(mk => {
+      const t = getMonthTotal(mk).total;
+      if (t != null) monthTotals[mk] = t;
+      const b = balHistoryInline?.[mk] || {};
+      const deposit = +b.deposit || 0;
+      const withdrawal = +b.distrib || 0;
+      if (deposit || withdrawal) cashFlows[mk] = { deposit, withdrawal };
+    });
+    return computeAnnualizedReturn({ monthTotals, cashFlows, optionsProfitYTD: profitYTD, asOf: new Date() });
+  })();
   // Daily
   const todayKey = new Date().toISOString().slice(0,10);
   const profitToday = profitDateMode === "accounting"
@@ -7143,6 +7229,8 @@ ${JSON.stringify(summary, null, 1)}`;
               <KPI label="Premium MTD"   value={f$0(premMTD)}         sub={mLabel} color="#58a6ff"/>
               <KPI label="Premium YTD"   value={f$0(premYTD)}         sub={thisYear} color="#58a6ff"/>
             </div>
+            {/* Annualized YTD return (withdrawal-aware) + options contribution */}
+            <AnnualizedReturnCard data={annualizedReturnData}/>
             {/* Goals progress */}
             {(goals.dailyPremium||goals.dailyProfit||goals.weeklyPremium||goals.monthlyPremium||goals.weeklyProfit||goals.monthlyProfit) && (() => {
               const now3 = new Date();
@@ -8149,6 +8237,8 @@ ${JSON.stringify(summary, null, 1)}`;
         {/* ══ ANALYTICS ══ */}
         {tab==="analytics" && (
           <div style={{display:"flex",flexDirection:"column",gap:9}}>
+            {/* Annualized YTD return (withdrawal-aware) + options contribution */}
+            <AnnualizedReturnCard data={annualizedReturnData}/>
             {/* Search filter */}
             <div style={{display:"flex",gap:5,alignItems:"center",flexWrap:"wrap",padding:"7px 10px",background:th("#0a0e14","#f8f3eb"),border:"1px solid #1c2128",borderRadius:8}}>
               <span style={{fontSize:7,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",letterSpacing:"0.07em"}}>SEARCH FILTER</span>
@@ -8193,6 +8283,7 @@ ${JSON.stringify(summary, null, 1)}`;
                   {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#58a6ff",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Schwab $</th>}
                   {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#ffd166",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>ETrade $</th>}
                   {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#00ff88",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Total $</th>}
+                  {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#58a6ff",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Deposit $</th>}
                   {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#ff4560",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>Distrib $</th>}
                   {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#c084fc",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>MoM%</th>}
                   {analyticsView==="monthly" && showBalCols && <th style={{padding:"5px 8px",textAlign:"right",color:"#ff9f1c",fontFamily:"monospace",fontSize:10,borderBottom:"1px solid #1c2128"}}>YTD%</th>}
@@ -8251,7 +8342,23 @@ ${JSON.stringify(summary, null, 1)}`;
                             <td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:"#00ff88",fontWeight:700}}>{fBal(total)}</td>
                           </>);
                         })()}
-                        {/* Distrib $ — entry field, shown when balances visible */}
+                        {/* Deposit $ — external cash IN; counted as capital, not gain */}
+                        {analyticsView==="monthly" && showBalCols && (() => {
+                          const bd = balHistoryInline?.[m.key] || {};
+                          return (
+                            <td style={{padding:"4px 6px",textAlign:"right"}} onClick={e=>e.stopPropagation()}>
+                              <input type="number" value={bd.deposit??""} placeholder="—"
+                                onChange={e=>{
+                                  const val = e.target.value ? +e.target.value : null;
+                                  const updated = {...balHistoryInline,[m.key]:{...(balHistoryInline[m.key]||{}),deposit:val}};
+                                  setBalHistoryInline(updated);
+                                  supabase.from("col_prefs").upsert({id:"balance_history",cols:updated,updated_at:new Date().toISOString()},{onConflict:"id"}).then(r=>{if(r.error)console.error("[bal save]",r.error.message);});
+                                }}
+                                style={{width:80,background:"transparent",border:"1px solid #58a6ff30",borderRadius:3,color:"#58a6ff",fontFamily:"monospace",fontSize:11,padding:"2px 4px",textAlign:"right",outline:"none"}}/>
+                            </td>
+                          );
+                        })()}
+                        {/* Distrib $ — external cash OUT (withdrawals/distributions); counted as capital, not loss */}
                         {analyticsView==="monthly" && showBalCols && (() => {
                           const bd = balHistoryInline?.[m.key] || {};
                           return (
