@@ -1,0 +1,57 @@
+name: ETrade Auto-Auth
+
+on:
+  schedule:
+    # Daily at 9:15am ET (13:15 UTC) — after market open, when ETrade is most responsive
+    - cron: '15 13 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  auto-auth:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Playwright
+        run: npx playwright install chromium --with-deps
+
+      - name: Run ETrade auto-auth
+        env:
+          ETRADE_WEB_USERNAME: ${{ secrets.ETRADE_WEB_USERNAME }}
+          ETRADE_WEB_PASSWORD: ${{ secrets.ETRADE_WEB_PASSWORD }}
+          APP_URL: https://options-tracker-five.vercel.app
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SCREENSHOT_DIR: ${{ github.workspace }}/screenshots
+        run: |
+          mkdir -p screenshots
+          node scripts/etrade-auto-auth.mjs
+
+      - name: Upload screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: etrade-auth-screenshots
+          path: screenshots/
+          retention-days: 7
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          if [ -n "${{ secrets.PUSHOVER_API_TOKEN }}" ]; then
+            curl -s -X POST https://api.pushover.net/1/messages.json \
+              -d token="${{ secrets.PUSHOVER_API_TOKEN }}" \
+              -d user="${{ secrets.PUSHOVER_USER_KEY }}" \
+              -d title="🔑 ETrade Auto-Auth Failed" \
+              -d message="Automated ETrade auth failed. Check screenshots in GitHub Actions. Manual auth may be needed: https://options-tracker-five.vercel.app/api/etrade?action=auth" \
+              -d priority=1
+          fi
