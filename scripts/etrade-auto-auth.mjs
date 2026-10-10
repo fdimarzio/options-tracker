@@ -80,6 +80,7 @@ async function automateETradeAuth(authorizeUrl) {
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-blink-features=AutomationControlled",
+      "--disable-http2",
     ],
   });
 
