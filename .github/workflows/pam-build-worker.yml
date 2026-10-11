@@ -1,0 +1,294 @@
+name: PAM Build Worker
+
+# Bridge between PAM scheduled tasks (which can't access GitHub) and GitHub.
+# The PAM scheduled task writes a build request to Supabase build_queue,
+# this workflow picks it up, runs Claude Code CLI to build, and opens a PR.
+
+on:
+  schedule:
+    # Every 30 min on weekdays 6am-6pm ET (10:00-22:00 UTC)
+    - cron: '15,45 10-22 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check for pending builds
+        id: check
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          RESPONSE=$(curl -sf "${SUPABASE_URL}/rest/v1/build_queue?status=eq.pending&order=created_at.asc&limit=1" \
+            -H "apikey: ${SUPABASE_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_KEY}")
+
+          COUNT=$(echo "$RESPONSE" | jq 'length')
+          if [ "$COUNT" -eq 0 ]; then
+            echo "No pending builds"
+            echo "has_work=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "has_work=true" >> "$GITHUB_OUTPUT"
+          echo "$RESPONSE" | jq -r '.[0].id' > /tmp/build_id
+          echo "$RESPONSE" | jq -r '.[0].repo_owner' > /tmp/repo_owner
+          echo "$RESPONSE" | jq -r '.[0].repo_name' > /tmp/repo_name
+          echo "$RESPONSE" | jq -r '.[0].task_title' > /tmp/task_title
+          echo "$RESPONSE" | jq -r '.[0].task_spec // empty' > /tmp/task_spec
+          echo "$RESPONSE" | jq -r '.[0].task_id' > /tmp/task_id
+
+          BUILD_ID=$(cat /tmp/build_id)
+          echo "build_id=${BUILD_ID}" >> "$GITHUB_OUTPUT"
+          echo "Claimed build: ${BUILD_ID} — $(cat /tmp/task_title)"
+
+          # Claim it
+          curl -sf -X PATCH "${SUPABASE_URL}/rest/v1/build_queue?id=eq.${BUILD_ID}" \
+            -H "apikey: ${SUPABASE_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_KEY}" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            -d "{\"status\":\"claimed\",\"claimed_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+
+      - name: Clone target repo
+        if: steps.check.outputs.has_work == 'true'
+        env:
+          PAM_GITHUB_PAT: ${{ secrets.PAM_GITHUB_PAT }}
+        run: |
+          OWNER=$(cat /tmp/repo_owner)
+          REPO=$(cat /tmp/repo_name)
+          git clone --depth 1 "https://x-access-token:${PAM_GITHUB_PAT}@github.com/${OWNER}/${REPO}.git" /tmp/target-repo
+          cd /tmp/target-repo
+          git config user.name "PAM Build Worker"
+          git config user.email "pam-build@premiumrecurringincome.com"
+
+      - uses: actions/setup-node@v4
+        if: steps.check.outputs.has_work == 'true'
+        with:
+          node-version: 20
+
+      - name: Install Claude Code CLI
+        if: steps.check.outputs.has_work == 'true'
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Build with Claude Code
+        if: steps.check.outputs.has_work == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          TASK_TITLE=$(cat /tmp/task_title)
+          TASK_SPEC=$(cat /tmp/task_spec)
+          REPO=$(cat /tmp/repo_name)
+
+          # Create branch
+          SLUG=$(echo "$TASK_TITLE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | cut -c1-40)
+          BRANCH="claude/pam-${SLUG}"
+          cd /tmp/target-repo
+          git checkout -b "$BRANCH"
+          echo "$BRANCH" > /tmp/branch_name
+
+          # Read CLAUDE.md if it exists
+          CLAUDE_MD=""
+          if [ -f CLAUDE.md ]; then
+            CLAUDE_MD=$(cat CLAUDE.md)
+          fi
+
+          # Build prompt
+          cat > /tmp/build-prompt.txt << 'PROMPT_END'
+          You are a build worker for the PAM project management system.
+          You are inside a git checkout of the target repo. Make the MINIMAL code changes
+          needed to implement the task below. Follow repo conventions from CLAUDE.md.
+
+          RULES:
+          - MINIMAL, focused diff — only what the task asks
+          - Respect any phased scope (e.g., Phase 1 only)
+          - Do NOT refactor unrelated code
+          - Do NOT commit or push — the CI pipeline handles that
+          - Do NOT place/modify live trades, move money, or touch credentials
+          - Run tests if a test command is available (npm test, vitest, etc.)
+          - If tests fail on code you didn't change, note it but continue
+
+          PROMPT_END
+
+          echo "" >> /tmp/build-prompt.txt
+          echo "TASK: ${TASK_TITLE}" >> /tmp/build-prompt.txt
+          echo "" >> /tmp/build-prompt.txt
+          if [ -n "$TASK_SPEC" ]; then
+            echo "SPEC:" >> /tmp/build-prompt.txt
+            echo "$TASK_SPEC" >> /tmp/build-prompt.txt
+            echo "" >> /tmp/build-prompt.txt
+          fi
+          if [ -n "$CLAUDE_MD" ]; then
+            echo "REPO CONVENTIONS (CLAUDE.md):" >> /tmp/build-prompt.txt
+            echo "$CLAUDE_MD" >> /tmp/build-prompt.txt
+          fi
+
+          # Run Claude Code CLI
+          cd /tmp/target-repo
+          claude -p "$(cat /tmp/build-prompt.txt)" \
+            --allowedTools "Edit,Write,Bash,Read,Glob,Grep" \
+            --yes \
+            --max-turns 50 \
+            2>&1 | tee /tmp/claude-output.txt
+
+      - name: Commit, push, and open PR
+        if: steps.check.outputs.has_work == 'true'
+        env:
+          PAM_GITHUB_PAT: ${{ secrets.PAM_GITHUB_PAT }}
+        run: |
+          cd /tmp/target-repo
+          BRANCH=$(cat /tmp/branch_name)
+          TASK_TITLE=$(cat /tmp/task_title)
+          OWNER=$(cat /tmp/repo_owner)
+          REPO=$(cat /tmp/repo_name)
+
+          # Check if there are changes
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "NO_CHANGES=true" >> "$GITHUB_ENV"
+            echo "No changes were made by Claude"
+            exit 0
+          fi
+
+          # Commit
+          git add -A
+          git commit -m "$(cat <<EOF
+          ${TASK_TITLE}
+
+          Built by PAM Build Worker (GitHub Actions + Claude Code CLI).
+          Task ID: $(cat /tmp/task_id)
+
+          Co-Authored-By: Claude <noreply@anthropic.com>
+          EOF
+          )"
+
+          # Push
+          git push origin "$BRANCH"
+
+          # Open PR via GitHub API
+          PR_BODY=$(cat <<EOF
+          ## ${TASK_TITLE}
+
+          Built automatically by the PAM Build Worker.
+
+          **PAM Task ID:** \`$(cat /tmp/task_id)\`
+
+          ### What was built
+          See commit diff for details.
+
+          ### Test results
+          See Claude Code output in the Actions log.
+
+          ---
+          ⚠️ **REVIEW before merge — merging = deploy**
+
+          🤖 Generated with PAM Build Worker (GitHub Actions + Claude Code CLI)
+          EOF
+          )
+
+          PR_URL=$(curl -sf -X POST "https://api.github.com/repos/${OWNER}/${REPO}/pulls" \
+            -H "Authorization: Bearer ${PAM_GITHUB_PAT}" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --arg title "$TASK_TITLE" \
+              --arg head "$BRANCH" \
+              --arg base "main" \
+              --arg body "$PR_BODY" \
+              '{title: $title, head: $head, base: $base, body: $body}')" \
+            | jq -r '.html_url')
+
+          echo "PR opened: ${PR_URL}"
+          echo "$PR_URL" > /tmp/pr_url
+
+      - name: Update Supabase — success
+        if: steps.check.outputs.has_work == 'true' && env.NO_CHANGES != 'true'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          BUILD_ID=$(cat /tmp/build_id)
+          TASK_ID=$(cat /tmp/task_id)
+          PR_URL=$(cat /tmp/pr_url 2>/dev/null || echo "")
+          BRANCH=$(cat /tmp/branch_name)
+          NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          # Update build_queue
+          curl -sf -X PATCH "${SUPABASE_URL}/rest/v1/build_queue?id=eq.${BUILD_ID}" \
+            -H "apikey: ${SUPABASE_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_KEY}" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            -d "{\"status\":\"completed\",\"pr_url\":\"${PR_URL}\",\"branch_name\":\"${BRANCH}\",\"finished_at\":\"${NOW}\"}"
+
+          # Update task: status=in-progress, ready=false
+          curl -sf -X PATCH "${SUPABASE_URL}/rest/v1/tasks?id=eq.${TASK_ID}" \
+            -H "apikey: ${SUPABASE_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_KEY}" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            -d "{\"status\":\"in-progress\",\"ready\":false}"
+
+          # Log to task_runs
+          TASK_TITLE=$(cat /tmp/task_title)
+          curl -sf -X POST "${SUPABASE_URL}/rest/v1/task_runs" \
+            -H "apikey: ${SUPABASE_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_KEY}" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            -d "$(jq -n \
+              --arg tid "$TASK_ID" \
+              --arg title "$TASK_TITLE" \
+              --arg status "pr_opened" \
+              --arg pr "$PR_URL" \
+              --arg branch "$BRANCH" \
+              --arg summary "Built via GitHub Actions bridge" \
+              --arg fin "$NOW" \
+              '{task_id: $tid, task_title: $title, status: $status, pr_url: $pr, branch_name: $branch, summary: $summary, finished_at: $fin}')"
+
+      - name: Update Supabase — no changes
+        if: steps.check.outputs.has_work == 'true' && env.NO_CHANGES == 'true'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          BUILD_ID=$(cat /tmp/build_id)
+          NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          curl -sf -X PATCH "${SUPABASE_URL}/rest/v1/build_queue?id=eq.${BUILD_ID}" \
+            -H "apikey: ${SUPABASE_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_KEY}" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            -d "{\"status\":\"failed\",\"failure_reason\":\"Claude made no code changes\",\"finished_at\":\"${NOW}\"}"
+
+      - name: Update Supabase — failure
+        if: failure() && steps.check.outputs.has_work == 'true'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          BUILD_ID=$(cat /tmp/build_id)
+          NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          curl -sf -X PATCH "${SUPABASE_URL}/rest/v1/build_queue?id=eq.${BUILD_ID}" \
+            -H "apikey: ${SUPABASE_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_KEY}" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            -d "{\"status\":\"failed\",\"failure_reason\":\"GitHub Action failed — check logs\",\"finished_at\":\"${NOW}\"}"
+
+      - name: Notify on failure
+        if: failure() && steps.check.outputs.has_work == 'true'
+        env:
+          PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
+          PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
+        run: |
+          TASK_TITLE=$(cat /tmp/task_title 2>/dev/null || echo "unknown")
+          if [ -n "$PUSHOVER_API_TOKEN" ]; then
+            curl -s -X POST https://api.pushover.net/1/messages.json \
+              -d token="${PUSHOVER_API_TOKEN}" \
+              -d user="${PUSHOVER_USER_KEY}" \
+              -d title="🔧 PAM Build Worker Failed" \
+              -d message="Failed to build: ${TASK_TITLE}. Check GitHub Actions logs." \
+              -d priority=0
+          fi
