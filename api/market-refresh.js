@@ -2359,11 +2359,31 @@ export default async function handler(req, res) {
                 if (!sortedExpiryCandidates.length) {
                   if (autoEarningsBlockedExpiries.length) {
                     console.log(`[auto-sto] ${symbol} — all candidate expiries fall on/after earnings (${nextEarningsBySymbol[symbol]}), skipping auto-STO: ${autoEarningsBlockedExpiries.join(", ")}`);
-                    await sendPushover(
-                      `📅 ${symbol} auto-STO skipped — earnings ${nextEarningsBySymbol[symbol]}`,
-                      `Every candidate expiry (${autoEarningsBlockedExpiries.join(", ")}) falls on/after ${symbol}'s next earnings — no covered call placed. Review manually if desired.`,
-                      `${APP_URL}/?tab=stocks&ticker=${symbol}`, "View in App", 0
-                    ).catch(()=>{});
+                    // Dedup — this skip push had no gate and re-fired on every 5-min
+                    // scan for the same blocked ticker (MCD earnings 2026-11-04 spam).
+                    // Mirror the LEAP-protection dedup: namespaced ("earnings_skip|")
+                    // key into the same notifications_sent blob the auto-STO scanner
+                    // uses for its once/day dedup; resets daily with sentData.
+                    const earningsSkipKey = `earnings_skip|${symbol}`;
+                    if (sentData.contracts[earningsSkipKey]?.sentAt?.slice(0, 10) === today2) {
+                      console.log(`[auto-sto] ${symbol} earnings-skip alert already sent today — suppressing`);
+                    } else {
+                      await sendPushover(
+                        `📅 ${symbol} auto-STO skipped — earnings ${nextEarningsBySymbol[symbol]}`,
+                        `Every candidate expiry (${autoEarningsBlockedExpiries.join(", ")}) falls on/after ${symbol}'s next earnings — no covered call placed. Review manually if desired.`,
+                        `${APP_URL}/?tab=stocks&ticker=${symbol}`, "View in App", 0
+                      ).catch(()=>{});
+                      sentData.contracts[earningsSkipKey] = { sentAt: lastRefresh, symbol };
+                      // Persist immediately — this branch `continue`s before the main
+                      // "Save notification state" writes, so without this the mutation
+                      // never reaches Supabase and the next cycle re-fetches a stale
+                      // blob, defeating the dedup (same reason as the LEAP block).
+                      await fetch(`${SUPABASE_URL}/rest/v1/col_prefs`, {
+                        method: "POST",
+                        headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
+                        body: JSON.stringify({ id: "notifications_sent", cols: sentData, updated_at: lastRefresh }),
+                      }).catch(e => console.warn("[auto-sto] notifications_sent save failed:", e.message));
+                    }
                   } else {
                     console.log(`[auto-sto] ${symbol} — no suitable strike found in chain`);
                   }
