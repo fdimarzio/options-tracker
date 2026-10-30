@@ -1,0 +1,106 @@
+name: PAM Daily Build Summary
+
+# Sends a daily summary of PAM build activity via Pushover.
+# Covers: completed builds (PRs opened), failed builds, and tasks still marked ready.
+
+on:
+  schedule:
+    # 6:15 PM ET (22:15 UTC) on weekdays — end-of-day recap
+    - cron: '15 22 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  summary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Query build activity and send summary
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
+          PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
+        run: |
+          set -euo pipefail
+
+          # Last 24 hours window
+          SINCE=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+
+          # 1) Completed builds (PRs opened) in the last 24h
+          COMPLETED=$(curl -sf "${SUPABASE_URL}/rest/v1/build_queue?status=eq.completed&finished_at=gte.${SINCE}&order=finished_at.desc" \
+            -H "apikey: ${SUPABASE_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_KEY}")
+
+          # 2) Failed builds in the last 24h
+          FAILED=$(curl -sf "${SUPABASE_URL}/rest/v1/build_queue?status=eq.failed&finished_at=gte.${SINCE}&order=finished_at.desc" \
+            -H "apikey: ${SUPABASE_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_KEY}")
+
+          # 3) Tasks still marked ready (pending pickup)
+          READY=$(curl -sf "${SUPABASE_URL}/rest/v1/tasks?ready=eq.true&status=neq.done&select=title,status,priority&order=priority.desc" \
+            -H "apikey: ${SUPABASE_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_KEY}")
+
+          COMPLETED_COUNT=$(echo "$COMPLETED" | jq 'length')
+          FAILED_COUNT=$(echo "$FAILED" | jq 'length')
+          READY_COUNT=$(echo "$READY" | jq 'length')
+
+          # Build the message
+          MSG="📊 PAM Daily Build Summary"
+          MSG+="\n━━━━━━━━━━━━━━━━━━━━"
+
+          if [ "$COMPLETED_COUNT" -gt 0 ]; then
+            MSG+="\n\n✅ Completed ($COMPLETED_COUNT):"
+            while IFS= read -r line; do
+              TITLE=$(echo "$line" | jq -r '.task_title')
+              PR=$(echo "$line" | jq -r '.pr_url // "no PR"')
+              MSG+="\n• ${TITLE}"
+              MSG+="\n  ${PR}"
+            done < <(echo "$COMPLETED" | jq -c '.[]')
+          else
+            MSG+="\n\n✅ No builds completed today"
+          fi
+
+          if [ "$FAILED_COUNT" -gt 0 ]; then
+            MSG+="\n\n❌ Failed ($FAILED_COUNT):"
+            while IFS= read -r line; do
+              TITLE=$(echo "$line" | jq -r '.task_title')
+              REASON=$(echo "$line" | jq -r '.failure_reason // "unknown"')
+              MSG+="\n• ${TITLE}"
+              MSG+="\n  Reason: ${REASON}"
+            done < <(echo "$FAILED" | jq -c '.[]')
+          fi
+
+          if [ "$READY_COUNT" -gt 0 ]; then
+            MSG+="\n\n🚀 Ready for build ($READY_COUNT):"
+            while IFS= read -r line; do
+              TITLE=$(echo "$line" | jq -r '.title')
+              PRI=$(echo "$line" | jq -r '.priority')
+              MSG+="\n• [${PRI}] ${TITLE}"
+            done < <(echo "$READY" | jq -c '.[]')
+          else
+            MSG+="\n\n🚀 No tasks queued for build"
+          fi
+
+          # Determine priority: high if failures, normal otherwise
+          PUSH_PRIORITY=0
+          if [ "$FAILED_COUNT" -gt 0 ]; then
+            PUSH_PRIORITY=1
+          fi
+
+          echo -e "$MSG"
+
+          # Send via Pushover
+          if [ -n "$PUSHOVER_API_TOKEN" ] && [ -n "$PUSHOVER_USER_KEY" ]; then
+            curl -s -X POST https://api.pushover.net/1/messages.json \
+              -d token="${PUSHOVER_API_TOKEN}" \
+              -d user="${PUSHOVER_USER_KEY}" \
+              -d title="📊 PAM Daily Build Summary" \
+              -d message="$(echo -e "$MSG")" \
+              -d priority="${PUSH_PRIORITY}" \
+              -d html=0
+            echo "Pushover notification sent"
+          else
+            echo "Pushover not configured — skipping notification"
+          fi
