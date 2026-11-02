@@ -243,7 +243,7 @@ function LoginScreen({ phase, email: sessionEmail, onSignOut }) {
     body = (
       <form onSubmit={verifyCode} noValidate>
         <div style={{ fontSize: 12, color: th("#8b949e", "#6b5f55"), fontFamily: "monospace", lineHeight: 1.6, marginBottom: 12 }}>
-          Open the link we emailed to <b style={{ color: th("#e6edf3", "#0d0d0b") }}>{email.trim()}</b> on this device, or enter the code from the email:
+          We emailed <b style={{ color: th("#e6edf3", "#0d0d0b") }}>{email.trim()}</b>. In the installed app or on a phone, enter the code below — tapping the link opens your browser instead. In a browser, either works:
         </div>
         <label htmlFor="login-code" style={label}>CODE</label>
         <input id="login-code" inputMode="numeric" autoComplete="one-time-code" maxLength={8} value={code} onChange={e => setCode(e.target.value.replace(/\D/g, ""))} placeholder="123456" style={{ ...input, letterSpacing: "0.3em", textAlign: "center", fontFamily: "monospace" }} />
