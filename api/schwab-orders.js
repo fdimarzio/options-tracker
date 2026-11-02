@@ -17,9 +17,10 @@
 //   GET  ?action=list       — list recent trade_orders
 
 import crypto from "crypto";
+import { authorize } from "./_lib/auth.js";
 
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
-const SUPABASE_KEY = process.env.VITE_SUPABASE_ANON_KEY;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 const SUPABASE_SVC_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 const SCHWAB_BASE  = "https://api.schwabapi.com";
 const APP_URL      = "https://options-tracker-five.vercel.app";
@@ -243,9 +244,8 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
 
   // Auth — require cron secret for all order actions
-  const secret   = process.env.CRON_SECRET;
-  const provided = req.headers["x-cron-secret"] || req.query.secret;
-  if (secret && provided !== secret) return res.status(401).json({ error: "Unauthorized" });
+  const readOnly = req.method === "GET" && (req.query.action === "list" || req.query.action === "status");
+  if (!(await authorize(req, res, { minRole: readOnly ? "viewer" : "trader" }))) return;
 
   const { action } = req.query;
 

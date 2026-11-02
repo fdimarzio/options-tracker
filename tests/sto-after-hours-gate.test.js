@@ -76,7 +76,7 @@ async function runHandlerAt(iso, handler) {
   calls = [];
   vi.setSystemTime(new Date(iso));
   vi.stubGlobal("fetch", vi.fn(fetchRouter));
-  const req = { method: "GET", query: { force: "1" }, headers: {} };
+  const req = { method: "GET", query: { force: "1" }, headers: { "x-cron-secret": "test-secret" } };
   const res = { setHeader: () => {}, status() { return this; }, json() { return this; }, end() { return this; } };
   await handler(req, res);
 }
@@ -95,7 +95,7 @@ describe("STO suggestion push — market-hours / weekday gate", () => {
     process.env.SUPABASE_SERVICE_KEY = "fake-service-key";
     process.env.PUSHOVER_API_TOKEN = "fake-pushover-token";
     process.env.PUSHOVER_USER_KEY = "fake-pushover-user";
-    delete process.env.CRON_SECRET;
+    process.env.CRON_SECRET = "test-secret"; // auth fails closed; tests authenticate as the cron caller
     ({ default: handler } = await import("../api/market-refresh.js"));
   });
 

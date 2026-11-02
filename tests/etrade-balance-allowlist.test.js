@@ -48,7 +48,7 @@ async function callHandler(handler, query) {
     send(body) { jsonBody = body; return this; },
     end() { return this; },
   };
-  await handler({ method: "GET", query, headers: {} }, res);
+  await handler({ method: "GET", query, headers: { "x-cron-secret": "test-secret" } }, res);
   return { statusCode, jsonBody };
 }
 
@@ -129,7 +129,7 @@ beforeAll(async () => {
   process.env.PUSHOVER_USER_KEY = "fake-pushover-user";
   process.env.ETRADE_CONSUMER_KEY = "fake-consumer-key";
   process.env.ETRADE_CONSUMER_SECRET = "fake-consumer-secret";
-  delete process.env.CRON_SECRET;
+  process.env.CRON_SECRET = "test-secret"; // auth fails closed; tests authenticate as the cron caller
 
   ({ default: etradeHandler } = await import("../api/etrade.js"));
   ({ default: marketRefreshHandler } = await import("../api/market-refresh.js"));

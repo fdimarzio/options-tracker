@@ -10,6 +10,7 @@
 //
 // Usage: GET or POST /api/chase-step?secret=CRON_SECRET
 
+import { authorize } from "./_lib/auth.js";
 const SUPABASE_URL     = process.env.VITE_SUPABASE_URL;
 const SUPABASE_SVC_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 const SCHWAB_BASE      = "https://api.schwabapi.com";
@@ -520,9 +521,7 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  const secret   = process.env.CRON_SECRET;
-  const provided = req.headers["x-cron-secret"] || req.query.secret;
-  if (secret && provided !== secret) return res.status(401).json({ error: "Unauthorized" });
+  if (!(await authorize(req, res, { minRole: "trader" }))) return;
 
   try {
     // Rule gate: load the chase governance row regardless of enabled so we can report why we're a no-op.

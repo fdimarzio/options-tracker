@@ -1,43 +1,41 @@
 // tests/smoke.spec.js
-// Playwright end-to-end smoke tests for PRI Options Tracker
-// Run: npx playwright test
-// Requires: PLAYWRIGHT_BASE_URL and PLAYWRIGHT_PIN env vars
+// Playwright end-to-end smoke tests for PRI Options Tracker (run against a deployed URL)
+// Run: npx playwright test tests/smoke.spec.js
+//
+// Sign-in is passwordless (email link / code), so it cannot be scripted. Sign in ONCE by hand,
+// then save the session and point the tests at it:
+//   npx playwright codegen --save-storage=.auth/state.json https://options-tracker-five.vercel.app
+//   PLAYWRIGHT_STORAGE_STATE=.auth/state.json npx playwright test tests/smoke.spec.js
+// (.auth/ holds a live session token — it is git-ignored; never commit it.)
+// Mock-backed auth tests that need no real account live in tests/e2e/auth.e2e.spec.js.
 
 import { test, expect } from "@playwright/test";
 
 const BASE_URL = process.env.PLAYWRIGHT_BASE_URL || "https://options-tracker-five.vercel.app";
-const PIN      = process.env.PLAYWRIGHT_PIN || "";
+const STATE    = process.env.PLAYWRIGHT_STORAGE_STATE || "";
+
+if (STATE) test.use({ storageState: STATE });
 
 async function login(page) {
+  test.skip(!STATE, "set PLAYWRIGHT_STORAGE_STATE to a saved signed-in session (see header)");
   await page.goto(BASE_URL);
-  // Step 1: user selection screen — click the first user button
-  await page.waitForSelector("text=SELECT USER", { timeout: 15000 });
-  await page.click("button:has-text('Enter PIN to continue')");
-  // Step 2: PIN keypad — enter digits
-  await page.waitForSelector("text=Enter 4-digit PIN", { timeout: 10000 });
-  for (const digit of PIN.split("")) {
-    await page.click(`button:has-text("${digit}")`);
-  }
   // Wait for app to load — the bottom nav ribbon always shows after login
   await page.waitForSelector("button:has-text('📋')", { timeout: 15000 });
 }
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
-test("login with correct PIN works", async ({ page }) => {
+test("saved session loads the app", async ({ page }) => {
   await login(page);
-  // App loaded — bottom nav visible
   await expect(page.locator("button:has-text('📋')").first()).toBeVisible();
 });
 
-test("wrong PIN shows error", async ({ page }) => {
-  await page.goto(BASE_URL);
-  await page.waitForSelector("text=SELECT USER", { timeout: 15000 });
-  await page.click("button:has-text('Enter PIN to continue')");
-  await page.waitForSelector("text=Enter 4-digit PIN", { timeout: 10000 });
-  for (const digit of "0000") {
-    await page.click(`button:has-text("${digit}")`);
-  }
-  await expect(page.locator("text=Wrong PIN").or(page.locator("text=Incorrect"))).toBeVisible({ timeout: 5000 });
+test.describe("signed out", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+  test("shows sign-in and no dashboard", async ({ page }) => {
+    await page.goto(BASE_URL);
+    await expect(page.getByRole("button", { name: "Email me a sign-in link" })).toBeVisible({ timeout: 15000 });
+    await expect(page.locator("button:has-text('📋')")).toHaveCount(0);
+  });
 });
 
 // ── Dashboard ────────────────────────────────────────────────────────────────

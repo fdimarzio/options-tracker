@@ -148,7 +148,7 @@ describe("auto-STO scanner — Schwab dry-run order path", () => {
     process.env.SUPABASE_SERVICE_KEY = "fake-service-key";
     process.env.PUSHOVER_API_TOKEN = "fake-pushover-token"; // must be truthy so sendPushover actually fires
     process.env.PUSHOVER_USER_KEY = "fake-pushover-user";
-    delete process.env.CRON_SECRET; // no secret configured → auth check is skipped
+    process.env.CRON_SECRET = "test-secret"; // auth fails closed; tests authenticate as the cron caller
 
     ({ default: handler } = await import("../api/market-refresh.js"));
   });
@@ -166,7 +166,7 @@ describe("auto-STO scanner — Schwab dry-run order path", () => {
   });
 
   it("builds a valid dry-run STO order and logs sto_auto intent, without ever calling the live Schwab order endpoints", async () => {
-    const req = { method: "GET", query: { force: "1" }, headers: {} };
+    const req = { method: "GET", query: { force: "1" }, headers: { "x-cron-secret": "test-secret" } };
     let statusCode = null, jsonBody = null;
     const res = {
       setHeader: () => {},

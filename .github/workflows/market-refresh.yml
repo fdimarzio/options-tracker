@@ -30,7 +30,8 @@ jobs:
           # Fetching a simple AAPL quote forces schwab-proxy to validate + refresh
           # the access token and save it back to Supabase — no separate endpoint needed
           RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
-            "https://options-tracker-five.vercel.app/api/schwab-proxy?path=/marketdata/v1/quotes&symbols=AAPL&fields=quote&x-cron-secret=${{ secrets.CRON_SECRET }}")
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            "https://options-tracker-five.vercel.app/api/schwab-proxy?path=/marketdata/v1/quotes&symbols=AAPL&fields=quote")
 
           HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS" | cut -d: -f2)
           BODY=$(echo "$RESPONSE" | grep -v "HTTP_STATUS")

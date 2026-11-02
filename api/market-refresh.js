@@ -7,9 +7,10 @@ import { computeOrigDte, shouldBlockForLeapProtection } from "./_lib/leapGuard.j
 import { isExpiryBlockedByEarnings } from "./_lib/earningsGuard.js";
 import { resolveCooldownMinutes, isWithinCooldown, buildNotificationDedupKey, makeNotificationLogLookupKey } from "./_lib/notificationCooldown.js";
 import { deriveTickerUniverse } from "./_lib/tickerUniverse.js";
+import { authorize } from "./_lib/auth.js";
 
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
-const SUPABASE_KEY = process.env.VITE_SUPABASE_ANON_KEY;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 const SUPABASE_SVC_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_ANON_KEY; // service key for token rows
 const SCHWAB_BASE  = "https://api.schwabapi.com";
 const APP_URL      = "https://options-tracker-five.vercel.app";
@@ -1206,9 +1207,7 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  const secret   = process.env.CRON_SECRET;
-  const provided = req.headers["x-cron-secret"] || req.query.secret;
-  if (secret && provided !== secret) return res.status(401).json({ error: "Unauthorized" });
+  if (!(await authorize(req, res, { cronOnly: true }))) return;
 
   // ── Simulation actions — route to handleSimulate, bypass market hours gate ──
   const simActions = ["simulate","simulateall","status","summary","toppicks"];

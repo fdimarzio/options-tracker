@@ -149,7 +149,7 @@ describe("portfolio snapshot — ETrade outlier guard vs. stale baseline", () =>
     process.env.SUPABASE_SERVICE_KEY = "fake-service-key";
     process.env.PUSHOVER_API_TOKEN = "fake-pushover-token";
     process.env.PUSHOVER_USER_KEY = "fake-pushover-user";
-    delete process.env.CRON_SECRET;
+    process.env.CRON_SECRET = "test-secret"; // auth fails closed; tests authenticate as the cron caller
 
     ({ default: handler } = await import("../api/market-refresh.js"));
   });
@@ -167,7 +167,7 @@ describe("portfolio snapshot — ETrade outlier guard vs. stale baseline", () =>
   });
 
   async function runHandler() {
-    const req = { method: "GET", query: { force: "1" }, headers: {} };
+    const req = { method: "GET", query: { force: "1" }, headers: { "x-cron-secret": "test-secret" } };
     let statusCode = null, jsonBody = null;
     const res = {
       setHeader: () => {},

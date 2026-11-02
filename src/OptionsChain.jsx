@@ -4,10 +4,9 @@
 
 import React, { useState, useEffect, useRef, useCallback, Fragment } from "react";
 import { createChart, CrosshairMode } from "lightweight-charts";
+import { supabase } from "./lib/supabase.js";
 
-const PROXY = "https://options-tracker-five.vercel.app/api/schwab-proxy";
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const PROXY = "/api/schwab-proxy";
 
 // ── Theme ─────────────────────────────────────────────────────────────────────
 const T = {
@@ -61,19 +60,12 @@ function Spinner({ size=18 }) {
 
 // ── OI Tracking — register ticker in Supabase col_prefs ──────────────────────
 async function ensureOITracking(ticker) {
-  if (!SUPABASE_URL || !SUPABASE_KEY) return;
   try {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.oi_tracked_tickers`, {
-      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
-    });
-    const existing = (await res.json())?.[0]?.cols?.tickers || [];
+    const { data } = await supabase.from("col_prefs").select("cols").eq("id", "oi_tracked_tickers").maybeSingle();
+    const existing = data?.cols?.tickers || [];
     if (existing.includes(ticker)) return;
     const updated = [...new Set([...existing, ticker])];
-    await fetch(`${SUPABASE_URL}/rest/v1/col_prefs`, {
-      method: "POST",
-      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
-      body: JSON.stringify({ id: "oi_tracked_tickers", cols: { tickers: updated }, updated_at: new Date().toISOString() }),
-    });
+    await supabase.from("col_prefs").upsert({ id: "oi_tracked_tickers", cols: { tickers: updated }, updated_at: new Date().toISOString() });
     console.log(`[OI] Now tracking ${ticker}`);
   } catch (e) {
     console.warn("[OI] tracking update failed:", e.message);

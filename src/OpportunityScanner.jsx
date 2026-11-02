@@ -4,7 +4,7 @@
 
 import React, { useState, useRef, useEffect } from "react";
 
-const PROXY = "https://options-tracker-five.vercel.app/api/schwab-proxy";
+const PROXY = "/api/schwab-proxy";
 
 // ── Ticker universe ────────────────────────────────────────────────────────────
 const SCAN_TICKERS = [
