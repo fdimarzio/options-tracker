@@ -30,6 +30,7 @@ export default function AuthGate({ children }) {
   const [session, setSession] = useState(null);
   const [warnSecs, setWarnSecs] = useState(null);
   const sessionRef = useRef(null);
+  const claimingRef = useRef(null);
 
   // Attach the user's token to /api/* calls (once, app-wide).
   useEffect(() => {
@@ -47,11 +48,19 @@ export default function AuthGate({ children }) {
 
   // Resolve a Supabase session to an allow-listed app user.
   const resolveSession = useCallback(async (sess) => {
+    if (sess && claimingRef.current === sess.access_token) return; // already resolving this session
     sessionRef.current = sess;
     setSession(sess);
-    if (!sess) { setAppUser(null); setPhase("signedOut"); return; }
+    if (!sess) { claimingRef.current = null; setAppUser(null); setPhase("signedOut"); return; }
+    claimingRef.current = sess.access_token;
     setPhase("checking");
-    const { data, error } = await supabase.rpc("claim_app_user");
+    let { data, error } = await supabase.rpc("claim_app_user");
+    // The first-ever sign-in binds the account server-side; retry once so a concurrent
+    // caller that lost that race can never be shown a false "not authorized".
+    if (!error && !(Array.isArray(data) ? data[0] : data)) {
+      await new Promise(r => setTimeout(r, 400));
+      ({ data, error } = await supabase.rpc("claim_app_user"));
+    }
     if (sessionRef.current?.access_token !== sess.access_token) return; // superseded
     if (error) {
       console.error("[auth] claim_app_user failed:", error.message);

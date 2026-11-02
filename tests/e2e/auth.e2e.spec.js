@@ -44,7 +44,7 @@ async function mockBackend(page, { claim = [FRANK], knownEmails = ["frank@exampl
     if (url.pathname === "/auth/v1/token") return json(200, session);
     if (url.pathname === "/auth/v1/user") return json(200, session.user);
     if (url.pathname === "/auth/v1/logout") { log.logout++; return route.fulfill({ status: 204, headers: CORS }); }
-    if (url.pathname.startsWith("/rest/v1/rpc/claim_app_user")) { log.claim++; return json(200, claim); }
+    if (url.pathname.startsWith("/rest/v1/rpc/claim_app_user")) { log.claim++; return json(200, typeof claim === "function" ? claim(log.claim) : claim); }
     if (url.pathname.startsWith("/rest/v1/")) {
       log.rest.push({ method: req.method(), path: url.pathname, search: url.search });
       return json(req.method() === "GET" ? 200 : 201, []);
@@ -111,6 +111,14 @@ test.describe("unauthenticated access", () => {
     await page.getByRole("button", { name: "Email me a sign-in link" }).click();
     await expect(page.getByText("If that email is authorized")).toBeVisible();
     expect(log.otp[0].options?.shouldCreateUser ?? log.otp[0].create_user).toBeFalsy();
+  });
+
+  test("first-sign-in race: a claim that comes back empty once is retried, not shown as denied", async ({ page }) => {
+    const { log } = await mockBackend(page, { claim: (n) => (n === 1 ? [] : [FRANK]) });
+    await signInWithCode(page);
+    await appLoaded(page);
+    expect(log.claim).toBeGreaterThanOrEqual(2);
+    await expect(page.getByText("not authorized")).toHaveCount(0);
   });
 
   test("a signed-in but non-allow-listed account is denied and loads no data", async ({ page }) => {

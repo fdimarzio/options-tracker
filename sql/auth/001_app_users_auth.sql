@@ -43,21 +43,19 @@ DECLARE
 BEGIN
   IF uid IS NULL THEN RETURN; END IF;
 
+  SELECT lower(a.email) INTO mail FROM auth.users a WHERE a.id = uid AND a.email_confirmed_at IS NOT NULL;
+
+  -- Bind on first sign-in. Concurrent callers are safe: the loser's UPDATE matches 0 rows
+  -- and falls through to the SELECT below, which sees the winner's committed binding.
+  IF mail IS NOT NULL THEN
+    UPDATE public.app_users u SET auth_user_id = uid
+    WHERE lower(u.email) = mail AND u.auth_user_id IS NULL
+      AND NOT EXISTS (SELECT 1 FROM public.app_users x WHERE x.auth_user_id = uid);
+  END IF;
+
   RETURN QUERY
     SELECT u.id, u.name, u.initials, u.color, u.role, u.email
     FROM public.app_users u WHERE u.auth_user_id = uid;
-  IF FOUND THEN RETURN; END IF;
-
-  SELECT lower(a.email) INTO mail FROM auth.users a WHERE a.id = uid AND a.email_confirmed_at IS NOT NULL;
-  IF mail IS NULL THEN RETURN; END IF;
-
-  RETURN QUERY
-    WITH bound AS (
-      UPDATE public.app_users u SET auth_user_id = uid
-      WHERE lower(u.email) = mail AND u.auth_user_id IS NULL
-      RETURNING u.id, u.name, u.initials, u.color, u.role, u.email
-    )
-    SELECT * FROM bound;
 END $$;
 
 REVOKE ALL ON FUNCTION public.is_app_user(), public.app_role(), public.claim_app_user() FROM PUBLIC, anon;
