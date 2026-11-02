@@ -11,11 +11,12 @@
 //   ?action=proxy&path=/v1/...                          — generic signed proxy
 
 import crypto from "crypto";
+import { authorize } from "./_lib/auth.js";
 
 const ETRADE_BASE     = "https://api.etrade.com";
 const APP_URL         = "https://options-tracker-five.vercel.app";
 const SUPABASE_URL    = process.env.VITE_SUPABASE_URL;
-const SUPABASE_KEY    = process.env.VITE_SUPABASE_ANON_KEY;
+const SUPABASE_KEY    = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 const SUPABASE_SVC_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 const CONSUMER_KEY    = process.env.ETRADE_CONSUMER_KEY;
 const CONSUMER_SECRET = process.env.ETRADE_CONSUMER_SECRET;
@@ -259,12 +260,13 @@ export default async function handler(req, res) {
 
   const { action } = req.query;
 
-  const isAuthAction   = action === "auth" || action === "callback";
-  const isBrowserSafe  = action === "import" && req.query.dryRun === "1";
-  if (!isAuthAction && !isBrowserSafe) {
-    const secret   = process.env.CRON_SECRET;
-    const provided = req.headers["x-cron-secret"] || req.query.secret;
-    if (secret && provided !== secret) return res.status(401).json({ error: "Unauthorized" });
+  // auth/callback are the OAuth hand-off (opened in a new tab, can't carry headers);
+  // E*Trade's own login protects them. Everything else requires a caller identity.
+  const isAuthAction = action === "auth" || action === "callback";
+  if (!isAuthAction) {
+    const readOnly = ["positions", "balance", "accounts", "transactions"].includes(action) ||
+      (action === "import" && req.query.dryRun === "1");
+    if (!(await authorize(req, res, { minRole: readOnly ? "viewer" : "trader" }))) return;
   }
 
   try {

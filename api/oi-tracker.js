@@ -4,8 +4,9 @@
 // Auto-purges oi_snapshots rows where expiry has passed.
 // Tracked tickers stored in col_prefs -> oi_tracked_tickers -> { tickers: ["AAPL","NVDA",...] }
 
+import { authorize } from "./_lib/auth.js";
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
-const SUPABASE_KEY = process.env.VITE_SUPABASE_ANON_KEY;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 const SCHWAB_BASE  = "https://api.schwabapi.com";
 
 async function getValidToken() {
@@ -72,9 +73,7 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  const secret   = process.env.CRON_SECRET;
-  const provided = req.headers["x-cron-secret"] || req.query.secret;
-  if (secret && provided !== secret) return res.status(401).json({ error: "Unauthorized" });
+  if (!(await authorize(req, res, { cronOnly: true }))) return;
 
   const today = new Date().toLocaleString("en-CA", { timeZone: "America/New_York" }).slice(0, 10);
 

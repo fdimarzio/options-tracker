@@ -3,9 +3,10 @@ Run these checks before every production deploy.
 Last updated: 2026-05-14
 
 ## Auth
-- [ ] Login with correct PIN works
-- [ ] Wrong PIN shows error
-- [ ] 5 wrong PINs triggers lockout
+- [ ] Signed out: only the sign-in screen shows (no dashboard, no data)
+- [ ] Email link / 6-digit code signs in
+- [ ] Non-allow-listed email never signs in
+- [ ] Sign out returns to sign-in and survives a reload
 
 ## Dashboard
 - [ ] Total Profit shows (not $0)

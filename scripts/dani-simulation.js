@@ -3,7 +3,7 @@
 // Run: node --env-file=.env.local scripts/dani-simulation.js [--symbol AAPL] [--days 90]
 
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
-const SUPABASE_KEY = process.env.VITE_SUPABASE_ANON_KEY;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 const TODAY        = new Date().toISOString().slice(0, 10);
 const PAGE_SIZE    = 1000;
 const RUN_AT       = new Date().toISOString();

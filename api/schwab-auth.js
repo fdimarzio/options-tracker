@@ -11,8 +11,9 @@
 // Callback is detected by presence of ?code= param, not ?action=callback.
 // Registered callback URL: https://options-tracker-five.vercel.app/api/schwab-auth
 
+import { authorize } from "./_lib/auth.js";
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
-const SUPABASE_KEY = process.env.VITE_SUPABASE_ANON_KEY;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -89,9 +90,7 @@ export default async function handler(req, res) {
 
   // ── action=refresh: Daily token keeper — resets 7-day refresh window ────────
   if (action === "refresh") {
-    const secret   = process.env.CRON_SECRET;
-    const provided = req.headers["x-cron-secret"] || req.query.secret;
-    if (secret && provided !== secret) return res.status(401).json({ error: "Unauthorized" });
+    if (!(await authorize(req, res, { cronOnly: true }))) return;
 
     try {
       const r = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.schwab_tokens`, {
@@ -150,9 +149,7 @@ export default async function handler(req, res) {
 
   // ── action=status: Token health check ──────────────────────────────────────
   if (action === "status") {
-    const secret   = process.env.CRON_SECRET;
-    const provided = req.headers["x-cron-secret"] || req.query.secret;
-    if (secret && provided !== secret) return res.status(401).json({ error: "Unauthorized" });
+    if (!(await authorize(req, res, { minRole: "viewer" }))) return;
 
     try {
       const r = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.schwab_tokens`, {

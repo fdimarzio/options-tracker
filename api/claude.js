@@ -2,9 +2,10 @@
 // Proxies requests to the Anthropic API
 // Used by: Analytics AI assistant, Skynet scoring analysis, SAGE data explorer
 
+import { authorize } from "./_lib/auth.js";
 const ANTHROPIC_API_KEY = process.env.VITE_ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY;
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
 const MODEL = "claude-sonnet-4-5-20250929";
 
 export default async function handler(req, res) {
@@ -13,6 +14,7 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+  if (!(await authorize(req, res, { minRole: "trader" }))) return;
 
   if (!ANTHROPIC_API_KEY) {
     return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured in Vercel environment variables" });

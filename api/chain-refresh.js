@@ -3,9 +3,10 @@
 // Uses parallel fetches to stay well under Vercel's 10s timeout
 
 import { deriveTickerUniverse } from "./_lib/tickerUniverse.js";
+import { authorize } from "./_lib/auth.js";
 
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
-const SUPABASE_KEY = process.env.VITE_SUPABASE_ANON_KEY;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 const SUPABASE_SVC_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_ANON_KEY; // service key for token rows
 const SCHWAB_BASE  = "https://api.schwabapi.com";
 
@@ -65,9 +66,7 @@ async function writeHeartbeat(status, notes) {
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   if (req.method === "OPTIONS") return res.status(200).end();
-  const secret   = process.env.CRON_SECRET;
-  const provided = req.headers["x-cron-secret"] || req.query.secret;
-  if (secret && provided !== secret) return res.status(401).json({ error: "Unauthorized" });
+  if (!(await authorize(req, res, { cronOnly: true }))) return;
 
   const startTime = Date.now();
 

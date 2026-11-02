@@ -36,3 +36,8 @@ import-result.json
 refresh-result.json
 orders.json
 dani-result.json
+
+# Saved Playwright sessions (contain live tokens)
+.auth/
+dist-e2e
+test-results

@@ -10,7 +10,7 @@
 //  5. Test mode: never touches production data
 
 import { useState, useCallback, useEffect } from "react";
-import { createClient } from "@supabase/supabase-js";
+import { supabase as sharedSupabase } from "./lib/supabase.js";
 import { computeClosePnl } from "./lib/pnl.js";
 
 // ── Strategies (keep in sync with main app) ───────────────────────────────────
@@ -346,10 +346,7 @@ function EditOpenerModal({ contract, closer, onSave, onClose, supabaseProp = nul
     setSaving(true);
     setErr(null);
     try {
-      const supabase = supabaseProp ?? createClient(
-        import.meta.env.VITE_SUPABASE_URL,
-        import.meta.env.VITE_SUPABASE_ANON_KEY
-      );
+      const supabase = supabaseProp ?? sharedSupabase;
       const { error } = await supabase
         .from("contracts")
         .update({ qty: +qty })
@@ -405,10 +402,7 @@ function EditOpenerModal({ contract, closer, onSave, onClose, supabaseProp = nul
 // ── Main component ────────────────────────────────────────────────────────────
 export default function ImportPage({ parallelRun = false, defaultDays = 30, supabaseClient = null, tradeRules = null, persistedState = null, onStateChange = null }) {
   // Use passed-in client (from main app) or create own as fallback
-  const supabase = supabaseClient ?? createClient(
-    import.meta.env.VITE_SUPABASE_URL,
-    import.meta.env.VITE_SUPABASE_ANON_KEY
-  );
+  const supabase = supabaseClient ?? sharedSupabase;
 
   // Trade rule names for the dropdown — either passed in from main app or loaded from Supabase
   const [localTradeRules, setLocalTradeRules] = useState([]);

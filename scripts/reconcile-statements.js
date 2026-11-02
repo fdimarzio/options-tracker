@@ -16,7 +16,7 @@ const STATEMENTS_DIR = path.join(__dirname, "..", "statements");
 const REPORT_PATH    = path.join(STATEMENTS_DIR, "reconciliation-report.txt");
 
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
-const SUPABASE_KEY = process.env.VITE_SUPABASE_ANON_KEY;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 
 // ── Supabase ──────────────────────────────────────────────────────────────────
 async function sbGet(path) {

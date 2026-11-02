@@ -50,7 +50,7 @@ beforeEach(() => {
   process.env.VITE_SUPABASE_URL = "https://fake-project.supabase.co";
   process.env.VITE_SUPABASE_ANON_KEY = "fake-anon-key";
   process.env.SUPABASE_SERVICE_KEY = "fake-service-key";
-  delete process.env.CRON_SECRET; // no secret configured → auth check skipped
+  process.env.CRON_SECRET = "test-secret"; // auth fails closed; tests authenticate as the cron caller
 });
 
 afterEach(() => {
@@ -80,7 +80,7 @@ describe("chain-refresh heartbeat", () => {
     const { default: handler } = await import("../api/chain-refresh.js");
     const { res, out } = makeResSpy();
 
-    await handler({ method: "GET", query: {}, headers: {} }, res);
+    await handler({ method: "GET", query: {}, headers: { "x-cron-secret": "test-secret" } }, res);
 
     expect(out.statusCode).toBe(200);
     const hb = heartbeatUpserts("chain-refresh");
@@ -113,7 +113,7 @@ describe("chase heartbeat", () => {
     const { default: handler } = await import("../api/chase-step.js");
     const { res, out } = makeResSpy();
 
-    await handler({ method: "GET", query: {}, headers: {} }, res);
+    await handler({ method: "GET", query: {}, headers: { "x-cron-secret": "test-secret" } }, res);
 
     expect(out.statusCode).toBe(200);
     expect(out.jsonBody?.processed).toBe(0);
@@ -147,7 +147,7 @@ describe("extend-etrade-token heartbeat", () => {
     const { default: handler } = await import("../api/etrade.js");
     const { res, out } = makeResSpy();
 
-    await handler({ method: "GET", query: { action: "renew" }, headers: {} }, res);
+    await handler({ method: "GET", query: { action: "renew" }, headers: { "x-cron-secret": "test-secret" } }, res);
 
     expect(out.statusCode).toBe(200);
     const hb = heartbeatUpserts("extend-etrade-token");

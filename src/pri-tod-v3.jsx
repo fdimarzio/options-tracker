@@ -1,16 +1,11 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
 import { fetchQuotes, fetchOpenPositionChains, findOptionForContract, fetchPositions, schwabGet, buildOCCSymbol, fetchOptionQuotes } from "./schwab.js";
 import { BarChart, Bar, ComposedChart, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from "./lib/supabase.js";
+import { useAuth } from "./lib/authContext.js";
 import { computeClosePnl } from "./lib/pnl.js";
 import { computeOrigDte, isLeapOrigDte } from "./lib/leapGuard.js";
 import { computeAnnualizedReturn } from "./lib/annualizedReturn.js";
-
-// ── Supabase client ───────────────────────────────────────────────────────────
-const supabase = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
-);
 
 // ── camelCase <-> snake_case converters ──────────────────────────────────────
 function toApp(row) {
@@ -148,8 +143,8 @@ function planToDB(p) {
 
 // ── Users ─────────────────────────────────────────────────────────────────────
 const USERS_DEFAULT = [
-  { id:"frank",     name:"Frank M DiMarzio",           initials:"FD", color:"#00ff88", pin:"0116" },
-  { id:"priscilla", name:"Priscilla Perutti DiMarzio", initials:"PP", color:"#58a6ff", pin:"4223" },
+  { id:"frank",     name:"Frank M DiMarzio",           initials:"FD", color:"#00ff88" },
+  { id:"priscilla", name:"Priscilla Perutti DiMarzio", initials:"PP", color:"#58a6ff" },
 ];
 
 // ── Seed: open contracts only ─────────────────────────────────────────────────
@@ -2911,7 +2906,6 @@ function ExpiryRow({ expiry, dte, isOpen, onToggle, calls, puts, stockPrice, sho
 // ── ChainOrderPanel — place new STO/BTO from options chain ──────────────────
 // trade: { ticker, expiry, optType ("Call"/"Put"), strike, bid, ask, mid }
 function ChainOrderPanel({ trade, onClose, onOrderPlaced }) {
-  const SECRET   = "CronSecret2026!";
   const ACCOUNTS = ["Schwab", "ETrade 6917", "ETrade 8222"];
 
   const [account,    setAccount]    = useState(trade.account || null);
@@ -2942,7 +2936,7 @@ function ChainOrderPanel({ trade, onClose, onOrderPlaced }) {
     if (!account) { setError("Select an account first"); return; }
     setLoading(true); setError(null); setPreview(null); setSuccess(null);
     try {
-      const r = await fetch(`${apiBase}?action=${previewAction}&secret=${encodeURIComponent(SECRET)}`, {
+      const r = await fetch(`${apiBase}?action=${previewAction}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ticker:      trade.ticker,
@@ -2971,7 +2965,7 @@ function ChainOrderPanel({ trade, onClose, onOrderPlaced }) {
     if (!preview?.order?.id) return;
     setLoading(true); setError(null);
     try {
-      const r = await fetch(`${apiBase}?action=${approveAction}&secret=${encodeURIComponent(SECRET)}`, {
+      const r = await fetch(`${apiBase}?action=${approveAction}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ orderId: preview.order.id, dry_run: dryRun, limit_price: orderType === "LIMIT" ? limitPrice : undefined, order_type: orderType, duration }),
       });
@@ -4474,19 +4468,10 @@ function ImportDailyTab({ contracts, supabase }) {
 export default function App() {
   // Auth
   const [users,setUsers]         = useState(USERS_DEFAULT);
-  const [authUser,setAuthUser]   = useState(null);
-  const [loginStep,setLoginStep] = useState("pick");
-  const [loginTarget,setLoginTarget] = useState(null);
-  const [pinInput,setPinInput]   = useState("");
-  const [pinError,setPinError]   = useState("");
+  const { user: authUser, role: authRole, email: authEmail, signOut } = useAuth();
 
-  // PIN change (in Profile)
+  // Profile
   const [showProfile,setShowProfile] = useState(false);
-  const [pinStep,setPinStep]     = useState(1);
-  const [pinCur,setPinCur]       = useState("");
-  const [pinNew,setPinNew]       = useState("");
-  const [pinCon,setPinCon]       = useState("");
-  const [pinMsg,setPinMsg]       = useState("");
 
   // App core
   const [tab,setTab]             = useState("dashboard");
@@ -4694,17 +4679,6 @@ export default function App() {
     return () => document.removeEventListener("mousedown", h);
   }, []);
 
-  // Keyboard PIN input
-  useEffect(() => {
-    if (authUser || loginStep !== "pin") return;
-    const h = e => {
-      if (e.key >= "0" && e.key <= "9") pinDigit(e.key);
-      if (e.key === "Backspace") setPinInput(p => p.slice(0,-1));
-    };
-    window.addEventListener("keydown", h);
-    return () => window.removeEventListener("keydown", h);
-  }, [authUser, loginStep, pinInput, loginTarget]);
-
   // ── Supabase CRUD ─────────────────────────────────────────────────────────
   useEffect(() => {
     async function load() {
@@ -4744,7 +4718,7 @@ export default function App() {
         ] = await Promise.all([
           loadContracts(),
           supabase.from("plan_items").select("*").order("created_at", { ascending: false }).then(r => r.data),
-          supabase.from("app_users").select("*").then(r => r.data),
+          supabase.from("app_users").select("id,name,initials,color,role").then(r => r.data),
           supabase.from("period_notes").select("*").then(r => r.data),
           supabase.from("ai_chats").select("*").order("created_at", { ascending: true }).limit(40).then(r => r.data).catch(() => null),
           supabase.from("strategies").select("*").order("created_at", { ascending: true }).then(r => r.data).catch(() => null),
@@ -4772,7 +4746,6 @@ export default function App() {
         if (pData) setPlanItems(pData.map(planToApp));
 
         if (uData?.length) setUsers(uData);
-        else supabase.from("app_users").insert(USERS_DEFAULT).catch(() => {});
 
         if (nData?.length) {
           const map = {};
@@ -4979,12 +4952,6 @@ export default function App() {
     } catch(err) { console.error("persistNotes error:", err); }
   };
 
-  const persistUsers = async (updated) => {
-    setUsers(updated);
-    try {
-      await supabase.from("app_users").upsert(updated);
-    } catch(err) { console.error("persistUsers error:", err); }
-  };
 
   // Auto-refresh every 30 seconds to pick up changes from other users
   const loadAllContracts = async () => {
@@ -5027,7 +4994,7 @@ export default function App() {
   // cadence alone. Purely additive — same idempotent endpoint, no duplicated logic.
   useEffect(() => {
     if (!dbReady) return;
-    const poll = () => { fetch(`/api/chase-step?secret=${encodeURIComponent("CronSecret2026!")}`).catch(() => {}); };
+    const poll = () => { fetch(`/api/chase-step`).catch(() => {}); };
     poll();
     const chaseInterval = setInterval(poll, 15000);
     return () => clearInterval(chaseInterval);
@@ -5354,7 +5321,7 @@ export default function App() {
       // Fetch ETrade positions and write sharesEtrade
       try {
         setEtradeMsg("Fetching ETrade positions…");
-        const etRes  = await fetch("/api/etrade?action=positions&secret=CronSecret2026!");
+        const etRes  = await fetch("/api/etrade?action=positions");
         const etData = await etRes.json();
         // Auto-populate ETrade account value from API response
         // ETrade NAV = equity market value + cash (matches Schwab liquidationValue semantics)
@@ -5712,7 +5679,7 @@ export default function App() {
   const loadTradeOrders = async () => {
     setOrdersLoading(true);
     try {
-      const r = await fetch(`/api/schwab-orders?action=list&secret=${encodeURIComponent("CronSecret2026!")}`);
+      const r = await fetch(`/api/schwab-orders?action=list`);
       const data = await r.json();
       if (data.ok) setTradeOrders((data.orders||[]).filter(o=>!["filled","cancelled","error"].includes(o.status)));
     } catch(e) { console.warn("loadTradeOrders:", e.message); }
@@ -5724,8 +5691,8 @@ export default function App() {
       const order    = tradeOrders.find(o => o.id === orderId);
       const isETrade = order?.account?.startsWith("ETrade");
       const url      = isETrade
-        ? `/api/schwab-orders?action=order-cancel&secret=${encodeURIComponent("CronSecret2026!")}`
-        : `/api/schwab-orders?action=cancel&secret=${encodeURIComponent("CronSecret2026!")}`;
+        ? `/api/schwab-orders?action=order-cancel`
+        : `/api/schwab-orders?action=cancel`;
       const r = await fetch(url, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({orderId:String(orderId)}) });
       const data = await r.json();
       if (!r.ok) { alert(`Cancel failed: ${data.error||r.status}`); return; }
@@ -5875,25 +5842,6 @@ export default function App() {
   const pf = (k,v) => setPlanForm(p=>({...p,[k]:v}));
 
   // ── Auth ──────────────────────────────────────────────────────────────────
-  const selUser = u => { setLoginTarget(u); setPinInput(""); setPinError(""); setLoginStep("pin"); };
-  const pinDigit = d => {
-    const np = pinInput + d; setPinInput(np);
-    if (np.length === 4) {
-      if (np === loginTarget.pin) { setAuthUser(loginTarget); setLoginStep("pick"); setPinInput(""); }
-      else { setPinError("Wrong PIN"); setTimeout(() => { setPinInput(""); setPinError(""); }, 900); }
-    }
-  };
-  const doPINChange = () => {
-    if (pinStep===1) { if (pinCur!==authUser.pin){setPinMsg("Current PIN incorrect");return;} setPinStep(2);setPinMsg(""); }
-    else if (pinStep===2) { if (!/^\d{4}$/.test(pinNew)){setPinMsg("Must be 4 digits");return;} setPinStep(3);setPinMsg(""); }
-    else {
-      if (pinNew!==pinCon){setPinMsg("PINs don't match");return;}
-      const u = users.map(x=>x.id===authUser.id?{...x,pin:pinNew}:x);
-      persistUsers(u); setAuthUser(p=>({...p,pin:pinNew}));
-      setPinMsg("PIN updated ✓");
-      setTimeout(()=>{setShowProfile(false);setPinStep(1);setPinCur("");setPinNew("");setPinCon("");setPinMsg("");},1200);
-    }
-  };
 
   // ── Contract CRUD ─────────────────────────────────────────────────────────
   const REQUIRED_FIELDS = ["stock","type","optType","strike","qty","premium","dateExec","expires","account"];
@@ -6172,58 +6120,11 @@ ${JSON.stringify(summary, null, 1)}`;
     setTimeout(()=>aiEndRef.current?.scrollIntoView({behavior:"smooth"}),100);
   };
 
-  // ── LOGIN SCREEN ──────────────────────────────────────────────────────────
+  // ── LOADING ──────────────────────────────────────────────────────────
   if (!dbReady) return (
     <div style={{minHeight:"100vh",background:th("#010409","#f5f0e8"),display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:12}}>
       <div style={{width:12,height:12,border:"2px solid #1c2128",borderTopColor:"#00ff88",borderRadius:"50%",animation:"spin .7s linear infinite"}}/>
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-    </div>
-  );
-
-  if (!authUser) return (
-    <div style={{minHeight:"100vh",background:th("#010409","#f5f0e8"),display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Inter',sans-serif",padding:16}}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600&display=swap');*{box-sizing:border-box;margin:0;padding:0}@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}`}</style>
-      <div style={{width:"100%",maxWidth:340,animation:"fadeIn .3s ease"}}>
-        <div style={{textAlign:"center",marginBottom:28}}>
-          <div style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:52,height:52,borderRadius:14,background:"linear-gradient(135deg,#0d1f12,#0a1a1f)",border:"1px solid #00ff8830",boxShadow:"0 0 24px #00ff8818",marginBottom:10}}>
-            <span style={{fontFamily:"'JetBrains Mono',monospace",fontWeight:700,fontSize:17,color:"#00ff88"}}>PRI</span>
-          </div>
-          <div style={{fontFamily:"monospace",fontSize:10,color:th("#3a4050","#8a7e74"),letterSpacing:"0.08em"}}>PREMIUM RECURRING INCOME</div>
-          <div style={{fontFamily:"monospace",fontSize:8,color:th("#2a3040","#6b5f55"),letterSpacing:"0.06em",marginTop:2}}>TRADING OPTIONS DASHBOARD</div>
-        </div>
-        {loginStep==="pick" ? (
-          <div>
-            <div style={{fontSize:10,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",textAlign:"center",marginBottom:14,letterSpacing:"0.06em"}}>SELECT USER</div>
-            {users.map(u => (
-              <button key={u.id} onClick={()=>selUser(u)} style={{background:th("#0a0e14","#f8f3eb"),border:`1px solid ${u.color}25`,borderRadius:10,padding:"13px 16px",cursor:"pointer",display:"flex",alignItems:"center",gap:12,width:"100%",marginBottom:8}}>
-                <div style={{width:36,height:36,borderRadius:"50%",background:`${u.color}20`,border:`2px solid ${u.color}50`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"monospace",fontWeight:700,color:u.color,fontSize:11,flexShrink:0}}>{u.initials}</div>
-                <div style={{textAlign:"left"}}><div style={{color:th("#e6edf3","#0d0d0b"),fontSize:13,fontWeight:600}}>{u.name}</div><div style={{color:th("#3a4050","#8a7e74"),fontSize:9,fontFamily:"monospace",marginTop:1}}>Enter PIN to continue</div></div>
-              </button>
-            ))}
-          </div>
-        ) : (
-          <div style={{animation:"fadeIn .2s ease"}}>
-            <button onClick={()=>setLoginStep("pick")} style={{background:"transparent",border:"none",color:th("#3a4050","#8a7e74"),fontSize:10,fontFamily:"monospace",cursor:"pointer",marginBottom:14,display:"flex",alignItems:"center",gap:6}}>← Back</button>
-            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:18,padding:"10px 14px",background:th("#0a0e14","#f8f3eb"),borderRadius:8,border:`1px solid ${loginTarget.color}20`}}>
-              <div style={{width:32,height:32,borderRadius:"50%",background:`${loginTarget.color}20`,border:`2px solid ${loginTarget.color}50`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"monospace",fontWeight:700,color:loginTarget.color,fontSize:11}}>{loginTarget.initials}</div>
-              <div><div style={{color:th("#e6edf3","#0d0d0b"),fontSize:12,fontWeight:600}}>{loginTarget.name}</div><div style={{color:th("#2a3040","#6b5f55"),fontSize:9,fontFamily:"monospace"}}>Enter 4-digit PIN or use keyboard</div></div>
-            </div>
-            <div style={{display:"flex",justifyContent:"center",gap:12,marginBottom:18}}>
-              {[0,1,2,3].map(i=><div key={i} style={{width:13,height:13,borderRadius:"50%",background:i<pinInput.length?loginTarget.color:"transparent",border:`2px solid ${i<pinInput.length?loginTarget.color:th("#2a3040","#6b5f55")}`,transition:"all .15s"}}/>)}
-            </div>
-            {pinError && <div style={{textAlign:"center",color:"#ff4560",fontSize:11,fontFamily:"monospace",marginBottom:10}}>{pinError}</div>}
-            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
-              {[1,2,3,4,5,6,7,8,9,"",0,"⌫"].map((d,i)=>(
-                <button key={i} onClick={()=>d==="⌫"?setPinInput(p=>p.slice(0,-1)):d!==""?pinDigit(String(d)):null}
-                  disabled={d===""}
-                  style={{background:d===""?"transparent":th("#0a0e14","#f8f3eb"),border:d===""?"none":"1px solid #1c2128",borderRadius:8,padding:"13px 0",fontSize:d==="⌫"?16:18,fontFamily:"monospace",color:d===""?"transparent":th("#e6edf3","#0d0d0b"),cursor:d===""?"default":"pointer",fontWeight:500}}>
-                  {d}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
     </div>
   );
 
@@ -6619,18 +6520,13 @@ ${JSON.stringify(summary, null, 1)}`;
               <div><div style={{color:th("#e6edf3","#0d0d0b"),fontSize:14,fontWeight:600}}>{authUser.name}</div><div style={{color:th("#3a4050","#8a7e74"),fontSize:9,fontFamily:"monospace",marginTop:1}}>OPTIONS DESK USER</div></div>
             </div>
             <div style={{borderTop:"1px solid #1c2128",paddingTop:14,marginBottom:14}}>
-              <div style={{fontFamily:"monospace",fontSize:9,color:th("#3a4050","#8a7e74"),letterSpacing:"0.07em",marginBottom:10}}>CHANGE PIN</div>
-              <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                {pinStep>=1 && <div><FL>Current PIN</FL><input type="password" maxLength={4} value={pinCur} onChange={e=>setPinCur(e.target.value.replace(/\D/g,"").slice(0,4))} placeholder="••••" disabled={pinStep>1}/></div>}
-                {pinStep>=2 && <div><FL>New PIN (4 digits)</FL><input type="password" maxLength={4} value={pinNew} onChange={e=>setPinNew(e.target.value.replace(/\D/g,"").slice(0,4))} placeholder="••••" autoFocus/></div>}
-                {pinStep>=3 && <div><FL>Confirm New PIN</FL><input type="password" maxLength={4} value={pinCon} onChange={e=>setPinCon(e.target.value.replace(/\D/g,"").slice(0,4))} placeholder="••••" autoFocus/></div>}
-              </div>
-              {pinMsg && <div style={{marginTop:8,fontSize:11,fontFamily:"monospace",color:pinMsg.includes("✓")?"#00ff88":"#ff4560"}}>{pinMsg}</div>}
-              <button onClick={doPINChange} style={{background:"#00ff88",color:th("#010409","#f5f0e8"),border:"none",borderRadius:6,padding:"8px 0",fontSize:12,fontWeight:700,width:"100%",marginTop:10}}>{pinStep===3?"Save PIN":"Next →"}</button>
-              <div style={{marginTop:6,fontSize:9,color:th("#2a3040","#6b5f55"),fontFamily:"monospace",textAlign:"center"}}>2FA planned for future release</div>
+              <div style={{fontFamily:"monospace",fontSize:9,color:th("#3a4050","#8a7e74"),letterSpacing:"0.07em",marginBottom:10}}>SIGN-IN</div>
+              <div style={{fontSize:12,color:th("#e6edf3","#0d0d0b"),fontFamily:"monospace",wordBreak:"break-all"}}>{authEmail}</div>
+              <div style={{marginTop:4,fontSize:9,color:th("#3a4050","#8a7e74"),fontFamily:"monospace",letterSpacing:"0.05em"}}>ROLE: {String(authRole||"").toUpperCase()}</div>
+              <div style={{marginTop:8,fontSize:9,color:th("#2a3040","#6b5f55"),fontFamily:"monospace"}}>Passwordless sign-in · passkeys planned</div>
             </div>
-            <button onClick={()=>{setAuthUser(null);setShowProfile(false);}} style={{background:"#ff456010",color:"#ff4560",border:"1px solid #ff456030",borderRadius:6,padding:"8px",width:"100%",fontSize:12,marginBottom:8}}>Sign Out</button>
-            <button onClick={()=>{setShowProfile(false);setPinStep(1);setPinCur("");setPinNew("");setPinCon("");setPinMsg("");}} style={{background:"transparent",color:"#555",border:"1px solid #21262d",borderRadius:6,padding:"8px",width:"100%",fontSize:12}}>Close</button>
+            <button onClick={()=>{setShowProfile(false);signOut();}} style={{background:"#ff456010",color:"#ff4560",border:"1px solid #ff456030",borderRadius:6,padding:"8px",width:"100%",fontSize:12,marginBottom:8}}>Sign Out</button>
+            <button onClick={()=>setShowProfile(false)} style={{background:"transparent",color:"#555",border:"1px solid #21262d",borderRadius:6,padding:"8px",width:"100%",fontSize:12}}>Close</button>
           </div>
         </div>
       )}
@@ -6821,7 +6717,7 @@ ${JSON.stringify(summary, null, 1)}`;
                 <button onClick={async()=>{
                   setChaseModal(p=>({...p,saving:true}));
                   try {
-                    const r = await fetch(`/api/schwab-orders?action=chase-stop&secret=${encodeURIComponent("CronSecret2026!")}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({orderId:String(chaseModal.order.id)})});
+                    const r = await fetch(`/api/schwab-orders?action=chase-stop`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({orderId:String(chaseModal.order.id)})});
                     if(r.ok){loadTradeOrders();setChaseModal(null);}
                     else{const d=await r.json();alert(d.error||"Failed");}
                   }catch(e){alert(e.message);}
@@ -6835,7 +6731,7 @@ ${JSON.stringify(summary, null, 1)}`;
                   if(!chaseModal.floor||+chaseModal.floor<=0){alert("Set a floor price > 0");return;}
                   setChaseModal(p=>({...p,saving:true}));
                   try {
-                    const r = await fetch(`/api/schwab-orders?action=chase-start&secret=${encodeURIComponent("CronSecret2026!")}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({orderId:String(chaseModal.order.id),chaseFloor:+chaseModal.floor,chaseStep:+chaseModal.step})});
+                    const r = await fetch(`/api/schwab-orders?action=chase-start`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({orderId:String(chaseModal.order.id),chaseFloor:+chaseModal.floor,chaseStep:+chaseModal.step})});
                     if(r.ok){loadTradeOrders();setChaseModal(null);}
                     else{const d=await r.json();alert(d.error||"Failed");}
                   }catch(e){alert(e.message);}
@@ -7134,7 +7030,7 @@ ${JSON.stringify(summary, null, 1)}`;
                   {label:"ETrade Re-Auth",   icon:"🔑", fn:()=>{window.open("/api/etrade?action=auth","_blank");setShowMenu(false);}},
                   {label:"Export JSON",  icon:"⬇",  fn:()=>{doExport();setShowMenu(false);}},
 
-                  {label:"Sign Out",     icon:"⏏",  fn:()=>{setAuthUser(null);setShowMenu(false);}},
+                  {label:"Sign Out",     icon:"⏏",  fn:()=>{setShowMenu(false);signOut();}},
                 ].map(x=>(
                   <button key={x.label} onClick={x.fn} style={{display:"flex",alignItems:"center",gap:9,width:"100%",padding:"9px 13px",background:"transparent",border:"none",borderBottom:"1px solid #1c2128",color:th("#c9d1d9","#1a1a18"),fontSize:12,textAlign:"left"}}><span style={{fontSize:13}}>{x.icon}</span>{x.label}</button>
                 ))}
@@ -7626,7 +7522,7 @@ ${JSON.stringify(summary, null, 1)}`;
               const fetchPreview = async () => {
                 setOrderLoading(true); setOrderError(null); setOrderPreview(null); setOrderSuccess(null);
                 try {
-                  const r = await fetch(`${apiBase}?action=${previewAction}&secret=${encodeURIComponent("CronSecret2026!")}`, {
+                  const r = await fetch(`${apiBase}?action=${previewAction}`, {
                     method:"POST", headers:{"Content-Type":"application/json"},
                     body: JSON.stringify({ contract_id: orig.id, qty: orderControls.qty||orig.qty, limit_price: orderControls.limitPrice||undefined, order_type: orderControls.orderType, duration: orderControls.duration, special_instruction: orderControls.specialInstruction }),
                   });
@@ -7642,7 +7538,7 @@ ${JSON.stringify(summary, null, 1)}`;
                 if (!orderPreview?.order?.id) return;
                 setOrderLoading(true); setOrderError(null);
                 try {
-                  const r = await fetch(`${apiBase}?action=${approveAction}&secret=${encodeURIComponent("CronSecret2026!")}`, {
+                  const r = await fetch(`${apiBase}?action=${approveAction}`, {
                     method:"POST", headers:{"Content-Type":"application/json"},
                     body: JSON.stringify({ orderId: orderPreview.order.id, dry_run: dryRun, limit_price: orderControls.limitPrice, order_type: orderControls.orderType, duration: orderControls.duration, special_instruction: orderControls.specialInstruction }),
                   });
@@ -8113,7 +8009,7 @@ ${JSON.stringify(summary, null, 1)}`;
                                       <button onClick={async()=>{
                                         setOrderStatuses(p=>({...p,[o.id]:{...p[o.id],loading:true}}));
                                         try {
-                                          const r = await fetch(`/api/schwab-orders?action=status&orderId=${o.id}&secret=${encodeURIComponent("CronSecret2026!")}`);
+                                          const r = await fetch(`/api/schwab-orders?action=status&orderId=${o.id}`);
                                           const data = await r.json();
                                           setOrderStatuses(p=>({...p,[o.id]:{...p[o.id],loading:false,result:data}}));
                                           loadTradeOrders();
@@ -8167,7 +8063,7 @@ ${JSON.stringify(summary, null, 1)}`;
                                               if (!val || val <= 0) { alert("Enter a valid price"); return; }
                                               setOrderStatuses(p=>({...p,[o.id]:{...p[o.id],repricing:true}}));
                                               try {
-                                                const r = await fetch(`/api/schwab-orders?action=reprice&secret=${encodeURIComponent("CronSecret2026!")}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({orderId:String(o.id),newPrice:val,reason:"manual"})});
+                                                const r = await fetch(`/api/schwab-orders?action=reprice`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({orderId:String(o.id),newPrice:val,reason:"manual"})});
                                                 const d = await r.json();
                                                 if(r.ok){loadTradeOrders();setOrderStatuses(p=>({...p,[o.id]:{...p[o.id],repricing:false,repriceResult:"✓ Repriced to $"+val.toFixed(2)}}));}
                                                 else{setOrderStatuses(p=>({...p,[o.id]:{...p[o.id],repricing:false,repriceResult:"⚠ "+d.error}}));}
