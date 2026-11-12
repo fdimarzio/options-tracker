@@ -2225,7 +2225,7 @@ function ExpiryRow({ expiry, dte, isOpen, onToggle, calls, puts, stockPrice, sho
 // ── ChainOrderPanel — place new STO/BTO from options chain ──────────────────
 // trade: { ticker, expiry, optType ("Call"/"Put"), strike, bid, ask, mid }
 function ChainOrderPanel({ trade, onClose, onOrderPlaced }) {
-  const SECRET   = "CronSecret2026!";
+  const SECRET   = "<CRON_SECRET-redacted>";
   const ACCOUNTS = ["Schwab", "ETrade 6917", "ETrade 8222"];
 
   const [account,    setAccount]    = useState(trade.account || null);
@@ -4085,7 +4085,7 @@ export default function App() {
       // Fetch ETrade positions and write sharesEtrade
       try {
         setEtradeMsg("Fetching ETrade positions…");
-        const etRes  = await fetch("/api/etrade?action=positions&secret=CronSecret2026!");
+        const etRes  = await fetch("/api/etrade?action=positions&secret=<CRON_SECRET-redacted>");
         const etData = await etRes.json();
         if (etData?.positions?.length) {
           // Group by symbol — sum across both ETrade accounts, floor to whole shares
@@ -4341,7 +4341,7 @@ export default function App() {
   const loadTradeOrders = async () => {
     setOrdersLoading(true);
     try {
-      const r = await fetch(`/api/schwab-orders?action=list&secret=${encodeURIComponent("CronSecret2026!")}`);
+      const r = await fetch(`/api/schwab-orders?action=list&secret=${encodeURIComponent("<CRON_SECRET-redacted>")}`);
       const data = await r.json();
       if (data.ok) setTradeOrders((data.orders||[]).filter(o=>!["filled","cancelled","error"].includes(o.status)));
     } catch(e) { console.warn("loadTradeOrders:", e.message); }
@@ -4353,8 +4353,8 @@ export default function App() {
       const order    = tradeOrders.find(o => o.id === orderId);
       const isETrade = order?.account?.startsWith("ETrade");
       const url      = isETrade
-        ? `/api/schwab-orders?action=order-cancel&secret=${encodeURIComponent("CronSecret2026!")}`
-        : `/api/schwab-orders?action=cancel&secret=${encodeURIComponent("CronSecret2026!")}`;
+        ? `/api/schwab-orders?action=order-cancel&secret=${encodeURIComponent("<CRON_SECRET-redacted>")}`
+        : `/api/schwab-orders?action=cancel&secret=${encodeURIComponent("<CRON_SECRET-redacted>")}`;
       const r = await fetch(url, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({orderId:String(orderId)}) });
       const data = await r.json();
       if (!r.ok) { alert(`Cancel failed: ${data.error||r.status}`); return; }
@@ -6006,7 +6006,7 @@ ${JSON.stringify(summary, null, 1)}`;
               const fetchPreview = async () => {
                 setOrderLoading(true); setOrderError(null); setOrderPreview(null); setOrderSuccess(null);
                 try {
-                  const r = await fetch(`${apiBase}?action=${previewAction}&secret=${encodeURIComponent("CronSecret2026!")}`, {
+                  const r = await fetch(`${apiBase}?action=${previewAction}&secret=${encodeURIComponent("<CRON_SECRET-redacted>")}`, {
                     method:"POST", headers:{"Content-Type":"application/json"},
                     body: JSON.stringify({ contract_id: orig.id, qty: orderControls.qty||orig.qty, limit_price: orderControls.limitPrice||undefined, order_type: orderControls.orderType, duration: orderControls.duration, special_instruction: orderControls.specialInstruction }),
                   });
@@ -6022,7 +6022,7 @@ ${JSON.stringify(summary, null, 1)}`;
                 if (!orderPreview?.order?.id) return;
                 setOrderLoading(true); setOrderError(null);
                 try {
-                  const r = await fetch(`${apiBase}?action=${approveAction}&secret=${encodeURIComponent("CronSecret2026!")}`, {
+                  const r = await fetch(`${apiBase}?action=${approveAction}&secret=${encodeURIComponent("<CRON_SECRET-redacted>")}`, {
                     method:"POST", headers:{"Content-Type":"application/json"},
                     body: JSON.stringify({ orderId: orderPreview.order.id, dry_run: dryRun, limit_price: orderControls.limitPrice, order_type: orderControls.orderType, duration: orderControls.duration, special_instruction: orderControls.specialInstruction }),
                   });
@@ -6436,7 +6436,7 @@ ${JSON.stringify(summary, null, 1)}`;
                                       <button onClick={async()=>{
                                         setOrderStatuses(p=>({...p,[o.id]:{...p[o.id],loading:true}}));
                                         try {
-                                          const r = await fetch(`/api/schwab-orders?action=status&orderId=${o.id}&secret=${encodeURIComponent("CronSecret2026!")}`);
+                                          const r = await fetch(`/api/schwab-orders?action=status&orderId=${o.id}&secret=${encodeURIComponent("<CRON_SECRET-redacted>")}`);
                                           const data = await r.json();
                                           setOrderStatuses(p=>({...p,[o.id]:{...p[o.id],loading:false,result:data}}));
                                           loadTradeOrders();

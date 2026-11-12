@@ -86,10 +86,10 @@
 ## Cron Jobs (cron-job.org)
 | Job | URL | Schedule |
 |-----|-----|----------|
-| Market Refresh | `/api/market-refresh?secret=CronSecret2026!` | Every 5 min, Mon-Fri |
-| Chain Refresh | `/api/chain-refresh?secret=CronSecret2026!` | Every 15 min, Mon-Fri |
-| Auto Import | `/api/auto-import?secret=CronSecret2026!` | Every 5 min, Mon-Fri |
-| ETrade Renew | `/api/etrade?action=renew&secret=CronSecret2026!` | Every 90 min, Mon-Fri |
+| Market Refresh | `/api/market-refresh?secret=<CRON_SECRET-redacted>` | Every 5 min, Mon-Fri |
+| Chain Refresh | `/api/chain-refresh?secret=<CRON_SECRET-redacted>` | Every 15 min, Mon-Fri |
+| Auto Import | `/api/auto-import?secret=<CRON_SECRET-redacted>` | Every 5 min, Mon-Fri |
+| ETrade Renew | `/api/etrade?action=renew&secret=<CRON_SECRET-redacted>` | Every 90 min, Mon-Fri |
 
 ---
 
@@ -154,9 +154,9 @@ UPDATE contracts SET account = 'Schwab 3866' WHERE account = 'Schwab';
 - Scoring model planned: -1 to +1 or 0-100 based on conditions + learned patterns
 
 ## Secret
-`CronSecret2026!` — used in all API calls
+`<CRON_SECRET-redacted>` — used in all API calls
 
 ## ETrade Re-auth URL
-`https://options-tracker-five.vercel.app/api/etrade?action=auth&secret=CronSecret2026!`
+`https://options-tracker-five.vercel.app/api/etrade?action=auth&secret=<CRON_SECRET-redacted>`
 
 Good luck with the next session!

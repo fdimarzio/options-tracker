@@ -30,9 +30,9 @@
 **Second project:** Standalone options chain viewer at `C:\Users\fmdim\options-chain` using `src/OptionsChain.jsx`
 
 **Supabase URL:** `https://ufagnokxmetushstgrip.supabase.co`  
-**Cron/auth secret:** `CronSecret2026!`  
+**Cron/auth secret:** `<CRON_SECRET-redacted>`  
 **Schwab re-auth:** `https://options-tracker-five.vercel.app/api/schwab-auth`  
-**ETrade re-auth:** `https://options-tracker-five.vercel.app/api/etrade?action=auth&secret=CronSecret2026!`
+**ETrade re-auth:** `https://options-tracker-five.vercel.app/api/etrade?action=auth&secret=<CRON_SECRET-redacted>`
 
 ---
 
