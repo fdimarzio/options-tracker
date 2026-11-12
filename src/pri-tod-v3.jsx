@@ -7,6 +7,7 @@ import { computeClosePnl } from "./lib/pnl.js";
 import { computeOrigDte, isLeapOrigDte } from "./lib/leapGuard.js";
 import { computeAnnualizedReturn } from "./lib/annualizedReturn.js";
 import { patchStocksData, loadStocksDataChecked, setTickerFields, setCashField, describeSupabaseError } from "./lib/stocksDataStore.js";
+import { loadUserSettingsChecked, saveUserSetting, mergeUserSettings, isUserSettingField } from "./lib/stockUserSettings.js";
 
 // ── camelCase <-> snake_case converters ──────────────────────────────────────
 function toApp(row) {
@@ -4716,6 +4717,7 @@ export default function App() {
           colData, sdData, chainCache, wlData,
           wlNotesData, wlAlertsData, oppData,
           goalsData, bandsData, mxData, trData,
+          usData,
         ] = await Promise.all([
           loadContracts(),
           supabase.from("plan_items").select("*").order("created_at", { ascending: false }).then(r => r.data),
@@ -4734,6 +4736,7 @@ export default function App() {
           loadPrefs("profit_bands"),
           loadPrefs("dte_matrix"),
           loadPrefs("trade_rules"),
+          loadUserSettingsChecked(supabase), // never throws; { ok:false } on failure
         ]);
 
         // ── Apply results ─────────────────────────────────────────────────────
@@ -4768,11 +4771,22 @@ export default function App() {
         // A failed load must not look like an empty DB: block every stocks_data write
         // until a load succeeds, and tell the user why.
         if (sdData?.ok) {
-          if (sdData.cols) setStocksData(sdData.cols);
           setStocksDataStatus("ready");
         } else {
           setStocksDataStatus("error");
           setSaveError(`Stock data failed to load (${sdData?.error || "unknown error"}). Stock edits are disabled until you reload — nothing was changed.`);
+        }
+        // User-owned settings (auto-STO opt-in, earnings date, manual IV) come from their own
+        // table and are overlaid onto the market-data blob for display. If they fail to load,
+        // show them as unset (auto-STO OFF) with a banner and block edits — never guess.
+        if (usData?.ok) {
+          setUserSettingsStatus("ready");
+        } else {
+          setUserSettingsStatus("error");
+          setSaveError(`Stock settings (auto-STO, earnings date, IV) failed to load (${usData?.error || "unknown error"}). They show as unset and cannot be edited until you reload — nothing was changed.`);
+        }
+        if (sdData?.ok || usData?.ok) {
+          setStocksData(mergeUserSettings(sdData?.cols || {}, usData?.ok ? usData.settings : {}));
         }
         if (wlData?.cols?.tickers) setWatchlist(wlData.cols.tickers);
         if (wlNotesData?.cols) setWatchlistNotes(wlNotesData.cols);
@@ -5069,6 +5083,23 @@ export default function App() {
   //  - saveError is shown in a visible banner; nothing fails silently
   const [stocksDataStatus, setStocksDataStatus] = useState("loading"); // "loading" | "ready" | "error"
   const [saveError, setSaveError] = useState(null);
+  // User-owned settings (auto-STO opt-in, earnings date, manual IV) live in their own table,
+  // one row per ticker — see src/lib/stockUserSettings.js. Same gating as stocks_data.
+  const [userSettingsStatus, setUserSettingsStatus] = useState("loading"); // "loading" | "ready" | "error"
+  const persistUserSetting = async (label, ticker, uiFields) => {
+    if (userSettingsStatus !== "ready") {
+      setSaveError(`NOT SAVED (${label}): stock settings have not loaded successfully. Reload the page and try again.`);
+      return false;
+    }
+    try {
+      await saveUserSetting(supabase, ticker, uiFields);
+      return true;
+    } catch (e) {
+      console.error(`[stock_user_settings] save failed (${label}):`, e);
+      setSaveError(`NOT SAVED (${label}): ${e?.message || describeSupabaseError(e)}`);
+      return false;
+    }
+  };
   // Persist a small change to stocks_data: re-reads the freshest DB copy, applies the
   // mutator to it, writes with compare-and-swap. Never writes this tab's in-memory copy.
   // Returns true on success; on any failure shows a banner and returns false.
@@ -5220,7 +5251,11 @@ export default function App() {
     // the freshest DB copy. On failure the banner tells the user and the UI change is rolled back.
     const prevValue = stocksData[ticker]?.[field];
     setStocksData(prev => ({ ...prev, [ticker]: { ...(prev[ticker] || {}), [field]: value } }));
-    const ok = await persistStocksData(`${ticker} ${field}`, setTickerFields(ticker, { [field]: value }));
+    // User-owned fields (autoSto, earningsDate, iv) are a single-row upsert into
+    // stock_user_settings; everything else is a patch onto the freshest stocks_data copy.
+    const ok = isUserSettingField(field)
+      ? await persistUserSetting(`${ticker} ${field}`, ticker, { [field]: value })
+      : await persistStocksData(`${ticker} ${field}`, setTickerFields(ticker, { [field]: value }));
     if (!ok) setStocksData(prev => ({ ...prev, [ticker]: { ...(prev[ticker] || {}), [field]: prevValue } }));
   };
 
@@ -9562,10 +9597,12 @@ ${JSON.stringify(summary, null, 1)}`;
                     <button onClick={async()=>{
                       if(!addStockForm.ticker)return;
                       const t=addStockForm.ticker;
-                      const fields={sharesSchwab:addStockForm.schwabShares?+addStockForm.schwabShares:null,sharesEtrade:addStockForm.etradeShares?+addStockForm.etradeShares:null,currentPrice:addStockForm.price?+addStockForm.price:null,earningsDate:addStockForm.earningsDate||null};
+                      const fields={sharesSchwab:addStockForm.schwabShares?+addStockForm.schwabShares:null,sharesEtrade:addStockForm.etradeShares?+addStockForm.etradeShares:null,currentPrice:addStockForm.price?+addStockForm.price:null};
+                      const earningsDate=addStockForm.earningsDate||null; // user-owned -> stock_user_settings, not the blob
+                      if(!(await persistUserSetting(`add ${t} earnings date`, t, {earningsDate}))) return; // banner is showing
                       const ok = await persistStocksData(`add ${t}`, setTickerFields(t, fields));
                       if(!ok) return; // banner is showing; keep the form open so nothing typed is lost
-                      setStocksData(prev=>({...prev,[t]:{...(prev[t]||{}),...fields}}));
+                      setStocksData(prev=>({...prev,[t]:{...(prev[t]||{}),...fields,earningsDate}}));
                       setAddStockForm({ticker:"",schwabShares:"",etradeShares:"",price:"",earningsDate:""});
                       setShowAddStock(false);
                     }} style={{background:"#00ff88",color:th("#010409","#f5f0e8"),border:"none",borderRadius:6,padding:"7px 16px",fontSize:11,fontWeight:700,fontFamily:"monospace"}}>SAVE</button>

@@ -7,6 +7,7 @@ import { computeOrigDte, shouldBlockForLeapProtection } from "./_lib/leapGuard.j
 import { isExpiryBlockedByEarnings } from "./_lib/earningsGuard.js";
 import { resolveCooldownMinutes, isWithinCooldown, buildNotificationDedupKey, makeNotificationLogLookupKey } from "./_lib/notificationCooldown.js";
 import { deriveTickerUniverse } from "./_lib/tickerUniverse.js";
+import { loadStockUserSettings } from "./_lib/stockUserSettings.js";
 import { authorize } from "./_lib/auth.js";
 
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
@@ -2181,16 +2182,42 @@ export default async function handler(req, res) {
       if (!stoRuleAuto) {
         console.log("[auto-sto] No enabled STO rule found");
       } else {
-        // Build whitelist from the same derived universe chain-refresh.js uses,
-        // so chain coverage and auto-STO scanning never drift out of sync — any
-        // ticker with >=100 shares across accounts is eligible unless explicitly
-        // opted out (autoSto === false) in the Stocks tab.
-        const { autoStoEligible } = deriveTickerUniverse({ stocksData: updatedSD, contracts, watchlistTickers });
+        // User-owned settings live in the stock_user_settings table (NOT the stocks_data
+        // blob, which only the server writes). Auto-STO is EXPLICIT OPT-IN: a ticker is
+        // eligible only with >=100 shares AND a row with auto_sto = true. This run only
+        // READS that table. If it cannot be read we fail CLOSED — no orders this run — and
+        // alert once a day, rather than guessing which tickers the user switched on.
+        let userSettings = null;
+        try {
+          userSettings = await loadStockUserSettings({ supabaseUrl: SUPABASE_URL, serviceKey: SUPABASE_SVC_KEY });
+        } catch (e) {
+          console.error(`[auto-sto] stock_user_settings load FAILED — failing closed, NO auto-STO orders this run: ${e.message}`);
+          const settingsAlertKey = "auto_sto_settings_error";
+          if (sentData.contracts[settingsAlertKey]?.sentAt?.slice(0, 10) !== today) {
+            await sendPushover(
+              "⚠️ Auto-STO paused — settings unreadable",
+              `Could not read stock_user_settings (${e.message}). No covered-call orders will be placed until it loads. Has sql/stocks_integrity/002 been applied?`,
+              `${APP_URL}/?tab=stocks`, "Open Stocks", 1
+            ).catch(()=>{});
+            sentData.contracts[settingsAlertKey] = { sentAt: lastRefresh };
+            await fetch(`${SUPABASE_URL}/rest/v1/col_prefs`, {
+              method: "POST",
+              headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
+              body: JSON.stringify({ id: "notifications_sent", cols: sentData, updated_at: lastRefresh }),
+            }).catch(err => console.warn("[auto-sto] notifications_sent save failed:", err.message));
+          }
+        }
+
+        // Build whitelist from the same derived universe chain-refresh.js uses (holdings
+        // from the system-owned blob), narrowed to tickers the user has opted in.
+        const { autoStoEligible } = userSettings
+          ? deriveTickerUniverse({ stocksData: updatedSD, contracts, watchlistTickers, userSettings })
+          : { autoStoEligible: [] };
         const autoStoWhitelist = autoStoEligible;
-        console.log(`[auto-sto] eligible tickers (>=100sh, not opted out): ${autoStoWhitelist.join(", ") || "none"}`);
+        console.log(`[auto-sto] eligible tickers (>=100sh AND auto_sto opted in): ${autoStoWhitelist.join(", ") || "none"}`);
 
         if (!autoStoWhitelist.length) {
-          console.log("[auto-sto] No tickers eligible — need >=100 shares in stocks_data and autoSto !== false");
+          console.log("[auto-sto] No tickers eligible — need >=100 shares in stocks_data AND a stock_user_settings row with auto_sto = true");
         } else {
           const isDryRun   = stoRuleAuto.dry_run !== false;
           const minChange  = +(stoRuleAuto.min_change_pct ?? 0.5);
