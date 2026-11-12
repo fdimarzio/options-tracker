@@ -414,21 +414,46 @@ describe("sql/stocks_integrity — stock_user_settings migration, backfill, roll
     expect(migCode).not.toMatch(/to anon/);
   });
 
-  it("backfill is idempotent, per-row fault tolerant, and carries over ONLY a literal autoSto=true", () => {
+  it("backfill is idempotent and per-row fault tolerant", () => {
     expect(fillCode).toContain("on conflict (ticker) do nothing");
-    expect(fillCode).toContain("coalesce((r.v->>'autoSto') = 'true', false)");
     expect(fillCode).toMatch(/exception when others then/);
+  });
+
+  it("backfill SEEDS today's production-eligible symbols by default (preserves current behavior)", () => {
+    expect(fillCode).toContain("seed_legacy_eligibility constant boolean := true");
+    // auto_sto = explicit true OR (not explicitly false AND >= 100 shares) — the old rule, verbatim
+    expect(fillCode).toMatch(/v_auto := \(\(r\.v->>'autoSto'\) = 'true'\)\s+or \(seed_legacy_eligibility\s+and \(r\.v->>'autoSto'\) is distinct from 'false'\s+and v_shares >= 100\);/);
+    // same total-shares rule as tickerUniverse.totalShares(): sharesByAcct when non-empty, else shares
+    expect(fillCode).toContain("jsonb_typeof(r.v->'sharesByAcct') = 'object' and r.v->'sharesByAcct' <> '{}'::jsonb");
+    expect(fillCode).toContain("v_shares := coalesce((r.v->>'shares')::numeric, 0)");
+  });
+
+  it("an explicit autoSto=false is never flipped to true by seeding, and sub-100-share tickers get no inferred true", () => {
+    // the only way v_auto becomes true without an explicit 'true' goes through `is distinct from 'false'` AND `v_shares >= 100`
+    const auto = fillCode.match(/v_auto := [^;]*;/)[0];
+    expect(auto).toContain("is distinct from 'false'");
+    expect(auto).toContain("v_shares >= 100");
+    expect(auto).not.toMatch(/or true|:= true;/);
+  });
+
+  it("the strict opt-in alternative is a one-word switch, and the preview + 3 verification queries are provided", () => {
+    expect(fill).toMatch(/set seed_legacy_eligibility := false/);
+    expect(fill).toContain("PREVIEW (read-only)");
+    expect(fill).toContain("will_be_auto_sto");
+    expect(fill).toMatch(/\(a\) Anything eligible under the OLD rule that is NOT opted in now/);
+    expect(fill).toMatch(/\(b\) Anything opted in now that the OLD rule would NOT have traded/);
+    expect(fill).toMatch(/\(c\) The final opted-in list/);
+  });
+
+  it("documents the production snapshot it was written against (10 symbols), including AMD staying false", () => {
+    expect(fill).toContain("AAPL, AMZN, CAT, CEG, JPM, MCD, NVDA, SPCX, TSLA, WDC");
+    expect(fill).toMatch(/AMD has autoSto=false in the blob and stays false/);
   });
 
   it("backfill never modifies or deletes anything in col_prefs (legacy fields stay for rollback)", () => {
     expect(fillCode).not.toMatch(/\bupdate\s+public\.col_prefs\b/i);
     expect(fillCode).not.toMatch(/\bdelete\s+from\b/i);
     expect(fillCode).not.toMatch(/\btruncate\b/i);
-  });
-
-  it("the legacy-equivalent preservation block exists but is COMMENTED OUT (opt-in is the default)", () => {
-    expect(fill).toMatch(/^-- insert into public\.stock_user_settings \(ticker, auto_sto\)/m);
-    expect(fillCode).not.toMatch(/insert into public\.stock_user_settings \(ticker, auto_sto\)/);
   });
 
   it("rollback copies settings back into the blob inside a transaction, then drops only its own objects", () => {
@@ -442,6 +467,74 @@ describe("sql/stocks_integrity — stock_user_settings migration, backfill, roll
     expect(aud).toContain("fields  constant text[] := array['auto_sto','earnings_date','iv_manual']");
     expect(aud).toMatch(/security definer\s+set search_path = public, pg_temp/);
     expect(aud).toContain("'stock_user_settings'");
+  });
+});
+
+// ═══ (E) seeding-rule parity ═════════════════════════════════════════════════════
+// IMPORTANT: this tests a JavaScript MIRROR of the rule written in 003_backfill_stock_user_settings.sql,
+// against the REAL deriveTickerUniverse. It proves the RULE preserves today's behavior; it does NOT
+// execute the SQL (which was never run). Fixture = read-only snapshot of production stocks_data, 2026-11-11.
+describe("seeding rule parity — JS mirror of 003's rule vs the real scanner (SQL itself not executed)", () => {
+  const PROD_SNAPSHOT = {
+    AAPL: { autoSto: true,  sharesByAcct: { "ETrade 6917": 226 } },
+    AMZN: { autoSto: true,  sharesByAcct: { "ETrade 6917": 300, "Schwab 3866": 700 } },
+    CAT:  { autoSto: true,  sharesByAcct: { "Schwab 3866": 101.0406 } },
+    CEG:  { autoSto: true,  sharesByAcct: { "ETrade 6917": 100 } },
+    JPM:  { autoSto: true,  sharesByAcct: { "Schwab 3866": 217.0498 } },
+    MCD:  {                 sharesByAcct: { "ETrade 8222": 100 } },          // never set
+    NVDA: { autoSto: true,  sharesByAcct: { "ETrade 6917": 322 } },
+    SPCX: {                 sharesByAcct: { "ETrade 6917": 100 } },          // never set
+    TSLA: {                 sharesByAcct: { "Schwab 3866": 100 } },          // never set
+    WDC:  { autoSto: true,  sharesByAcct: { "Schwab 3866": 103.0564 } },
+    AMD:  { autoSto: false, sharesByAcct: { "ETrade 6917": 200, "ETrade 8222": 20 } },
+    OKLO: { autoSto: true,  shares: 1 },
+    COST: {                 sharesByAcct: { "ETrade 6917": 9 } },            // < 100, never set
+    XYZ:  { autoSto: null,  shares: 150 },                                   // JSON null counts as "not set"
+  };
+
+  // mirror of 003: sum(sharesByAcct) if non-empty else shares
+  const totalShares = sd => (sd.sharesByAcct && Object.keys(sd.sharesByAcct).length)
+    ? Object.values(sd.sharesByAcct).reduce((a, n) => a + (+n || 0), 0) : (+sd.shares || 0);
+  // mirror of 003's v_auto expression
+  const seed = (blob, seedLegacy = true) => Object.fromEntries(Object.entries(blob).map(([t, sd]) => [
+    t, { auto_sto: sd.autoSto === true || (seedLegacy && sd.autoSto !== false && totalShares(sd) >= 100) },
+  ]));
+  // the OLD production rule, expressed with the real share filter: >=100 shares AND autoSto !== false
+  const oldEligible = async blob => {
+    const { deriveTickerUniverse } = await import("../api/_lib/tickerUniverse.js");
+    const { coveredCallEligible } = deriveTickerUniverse({ stocksData: blob });
+    return coveredCallEligible.filter(t => blob[t]?.autoSto !== false);
+  };
+
+  it("positive — after seeding, the new opt-in scanner is eligible for EXACTLY the symbols the old rule traded (the 10 production symbols + one synthetic JSON-null case)", async () => {
+    const { deriveTickerUniverse } = await import("../api/_lib/tickerUniverse.js");
+    const before = await oldEligible(PROD_SNAPSHOT);
+    const after = deriveTickerUniverse({ stocksData: PROD_SNAPSHOT, userSettings: seed(PROD_SNAPSHOT) }).autoStoEligible;
+    expect(before).toEqual(["AAPL", "AMZN", "CAT", "CEG", "JPM", "MCD", "NVDA", "SPCX", "TSLA", "WDC", "XYZ"]);
+    expect(after).toEqual(before);
+  });
+
+  it("negative — AMD (explicit false) and COST (< 100 shares) are NOT eligible after seeding; OKLO (explicit true, 1 share) is carried but not tradable", async () => {
+    const { deriveTickerUniverse } = await import("../api/_lib/tickerUniverse.js");
+    const settings = seed(PROD_SNAPSHOT);
+    const { autoStoEligible } = deriveTickerUniverse({ stocksData: PROD_SNAPSHOT, userSettings: settings });
+    expect(settings.AMD.auto_sto).toBe(false);
+    expect(settings.COST.auto_sto).toBe(false);
+    expect(settings.OKLO.auto_sto).toBe(true);
+    for (const t of ["AMD", "COST", "OKLO"]) expect(autoStoEligible).not.toContain(t);
+  });
+
+  it("edge — with the strict switch (seed_legacy_eligibility := false) only explicit trues carry over, so never-set tickers drop out", async () => {
+    const { deriveTickerUniverse } = await import("../api/_lib/tickerUniverse.js");
+    const { autoStoEligible } = deriveTickerUniverse({ stocksData: PROD_SNAPSHOT, userSettings: seed(PROD_SNAPSHOT, false) });
+    expect(autoStoEligible).toEqual(["AAPL", "AMZN", "CAT", "CEG", "JPM", "NVDA", "WDC"]);
+    for (const t of ["MCD", "SPCX", "TSLA", "XYZ"]) expect(autoStoEligible).not.toContain(t);
+  });
+
+  it("auto_sto = null is NOT eligible (the column is NOT NULL, and the scanner would reject null anyway)", async () => {
+    const { deriveTickerUniverse } = await import("../api/_lib/tickerUniverse.js");
+    const { autoStoEligible } = deriveTickerUniverse({ stocksData: { NVDA: { shares: 322 } }, userSettings: { NVDA: { auto_sto: null } } });
+    expect(autoStoEligible).toEqual([]);
   });
 });
 

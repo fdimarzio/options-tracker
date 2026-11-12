@@ -18,8 +18,11 @@
 --                          market-refresh only.
 --
 -- AUTO-STO IS EXPLICIT OPT-IN: a ticker is eligible only when a row exists with
--- auto_sto = true (and it still needs >= 100 shares). auto_sto = false OR no row = not eligible.
+-- auto_sto = true (and it still needs >= 100 shares). auto_sto = false, NULL (impossible: the
+-- column is NOT NULL, and the scanner only accepts a literal true anyway) or no row = not eligible.
 -- (Previously "never set" meant eligible; only an explicit false opted a ticker out.)
+-- Today's production behavior is PRESERVED by 003, which seeds exactly the symbols the old rule
+-- trades (>= 100 shares and autoSto not explicitly false). Do not skip 003.
 
 create table if not exists public.stock_user_settings (
   ticker        text        primary key
