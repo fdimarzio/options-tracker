@@ -1,10 +1,10 @@
 // tests/ticker-universe.test.js
-// Chain coverage used to be driven by open contracts + a manual per-ticker
-// "autoSto" flag, so a stock bought for covered calls (e.g. INTC, 200 sh) had
-// no chain loaded — and auto-STO could only suggest, never execute — until
-// someone remembered to flip the flag in the Stocks tab. deriveTickerUniverse
-// ties chain coverage and auto-STO eligibility to actual holdings instead.
-// Run: npx vitest run tests/ticker-universe.test.js
+// Chain coverage is driven by actual holdings + open positions + the watchlist.
+// Auto-STO EXECUTION eligibility is now EXPLICIT OPT-IN (stocks_data integrity work):
+// a ticker is eligible only with >=100 shares AND a stock_user_settings row whose
+// auto_sto is exactly true. Previously "never set" meant eligible and only an explicit
+// false opted a ticker out, with the flag stored in the stocks_data blob where stale
+// writers kept reverting it. Run: npx vitest run tests/ticker-universe.test.js
 
 import { describe, it, expect } from "vitest";
 import fs from "fs";
@@ -15,31 +15,34 @@ const today = new Date().toISOString().slice(0, 10);
 const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
 const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
 
-describe("deriveTickerUniverse", () => {
-  it("positive — a 200sh holding with no open contract and no autoSto flag is in the chain universe and auto-STO eligible (the INTC case)", () => {
+const optIn = (...tickers) => Object.fromEntries(tickers.map(t => [t, { auto_sto: true }]));
+
+describe("deriveTickerUniverse — chain coverage (unchanged)", () => {
+  it("a 200sh holding with no open contract is in the chain universe and covered-call eligible (the INTC case)", () => {
     const stocksData = { INTC: { sharesByAcct: { "Schwab 3866": 200 } } };
-    const { chainUniverse, coveredCallEligible, autoStoEligible } = deriveTickerUniverse({ stocksData });
+    const { chainUniverse, coveredCallEligible } = deriveTickerUniverse({ stocksData });
     expect(chainUniverse).toContain("INTC");
     expect(coveredCallEligible).toContain("INTC");
-    expect(autoStoEligible).toContain("INTC");
   });
 
-  it("negative — a <100sh holding (COST, 9sh) is in the chain universe (so its price/suggestions still work) but NOT auto-STO eligible", () => {
+  it("negative — a <100sh holding (COST, 9sh) is NOT in the chain universe and NOT auto-STO eligible, even if opted in", () => {
     const stocksData = { COST: { sharesByAcct: { "ETrade 6917": 9 } } };
-    const { chainUniverse, autoStoEligible } = deriveTickerUniverse({ stocksData });
+    const { chainUniverse, autoStoEligible } = deriveTickerUniverse({ stocksData, userSettings: optIn("COST") });
     expect(chainUniverse).not.toContain("COST");
     expect(autoStoEligible).not.toContain("COST");
   });
 
   it("sums shares across accounts to clear the 100sh bar", () => {
     const stocksData = { AMZN: { sharesByAcct: { "Schwab 3866": 60, "ETrade 6917": 40 } } };
-    const { autoStoEligible } = deriveTickerUniverse({ stocksData });
+    const { coveredCallEligible, autoStoEligible } = deriveTickerUniverse({ stocksData, userSettings: optIn("AMZN") });
+    expect(coveredCallEligible).toContain("AMZN");
     expect(autoStoEligible).toContain("AMZN");
   });
 
   it("falls back to a flat `shares` field when sharesByAcct is absent", () => {
     const stocksData = { WDC: { shares: 150 } };
-    const { autoStoEligible } = deriveTickerUniverse({ stocksData });
+    const { coveredCallEligible, autoStoEligible } = deriveTickerUniverse({ stocksData, userSettings: optIn("WDC") });
+    expect(coveredCallEligible).toContain("WDC");
     expect(autoStoEligible).toContain("WDC");
   });
 
@@ -50,43 +53,28 @@ describe("deriveTickerUniverse", () => {
     expect(coveredCallEligible).not.toContain("__CASH__");
   });
 
-  it("honors an explicit autoSto=false opt-out even with >=100 shares (e.g. AMD)", () => {
-    const stocksData = { AMD: { autoSto: false, sharesByAcct: { "Schwab 3866": 220 } } };
-    const { chainUniverse, coveredCallEligible, autoStoEligible } = deriveTickerUniverse({ stocksData });
-    // Still gets chain coverage (it's a real holding) — just not auto-executed.
-    expect(chainUniverse).toContain("AMD");
-    expect(coveredCallEligible).toContain("AMD");
-    expect(autoStoEligible).not.toContain("AMD");
-  });
-
   it("watchlist-only name (0 shares) gets chain coverage for suggestions but is never auto-STO eligible", () => {
-    const stocksData = {};
-    const { chainUniverse, autoStoEligible } = deriveTickerUniverse({ stocksData, watchlistTickers: ["TSLA"] });
+    const { chainUniverse, autoStoEligible } = deriveTickerUniverse({ stocksData: {}, watchlistTickers: ["TSLA"], userSettings: optIn("TSLA") });
     expect(chainUniverse).toContain("TSLA");
     expect(autoStoEligible).not.toContain("TSLA");
   });
 
   it("includes tickers with an open, non-expired contract even at 0 shares (e.g. a naked put)", () => {
-    const stocksData = {};
     const contracts = [{ stock: "CEG", expires: tomorrow }];
-    const { chainUniverse, openPositionTickers, autoStoEligible } = deriveTickerUniverse({ stocksData, contracts });
+    const { chainUniverse, openPositionTickers, autoStoEligible } = deriveTickerUniverse({ stocksData: {}, contracts, userSettings: optIn("CEG") });
     expect(chainUniverse).toContain("CEG");
     expect(openPositionTickers).toContain("CEG");
     expect(autoStoEligible).not.toContain("CEG"); // 0 shares — not covered-call eligible
   });
 
   it("excludes a contract whose expiry has already passed (non-expired only)", () => {
-    const stocksData = {};
-    const contracts = [{ stock: "XYZ", expires: yesterday }];
-    const { chainUniverse, openPositionTickers } = deriveTickerUniverse({ stocksData, contracts });
+    const { chainUniverse, openPositionTickers } = deriveTickerUniverse({ stocksData: {}, contracts: [{ stock: "XYZ", expires: yesterday }] });
     expect(chainUniverse).not.toContain("XYZ");
     expect(openPositionTickers).not.toContain("XYZ");
   });
 
   it("treats an expiry of exactly today as non-expired (inclusive)", () => {
-    const stocksData = {};
-    const contracts = [{ stock: "XYZ", expires: today }];
-    const { openPositionTickers } = deriveTickerUniverse({ stocksData, contracts });
+    const { openPositionTickers } = deriveTickerUniverse({ stocksData: {}, contracts: [{ stock: "XYZ", expires: today }] });
     expect(openPositionTickers).toContain("XYZ");
   });
 
@@ -99,7 +87,7 @@ describe("deriveTickerUniverse", () => {
 
   it("upper-cases symbols regardless of input casing", () => {
     const stocksData = { intc: { sharesByAcct: { "Schwab 3866": 200 } } };
-    const { chainUniverse, autoStoEligible } = deriveTickerUniverse({ stocksData, watchlistTickers: ["tsla"] });
+    const { chainUniverse, autoStoEligible } = deriveTickerUniverse({ stocksData, watchlistTickers: ["tsla"], userSettings: optIn("INTC") });
     expect(chainUniverse).toContain("INTC");
     expect(chainUniverse).toContain("TSLA");
     expect(autoStoEligible).toContain("INTC");
@@ -112,6 +100,56 @@ describe("deriveTickerUniverse", () => {
   });
 });
 
+describe("deriveTickerUniverse — auto-STO is explicit opt-in", () => {
+  const holdings = {
+    NVDA: { sharesByAcct: { "ETrade 6917": 322 } },
+    AMD:  { sharesByAcct: { "ETrade 6917": 220 } },
+    MCD:  { sharesByAcct: { "ETrade 8222": 100 } },
+    TSLA: { sharesByAcct: { "Schwab 3866": 100 } },
+  };
+
+  it("positive — auto_sto = true with >=100 shares is eligible", () => {
+    const { autoStoEligible } = deriveTickerUniverse({ stocksData: holdings, userSettings: { NVDA: { auto_sto: true } } });
+    expect(autoStoEligible).toEqual(["NVDA"]);
+  });
+
+  it("negative — auto_sto = false is not eligible (explicit opt-out), yet the ticker keeps chain coverage", () => {
+    const { autoStoEligible, chainUniverse } = deriveTickerUniverse({ stocksData: holdings, userSettings: { AMD: { auto_sto: false }, NVDA: { auto_sto: true } } });
+    expect(autoStoEligible).toEqual(["NVDA"]);
+    expect(chainUniverse).toContain("AMD");
+  });
+
+  it("negative — NO settings row is not eligible (this was eligible under the old opt-out rule)", () => {
+    const { autoStoEligible } = deriveTickerUniverse({ stocksData: holdings, userSettings: { NVDA: { auto_sto: true } } });
+    for (const t of ["AMD", "MCD", "TSLA"]) expect(autoStoEligible).not.toContain(t);
+  });
+
+  it("negative — no settings supplied at all (e.g. the table could not be read) => nothing is eligible: fail closed", () => {
+    expect(deriveTickerUniverse({ stocksData: holdings }).autoStoEligible).toEqual([]);
+    expect(deriveTickerUniverse({ stocksData: holdings, userSettings: {} }).autoStoEligible).toEqual([]);
+    expect(deriveTickerUniverse({ stocksData: holdings, userSettings: null }).autoStoEligible).toEqual([]);
+  });
+
+  it("strict — only a literal true counts; truthy look-alikes do not opt in", () => {
+    const userSettings = { NVDA: { auto_sto: "true" }, AMD: { auto_sto: 1 }, MCD: { auto_sto: "yes" }, TSLA: {} };
+    expect(deriveTickerUniverse({ stocksData: holdings, userSettings }).autoStoEligible).toEqual([]);
+  });
+
+  it("the legacy autoSto field left in the stocks_data blob is IGNORED in both directions", () => {
+    const legacy = {
+      NVDA: { autoSto: true,  sharesByAcct: { "ETrade 6917": 322 } },   // legacy true, no settings row -> not eligible
+      AMD:  { autoSto: false, sharesByAcct: { "ETrade 6917": 220 } },   // legacy false, settings true  -> eligible
+    };
+    const { autoStoEligible } = deriveTickerUniverse({ stocksData: legacy, userSettings: { AMD: { auto_sto: true } } });
+    expect(autoStoEligible).toEqual(["AMD"]);
+  });
+
+  it("settings keys are matched case-insensitively against the blob's tickers via upper-casing", () => {
+    const { autoStoEligible } = deriveTickerUniverse({ stocksData: { nvda: { shares: 200 } }, userSettings: { NVDA: { auto_sto: true } } });
+    expect(autoStoEligible).toEqual(["NVDA"]);
+  });
+});
+
 describe("api/chain-refresh.js — wired to the derived universe", () => {
   const src = fs.readFileSync(path.resolve("api/chain-refresh.js"), "utf8");
 
@@ -119,6 +157,12 @@ describe("api/chain-refresh.js — wired to the derived universe", () => {
     expect(src).toContain('import { deriveTickerUniverse } from "./_lib/tickerUniverse.js"');
     expect(src).toContain("deriveTickerUniverse({ stocksData: sdBlob, contracts, watchlistTickers })");
     expect(src).not.toContain('v?.autoSto === true');
+  });
+
+  it("does not depend on the auto-STO opt-in at all (chain coverage is holdings/positions/watchlist only)", () => {
+    const code = src.replace(/\/\/[^\n]*/g, ""); // comments may explain this; code must not read it
+    expect(code).not.toContain("autoStoEligible");
+    expect(code).not.toContain("stock_user_settings");
   });
 
   it("logs the resolved universe each run for debugging", () => {
@@ -130,16 +174,17 @@ describe("api/chain-refresh.js — wired to the derived universe", () => {
   });
 });
 
-describe("api/market-refresh.js — auto-STO scanner reads the same derived universe", () => {
+describe("api/market-refresh.js — auto-STO scanner reads the derived universe + the user opt-in table", () => {
   const src = fs.readFileSync(path.resolve("api/market-refresh.js"), "utf8");
 
-  it("imports deriveTickerUniverse and builds the whitelist from autoStoEligible", () => {
+  it("imports deriveTickerUniverse and builds the whitelist from autoStoEligible, passing userSettings", () => {
     expect(src).toContain('import { deriveTickerUniverse } from "./_lib/tickerUniverse.js"');
-    expect(src).toContain("deriveTickerUniverse({ stocksData: updatedSD, contracts, watchlistTickers })");
+    expect(src).toContain("deriveTickerUniverse({ stocksData: updatedSD, contracts, watchlistTickers, userSettings })");
     expect(src).toContain("const autoStoWhitelist = autoStoEligible;");
   });
 
-  it("no longer gates the whitelist on a manual autoSto===true flag", () => {
+  it("no longer gates the whitelist on the blob's autoSto flag", () => {
     expect(src).not.toContain("sd?.autoSto === true)\n          .map(([sym]) => sym.toUpperCase());");
+    expect(src).not.toMatch(/stocksData\[sym\]\?\.autoSto|updatedSD\[[^\]]*\]\?\.autoSto/);
   });
 });

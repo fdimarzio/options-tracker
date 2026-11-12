@@ -18,10 +18,14 @@ function totalShares(sd) {
   return +sd.shares || 0;
 }
 
-// stocksData: the col_prefs id='stocks_data' cols blob ({ SYM: { shares, sharesByAcct, autoSto, ... }, __cash__: {...} })
+// stocksData: the col_prefs id='stocks_data' cols blob ({ SYM: { shares, sharesByAcct, ... }, __cash__: {...} })
+//             — SYSTEM-owned market data. Holdings come from here; user settings do NOT.
 // contracts: rows with at least {stock, expires} — expected pre-filtered to status=Open by the caller's query
 // watchlistTickers: array of symbols from col_prefs id='watchlist'
-export function deriveTickerUniverse({ stocksData = {}, contracts = [], watchlistTickers = [] } = {}) {
+// userSettings: the stock_user_settings table as { SYM: { auto_sto } } (see api/_lib/stockUserSettings.js).
+//             Only needed for autoStoEligible. Omitted/undefined => nothing is auto-STO eligible
+//             (fail closed), so chain-refresh — which never uses autoStoEligible — can omit it.
+export function deriveTickerUniverse({ stocksData = {}, contracts = [], watchlistTickers = [], userSettings } = {}) {
   const today = new Date().toISOString().slice(0, 10);
 
   // (a) Covered-call eligible — total shares across all accounts >= 100 (a full lot)
@@ -44,12 +48,12 @@ export function deriveTickerUniverse({ stocksData = {}, contracts = [], watchlis
 
   const chainUniverse = [...new Set([...coveredCallEligible, ...openPositionTickers, ...watchlist])].sort();
 
-  // Auto-STO execution eligibility = covered-call eligible by share count,
-  // unless the user explicitly opted the ticker out (autoSto === false) via the
-  // Stocks tab toggle. undefined/true means "eligible by default"; only an
-  // explicit false suppresses it — that's a deliberate per-ticker kill switch
-  // (e.g. a core LEAPS-adjacent holding you never want auto-called away).
-  const autoStoEligible = coveredCallEligible.filter(sym => stocksData[sym]?.autoSto !== false);
+  // Auto-STO execution eligibility is EXPLICIT OPT-IN: a full lot of shares AND a
+  // stock_user_settings row with auto_sto === true. auto_sto false, a missing row, or no
+  // settings supplied at all => not eligible. (This used to be opt-OUT — "never set" meant
+  // eligible — and the flag lived inside the stocks_data blob, where stale writers kept
+  // reverting it.) The old blob field `autoSto` is intentionally ignored here.
+  const autoStoEligible = coveredCallEligible.filter(sym => userSettings?.[sym]?.auto_sto === true);
 
   return { chainUniverse, coveredCallEligible, openPositionTickers, watchlist, autoStoEligible };
 }

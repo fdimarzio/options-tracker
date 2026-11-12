@@ -79,7 +79,9 @@ export default async function handler(req, res) {
     });
     const contracts = await cRes.json();
 
-    // Fetch holdings (shares/sharesByAcct + autoSto) from stocks_data
+    // Fetch holdings (shares/sharesByAcct) from stocks_data. Chain coverage is driven by
+    // holdings, open positions and the watchlist only — it does not depend on the user's
+    // auto-STO opt-in (that lives in stock_user_settings and is read only by market-refresh).
     const sdRes = await fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.stocks_data`, {
       headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}` },
     });

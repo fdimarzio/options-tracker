@@ -91,6 +91,11 @@ async function fetchRouter(url, init = {}) {
     return makeRes([]);
   }
 
+  // ── Auto-STO is explicit opt-in: INTC has a stock_user_settings row with auto_sto=true ─
+  if (url.includes("/rest/v1/stock_user_settings")) {
+    return makeRes([{ ticker: "INTC", auto_sto: true, earnings_date: null, iv_manual: null }]);
+  }
+
   // ── The forced-dry_run STO rule ──────────────────────────────────────────────
   if (url.includes("/signal_rules?enabled=eq.true")) {
     return makeRes([STO_RULE]);

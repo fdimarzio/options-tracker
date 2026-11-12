@@ -82,7 +82,7 @@ Run these in order. Stop if any step fails.
 ### Test 1 — Token Status (30 seconds)
 Confirms auth is healthy and new routing works.
 ```bash
-curl -s "https://options-tracker-five.vercel.app/api/schwab-auth?action=status&secret=CronSecret2026!"
+curl -s "https://options-tracker-five.vercel.app/api/schwab-auth?action=status&secret=<CRON_SECRET-redacted>"
 ```
 **Expected:** `{ ok: true, accessOk: true, refreshOk: true, refreshDaysLeft: X }`
 
@@ -92,7 +92,7 @@ If `accessOk: false` — the access token expired during deploy. Run Test 2 imme
 
 ### Test 2 — Token Refresh (new endpoint)
 ```bash
-curl -s "https://options-tracker-five.vercel.app/api/schwab-auth?action=refresh&secret=CronSecret2026!"
+curl -s "https://options-tracker-five.vercel.app/api/schwab-auth?action=refresh&secret=<CRON_SECRET-redacted>"
 ```
 **Expected:** `{ ok: true, daysLeftBefore: X, accessExpiresIn: "29min", refreshReset: "7 days from now" }`
 
@@ -100,7 +100,7 @@ curl -s "https://options-tracker-five.vercel.app/api/schwab-auth?action=refresh&
 
 ### Test 3 — Schwab Proxy still works (quotes)
 ```bash
-curl -s "https://options-tracker-five.vercel.app/api/schwab-proxy?path=/marketdata/v1/quotes&symbols=AAPL&secret=CronSecret2026!" | head -c 200
+curl -s "https://options-tracker-five.vercel.app/api/schwab-proxy?path=/marketdata/v1/quotes&symbols=AAPL&secret=<CRON_SECRET-redacted>" | head -c 200
 ```
 **Expected:** JSON with AAPL quote data (bid, ask, lastPrice, etc.)
 
@@ -108,7 +108,7 @@ curl -s "https://options-tracker-five.vercel.app/api/schwab-proxy?path=/marketda
 
 ### Test 4 — Transactions endpoint (new routing)
 ```bash
-curl -s "https://options-tracker-five.vercel.app/api/schwab-orders?action=transactions&days=7&secret=CronSecret2026!" | python -m json.tool | head -30
+curl -s "https://options-tracker-five.vercel.app/api/schwab-orders?action=transactions&days=7&secret=<CRON_SECRET-redacted>" | python -m json.tool | head -30
 ```
 **Expected:** `{ transactions: [...], openContracts: [...], meta: { startDate, endDate, total, rawTotal } }`
 
@@ -126,7 +126,7 @@ If this returns `{ error: "Unknown action: transactions" }` — the deploy didn'
 
 ### Test 6 — Market refresh still healthy
 ```bash
-curl -s "https://options-tracker-five.vercel.app/api/market-refresh?secret=CronSecret2026!&action=status"
+curl -s "https://options-tracker-five.vercel.app/api/market-refresh?secret=<CRON_SECRET-redacted>&action=status"
 ```
 **Expected:** Status response with no errors. (market-refresh was not changed — this just confirms nothing broke the deploy globally)
 
@@ -134,7 +134,7 @@ curl -s "https://options-tracker-five.vercel.app/api/market-refresh?secret=CronS
 
 ### Test 7 — Schwab Orders still work (list)
 ```bash
-curl -s "https://options-tracker-five.vercel.app/api/schwab-orders?action=list&secret=CronSecret2026!" | head -c 200
+curl -s "https://options-tracker-five.vercel.app/api/schwab-orders?action=list&secret=<CRON_SECRET-redacted>" | head -c 200
 ```
 **Expected:** `{ ok: true, orders: [...] }`
 

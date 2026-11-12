@@ -6,6 +6,8 @@ import { useAuth } from "./lib/authContext.js";
 import { computeClosePnl } from "./lib/pnl.js";
 import { computeOrigDte, isLeapOrigDte } from "./lib/leapGuard.js";
 import { computeAnnualizedReturn } from "./lib/annualizedReturn.js";
+import { patchStocksData, loadStocksDataChecked, setTickerFields, setCashField, describeSupabaseError } from "./lib/stocksDataStore.js";
+import { loadUserSettingsChecked, saveUserSetting, mergeUserSettings, isUserSettingField } from "./lib/stockUserSettings.js";
 
 // ── camelCase <-> snake_case converters ──────────────────────────────────────
 function toApp(row) {
@@ -4715,6 +4717,7 @@ export default function App() {
           colData, sdData, chainCache, wlData,
           wlNotesData, wlAlertsData, oppData,
           goalsData, bandsData, mxData, trData,
+          usData,
         ] = await Promise.all([
           loadContracts(),
           supabase.from("plan_items").select("*").order("created_at", { ascending: false }).then(r => r.data),
@@ -4723,7 +4726,7 @@ export default function App() {
           supabase.from("ai_chats").select("*").order("created_at", { ascending: true }).limit(40).then(r => r.data).catch(() => null),
           supabase.from("strategies").select("*").order("created_at", { ascending: true }).then(r => r.data).catch(() => null),
           loadPrefs("default"),
-          loadPrefs("stocks_data"),
+          loadStocksDataChecked(supabase), // never throws; { ok:false } on failure (not an empty DB)
           loadPrefCols("last_chain_refresh"),
           loadPrefs("watchlist"),
           loadPrefs("watchlist_notes"),
@@ -4733,6 +4736,7 @@ export default function App() {
           loadPrefs("profit_bands"),
           loadPrefs("dte_matrix"),
           loadPrefs("trade_rules"),
+          loadUserSettingsChecked(supabase), // never throws; { ok:false } on failure
         ]);
 
         // ── Apply results ─────────────────────────────────────────────────────
@@ -4764,7 +4768,26 @@ export default function App() {
         }
 
         if (chainCache?.cols?.chains) setEtradeChains(chainCache.cols.chains);
-        if (sdData?.cols) setStocksData(sdData.cols);
+        // A failed load must not look like an empty DB: block every stocks_data write
+        // until a load succeeds, and tell the user why.
+        if (sdData?.ok) {
+          setStocksDataStatus("ready");
+        } else {
+          setStocksDataStatus("error");
+          setSaveError(`Stock data failed to load (${sdData?.error || "unknown error"}). Stock edits are disabled until you reload — nothing was changed.`);
+        }
+        // User-owned settings (auto-STO opt-in, earnings date, manual IV) come from their own
+        // table and are overlaid onto the market-data blob for display. If they fail to load,
+        // show them as unset (auto-STO OFF) with a banner and block edits — never guess.
+        if (usData?.ok) {
+          setUserSettingsStatus("ready");
+        } else {
+          setUserSettingsStatus("error");
+          setSaveError(`Stock settings (auto-STO, earnings date, IV) failed to load (${usData?.error || "unknown error"}). They show as unset and cannot be edited until you reload — nothing was changed.`);
+        }
+        if (sdData?.ok || usData?.ok) {
+          setStocksData(mergeUserSettings(sdData?.cols || {}, usData?.ok ? usData.settings : {}));
+        }
         if (wlData?.cols?.tickers) setWatchlist(wlData.cols.tickers);
         if (wlNotesData?.cols) setWatchlistNotes(wlNotesData.cols);
         if (wlAlertsData?.cols) setWatchlistAlerts(wlAlertsData.cols);
@@ -5055,6 +5078,45 @@ export default function App() {
 
   // Stocks tab state
   const [stocksData, setStocksData] = useState({}); // {ticker: {sharesSchwab, sharesEtrade, currentPrice, earningsDate}}
+  // stocks_data persistence safety (see src/lib/stocksDataStore.js):
+  //  - status gates every write until the initial load has verifiably succeeded
+  //  - saveError is shown in a visible banner; nothing fails silently
+  const [stocksDataStatus, setStocksDataStatus] = useState("loading"); // "loading" | "ready" | "error"
+  const [saveError, setSaveError] = useState(null);
+  // User-owned settings (auto-STO opt-in, earnings date, manual IV) live in their own table,
+  // one row per ticker — see src/lib/stockUserSettings.js. Same gating as stocks_data.
+  const [userSettingsStatus, setUserSettingsStatus] = useState("loading"); // "loading" | "ready" | "error"
+  const persistUserSetting = async (label, ticker, uiFields) => {
+    if (userSettingsStatus !== "ready") {
+      setSaveError(`NOT SAVED (${label}): stock settings have not loaded successfully. Reload the page and try again.`);
+      return false;
+    }
+    try {
+      await saveUserSetting(supabase, ticker, uiFields);
+      return true;
+    } catch (e) {
+      console.error(`[stock_user_settings] save failed (${label}):`, e);
+      setSaveError(`NOT SAVED (${label}): ${e?.message || describeSupabaseError(e)}`);
+      return false;
+    }
+  };
+  // Persist a small change to stocks_data: re-reads the freshest DB copy, applies the
+  // mutator to it, writes with compare-and-swap. Never writes this tab's in-memory copy.
+  // Returns true on success; on any failure shows a banner and returns false.
+  const persistStocksData = async (label, mutator) => {
+    if (stocksDataStatus !== "ready") {
+      setSaveError(`NOT SAVED (${label}): stock data has not loaded successfully. Reload the page and try again.`);
+      return false;
+    }
+    try {
+      await patchStocksData(supabase, mutator);
+      return true;
+    } catch (e) {
+      console.error(`[stocks_data] save failed (${label}):`, e);
+      setSaveError(`NOT SAVED (${label}): ${e?.message || describeSupabaseError(e)}`);
+      return false;
+    }
+  };
   const [selectedTicker, setSelectedTicker] = useState(null);
   const [pendingOrder, setPendingOrder] = useState(null); // { strike, expiry, qty, price, account } — preloaded from notification deep-link
   const [stocksFilter, setStocksFilter] = useState("owned"); // "all" | "owned"
@@ -5106,11 +5168,15 @@ export default function App() {
       .then(({data})=>{ if(data?.cols) setBalHistoryInline(data.cols); });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
-  const updateCash = async (field, value) => {
+  // persist:false => display state only (used for broker-derived balances pulled by
+  // the refresh flows). Only a manual entry in the Stocks tab persists.
+  const updateCash = async (field, value, { persist = true } = {}) => {
     const cashVal = value === "" ? null : +value;
-    const updated = {...stocksData, "__cash__": {...cashData, [field]: cashVal}};
-    setStocksData(updated);
-    try { await supabase.from("col_prefs").upsert({id:"stocks_data", cols: updated, updated_at: new Date().toISOString()}); } catch {}
+    // Functional update: the old `{...stocksData}` closure copy discarded concurrent
+    // state changes made earlier in the same handler (e.g. refreshEtrade).
+    setStocksData(prev => ({ ...prev, "__cash__": { ...(prev["__cash__"] || {}), [field]: cashVal } }));
+    if (!persist) return;
+    await persistStocksData(`${field} balance`, setCashField(field, cashVal));
   };
   // AI Chat state
   const [showAI, setShowAI] = useState(false);
@@ -5121,12 +5187,23 @@ export default function App() {
 
   // Watchlist helpers
   const [selectedWatchTicker, setSelectedWatchTicker] = useState(null);
+  // supabase-js returns errors rather than throwing them, so a bare try/catch never fired
+  // and a failed save just vanished on reload. Check the result and tell the user.
+  const saveWatchlist = async (list, label) => {
+    const { error } = await supabase.from("col_prefs").upsert({ id: "watchlist", cols: { tickers: list }, updated_at: new Date().toISOString() });
+    if (error) {
+      console.error(`[watchlist] save failed (${label}):`, error);
+      setSaveError(`NOT SAVED (${label}): ${describeSupabaseError(error)}`);
+      return false;
+    }
+    return true;
+  };
   const addToWatchlist = async (ticker) => {
     const t = ticker.toUpperCase().trim();
     if (!t || watchlist.includes(t)) return;
     const updated = [...watchlist, t];
     setWatchlist(updated);
-    try { await supabase.from("col_prefs").upsert({id:"watchlist", cols:{tickers:updated}, updated_at:new Date().toISOString()}); } catch {}
+    if (!(await saveWatchlist(updated, `add ${t} to watchlist`))) setWatchlist(watchlist);
 
     // Pull stock info immediately if not already in stocksData
     if (!stocksData[t]?.currentPrice) {
@@ -5152,9 +5229,10 @@ export default function App() {
               marketCap:    fund?.marketCap       ?? null,
               sharesUpdatedAt: new Date().toISOString(),
             };
-            const updatedSD = { ...stocksData, [t]: { ...(stocksData[t] || {}), ...info } };
-            setStocksData(updatedSD);
-            await supabase.from("col_prefs").upsert({ id:"stocks_data", cols:updatedSD, updated_at:new Date().toISOString() });
+            // Functional state update + a patch of ONLY this ticker's fields onto the
+            // freshest DB copy (the old code wrote a copy captured before the network await).
+            setStocksData(prev => ({ ...prev, [t]: { ...(prev[t] || {}), ...info } }));
+            await persistStocksData(`${t} watchlist info`, setTickerFields(t, info));
             console.log(`[watchlist] pulled info for ${t}: $${info.currentPrice}`);
           }
         }
@@ -5165,13 +5243,20 @@ export default function App() {
     const updated = watchlist.filter(t => t !== ticker);
     setWatchlist(updated);
     if (selectedWatchTicker === ticker) setSelectedWatchTicker(null);
-    try { await supabase.from("col_prefs").upsert({id:"watchlist", cols:{tickers:updated}, updated_at:new Date().toISOString()}); } catch {}
+    if (!(await saveWatchlist(updated, `remove ${ticker} from watchlist`))) setWatchlist(watchlist);
   };
 
   const updateStockData = async (ticker, field, value) => {
-    const updated = {...stocksData, [ticker]: {...(stocksData[ticker]||{}), [field]: value}};
-    setStocksData(updated);
-    try { await supabase.from("col_prefs").upsert({id:"stocks_data", cols: updated, updated_at: new Date().toISOString()}); } catch {}
+    // Optimistic UI via a functional update; persisted as a single-field patch applied to
+    // the freshest DB copy. On failure the banner tells the user and the UI change is rolled back.
+    const prevValue = stocksData[ticker]?.[field];
+    setStocksData(prev => ({ ...prev, [ticker]: { ...(prev[ticker] || {}), [field]: value } }));
+    // User-owned fields (autoSto, earningsDate, iv) are a single-row upsert into
+    // stock_user_settings; everything else is a patch onto the freshest stocks_data copy.
+    const ok = isUserSettingField(field)
+      ? await persistUserSetting(`${ticker} ${field}`, ticker, { [field]: value })
+      : await persistStocksData(`${ticker} ${field}`, setTickerFields(ticker, { [field]: value }));
+    if (!ok) setStocksData(prev => ({ ...prev, [ticker]: { ...(prev[ticker] || {}), [field]: prevValue } }));
   };
 
   // ── E*TRADE live data ───────────────────────────────────────────────────────────────────────────
@@ -5224,7 +5309,10 @@ export default function App() {
   const getChainControl = (ticker) => ({ strikes: 5, dates: 3, ...chainControls[ticker] });
   const setChainControl = (ticker, key, val) => setChainControls(prev => ({ ...prev, [ticker]: { ...getChainControl(ticker), [key]: val } }));
   // selectedWatchTicker declared above near watchlist helpers
-  // Merge live quote prices into stocksData and persist
+  // Merge live quote prices into stocksData — REACT STATE ONLY, never persisted.
+  // market-refresh (server cron) is the sole writer of market data in col_prefs
+  // 'stocks_data'. This used to upsert the tab's whole in-memory copy on every quote
+  // refresh, so any stale tab reverted user settings and share counts server-side.
   const applyQuotesToStocksData = useCallback(async (quotes) => {
     setStocksData(prev => {
       const updated = { ...prev };
@@ -5241,7 +5329,6 @@ export default function App() {
           };
         }
       }
-      try { supabase.from("col_prefs").upsert({ id: "stocks_data", cols: updated, updated_at: new Date().toISOString() }); } catch {}
       return updated;
     });
   }, []);
@@ -5294,13 +5381,13 @@ export default function App() {
               lastQuoteAt:   new Date().toISOString(),
             };
           }
-          try { supabase.from("col_prefs").upsert({ id:"stocks_data", cols:updated, updated_at:new Date().toISOString() }); } catch {}
+          // State only — position/quote data is persisted by market-refresh, not the browser.
           return updated;
         });
-        // Update Schwab cash
-        // Store full liquidation value as the persistent Schwab balance (not just buying power)
-        if (accountValue > 0) updateCash("schwab", accountValue.toFixed(2));
-        else if (cash > 0)   updateCash("schwab", cash.toFixed(2));
+        // Update Schwab cash (display state only; broker-derived, so never persisted from here)
+        // Full liquidation value is the Schwab balance (not just buying power)
+        if (accountValue > 0) updateCash("schwab", accountValue.toFixed(2), { persist: false });
+        else if (cash > 0)   updateCash("schwab", cash.toFixed(2), { persist: false });
         // Auto-save current month Schwab balance (liquidation value) to balance_history
         if (accountValue > 0) {
           setSchwabAccountValue(accountValue);
@@ -5327,7 +5414,7 @@ export default function App() {
         // ETrade NAV = equity market value + cash (matches Schwab liquidationValue semantics)
         const etNAV = (etData?.accountValue || 0) + (etData?.cash || 0);
         if (etNAV > 0) {
-          updateCash("etrade", etNAV.toFixed(2));
+          updateCash("etrade", etNAV.toFixed(2), { persist: false });
           console.log("[etrade] NAV:", etNAV, "(equity:", etData?.accountValue, "+ cash:", etData?.cash, ")");
         }
         if (etData?.positions?.length) {
@@ -5351,7 +5438,7 @@ export default function App() {
             for (const [sym, qty] of Object.entries(etradeShares)) {
               updated[sym] = { ...(updated[sym] || {}), sharesEtrade: qty };
             }
-            try { supabase.from("col_prefs").upsert({ id: "stocks_data", cols: updated, updated_at: new Date().toISOString() }); } catch {}
+            // State only — never persisted from the browser (see applyQuotesToStocksData).
             return updated;
           });
           console.log("[etrade] loaded", Object.keys(etradeShares).length, "positions");
@@ -6961,6 +7048,15 @@ ${JSON.stringify(summary, null, 1)}`;
         </div>
       )}
 
+      {/* ── SAVE ERROR BANNER — a failed save must never be silent ── */}
+      {saveError && (
+        <div role="alert" data-testid="save-error-banner"
+          style={{position:"fixed",top:52,left:8,right:8,zIndex:400,background:"#2a0a10",color:"#ff9aa6",border:"1px solid #ff4560",borderRadius:6,padding:"8px 12px",fontSize:11,fontFamily:"monospace",display:"flex",gap:10,alignItems:"flex-start",boxShadow:"0 4px 18px #000a"}}>
+          <span style={{flex:1,lineHeight:1.4}}>⚠ {saveError}</span>
+          <button onClick={()=>setSaveError(null)} aria-label="Dismiss" style={{background:"transparent",color:"#ff9aa6",border:"1px solid #ff456080",borderRadius:4,padding:"0 7px",cursor:"pointer",fontFamily:"monospace"}}>✕</button>
+        </div>
+      )}
+
       {/* ── TOPBAR ── */}
       <div style={{background:th("#0a0e14","#f8f3eb"),borderBottom:"1px solid #1c2128",padding:"0 10px",display:"flex",alignItems:"center",gap:8,height:50,position:"sticky",top:0,zIndex:100,minWidth:0}}>
         <div style={{display:"flex",alignItems:"center",gap:7,flexShrink:0}}>
@@ -6984,7 +7080,14 @@ ${JSON.stringify(summary, null, 1)}`;
                 onClick={async () => {
                   const v = !on;
                   if (!v || window.confirm("Re-enable ALL Skynet automation (auto-STO, auto-BTC, expiry protection, chase)?")) {
-                    await supabase.from("skynet_controls").update({ master_enabled: v, updated_at: new Date().toISOString() }).eq("id", masterCtrl.id);
+                    // The master switch gates ALL automated order placement: only flip the
+                    // on-screen state if the database actually accepted the change.
+                    const { error: masterErr } = await supabase.from("skynet_controls").update({ master_enabled: v, updated_at: new Date().toISOString() }).eq("id", masterCtrl.id);
+                    if (masterErr) {
+                      console.error("[skynet] master switch save failed:", masterErr);
+                      setSaveError(`NOT SAVED (Skynet master switch): ${describeSupabaseError(masterErr)}. The switch was NOT changed — automation is still ${on ? "ENABLED" : "DISABLED"}.`);
+                      return;
+                    }
                     setMasterCtrl(p => ({ ...p, master_enabled: v }));
                   }
                 }}
@@ -8919,27 +9022,39 @@ ${JSON.stringify(summary, null, 1)}`;
                       const qRes = await fetch(`/api/schwab-proxy?path=/marketdata/v1/quotes&symbols=${encodeURIComponent(toRefresh.join(","))}&fields=quote,fundamental&indicative=false`);
                       if (!qRes.ok) return;
                       const qData = await qRes.json();
-                      const updatedSD = { ...stocksData };
-                      toRefresh.forEach(t => {
+                      // Build per-ticker info once; fundamentals fall back to whatever the
+                      // target copy (UI state, or the freshest DB copy when persisting) already has.
+                      const fetchedAt = new Date().toISOString();
+                      const buildInfo = (t, existing) => {
                         const q = qData?.[t]?.quote;
                         const fund = qData?.[t]?.fundamental;
-                        if (q) updatedSD[t] = {
-                          ...(updatedSD[t]||{}),
+                        if (!q) return null;
+                        return {
                           currentPrice: q.lastPrice ?? q.mark ?? null,
                           bid:          q.bidPrice  ?? null,
                           ask:          q.askPrice  ?? null,
                           changePct:    q.netPercentChangeInDouble != null ? q.netPercentChangeInDouble/100 : null,
                           changeClose:  q.netChange ?? null,
-                          lastQuoteAt:  new Date().toISOString(),
-                          week52High:   fund?.["52WeekHigh"]  ?? updatedSD[t]?.week52High  ?? null,
-                          week52Low:    fund?.["52WeekLow"]   ?? updatedSD[t]?.week52Low   ?? null,
-                          peRatio:      fund?.peRatio         ?? updatedSD[t]?.peRatio     ?? null,
-                          divYield:     fund?.divYield        ?? updatedSD[t]?.divYield    ?? null,
-                          marketCap:    fund?.marketCap       ?? updatedSD[t]?.marketCap   ?? null,
+                          lastQuoteAt:  fetchedAt,
+                          week52High:   fund?.["52WeekHigh"]  ?? existing?.week52High  ?? null,
+                          week52Low:    fund?.["52WeekLow"]   ?? existing?.week52Low   ?? null,
+                          peRatio:      fund?.peRatio         ?? existing?.peRatio     ?? null,
+                          divYield:     fund?.divYield        ?? existing?.divYield    ?? null,
+                          marketCap:    fund?.marketCap       ?? existing?.marketCap   ?? null,
                         };
-                      });
-                      setStocksData(updatedSD);
-                      await supabase.from("col_prefs").upsert({id:"stocks_data",cols:updatedSD,updated_at:new Date().toISOString()});
+                      };
+                      const applyInfo = (blob) => {
+                        const next = { ...blob };
+                        toRefresh.forEach(t => {
+                          const info = buildInfo(t, blob[t]);
+                          if (info) next[t] = { ...(blob[t] || {}), ...info };
+                        });
+                        return next;
+                      };
+                      setStocksData(prev => applyInfo(prev));
+                      // Fundamentals (52w/PE/yield/cap) have no server-side writer yet, so this
+                      // user-triggered refresh still persists them — as a patch onto the freshest DB copy.
+                      await persistStocksData("watchlist refresh", applyInfo);
                     } catch(e) { console.warn("[watchlist refresh]",e.message); }
                   }} style={{background:"#58a6ff14",color:"#58a6ff",border:"1px solid #58a6ff30",borderRadius:5,padding:"4px 10px",fontSize:10,fontFamily:"monospace",cursor:"pointer",marginLeft:"auto"}}>⟳ Refresh</button>
                 </div>
@@ -9482,9 +9597,12 @@ ${JSON.stringify(summary, null, 1)}`;
                     <button onClick={async()=>{
                       if(!addStockForm.ticker)return;
                       const t=addStockForm.ticker;
-                      const updated={...stocksData,[t]:{...(stocksData[t]||{}),sharesSchwab:addStockForm.schwabShares?+addStockForm.schwabShares:null,sharesEtrade:addStockForm.etradeShares?+addStockForm.etradeShares:null,currentPrice:addStockForm.price?+addStockForm.price:null,earningsDate:addStockForm.earningsDate||null}};
-                      setStocksData(updated);
-                      try{await supabase.from("col_prefs").upsert({id:"stocks_data",cols:updated,updated_at:new Date().toISOString()});}catch{}
+                      const fields={sharesSchwab:addStockForm.schwabShares?+addStockForm.schwabShares:null,sharesEtrade:addStockForm.etradeShares?+addStockForm.etradeShares:null,currentPrice:addStockForm.price?+addStockForm.price:null};
+                      const earningsDate=addStockForm.earningsDate||null; // user-owned -> stock_user_settings, not the blob
+                      if(!(await persistUserSetting(`add ${t} earnings date`, t, {earningsDate}))) return; // banner is showing
+                      const ok = await persistStocksData(`add ${t}`, setTickerFields(t, fields));
+                      if(!ok) return; // banner is showing; keep the form open so nothing typed is lost
+                      setStocksData(prev=>({...prev,[t]:{...(prev[t]||{}),...fields,earningsDate}}));
                       setAddStockForm({ticker:"",schwabShares:"",etradeShares:"",price:"",earningsDate:""});
                       setShowAddStock(false);
                     }} style={{background:"#00ff88",color:th("#010409","#f5f0e8"),border:"none",borderRadius:6,padding:"7px 16px",fontSize:11,fontWeight:700,fontFamily:"monospace"}}>SAVE</button>
