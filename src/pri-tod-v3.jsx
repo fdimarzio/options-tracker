@@ -5106,11 +5106,15 @@ export default function App() {
       .then(({data})=>{ if(data?.cols) setBalHistoryInline(data.cols); });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
-  const updateCash = async (field, value) => {
+  // persist:false => display state only (used for broker-derived balances pulled by
+  // the refresh flows). Only a manual entry in the Stocks tab persists.
+  const updateCash = async (field, value, { persist = true } = {}) => {
     const cashVal = value === "" ? null : +value;
-    const updated = {...stocksData, "__cash__": {...cashData, [field]: cashVal}};
-    setStocksData(updated);
-    try { await supabase.from("col_prefs").upsert({id:"stocks_data", cols: updated, updated_at: new Date().toISOString()}); } catch {}
+    // Functional update: the old `{...stocksData}` closure copy discarded concurrent
+    // state changes made earlier in the same handler (e.g. refreshEtrade).
+    setStocksData(prev => ({ ...prev, "__cash__": { ...(prev["__cash__"] || {}), [field]: cashVal } }));
+    if (!persist) return;
+    try { await supabase.from("col_prefs").upsert({id:"stocks_data", cols: {...stocksData, "__cash__": {...cashData, [field]: cashVal}}, updated_at: new Date().toISOString()}); } catch {}
   };
   // AI Chat state
   const [showAI, setShowAI] = useState(false);
@@ -5224,7 +5228,10 @@ export default function App() {
   const getChainControl = (ticker) => ({ strikes: 5, dates: 3, ...chainControls[ticker] });
   const setChainControl = (ticker, key, val) => setChainControls(prev => ({ ...prev, [ticker]: { ...getChainControl(ticker), [key]: val } }));
   // selectedWatchTicker declared above near watchlist helpers
-  // Merge live quote prices into stocksData and persist
+  // Merge live quote prices into stocksData — REACT STATE ONLY, never persisted.
+  // market-refresh (server cron) is the sole writer of market data in col_prefs
+  // 'stocks_data'. This used to upsert the tab's whole in-memory copy on every quote
+  // refresh, so any stale tab reverted user settings and share counts server-side.
   const applyQuotesToStocksData = useCallback(async (quotes) => {
     setStocksData(prev => {
       const updated = { ...prev };
@@ -5241,7 +5248,6 @@ export default function App() {
           };
         }
       }
-      try { supabase.from("col_prefs").upsert({ id: "stocks_data", cols: updated, updated_at: new Date().toISOString() }); } catch {}
       return updated;
     });
   }, []);
@@ -5294,13 +5300,13 @@ export default function App() {
               lastQuoteAt:   new Date().toISOString(),
             };
           }
-          try { supabase.from("col_prefs").upsert({ id:"stocks_data", cols:updated, updated_at:new Date().toISOString() }); } catch {}
+          // State only — position/quote data is persisted by market-refresh, not the browser.
           return updated;
         });
-        // Update Schwab cash
-        // Store full liquidation value as the persistent Schwab balance (not just buying power)
-        if (accountValue > 0) updateCash("schwab", accountValue.toFixed(2));
-        else if (cash > 0)   updateCash("schwab", cash.toFixed(2));
+        // Update Schwab cash (display state only; broker-derived, so never persisted from here)
+        // Full liquidation value is the Schwab balance (not just buying power)
+        if (accountValue > 0) updateCash("schwab", accountValue.toFixed(2), { persist: false });
+        else if (cash > 0)   updateCash("schwab", cash.toFixed(2), { persist: false });
         // Auto-save current month Schwab balance (liquidation value) to balance_history
         if (accountValue > 0) {
           setSchwabAccountValue(accountValue);
@@ -5327,7 +5333,7 @@ export default function App() {
         // ETrade NAV = equity market value + cash (matches Schwab liquidationValue semantics)
         const etNAV = (etData?.accountValue || 0) + (etData?.cash || 0);
         if (etNAV > 0) {
-          updateCash("etrade", etNAV.toFixed(2));
+          updateCash("etrade", etNAV.toFixed(2), { persist: false });
           console.log("[etrade] NAV:", etNAV, "(equity:", etData?.accountValue, "+ cash:", etData?.cash, ")");
         }
         if (etData?.positions?.length) {
@@ -5351,7 +5357,7 @@ export default function App() {
             for (const [sym, qty] of Object.entries(etradeShares)) {
               updated[sym] = { ...(updated[sym] || {}), sharesEtrade: qty };
             }
-            try { supabase.from("col_prefs").upsert({ id: "stocks_data", cols: updated, updated_at: new Date().toISOString() }); } catch {}
+            // State only — never persisted from the browser (see applyQuotesToStocksData).
             return updated;
           });
           console.log("[etrade] loaded", Object.keys(etradeShares).length, "positions");
