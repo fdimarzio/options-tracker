@@ -88,6 +88,10 @@ declare
   new_n      int;
   removed    text[];
 begin
+ -- FAIL-SAFE: this trigger sits on col_prefs, which also holds broker tokens and the market-refresh
+ -- output. Audit logging must NEVER be able to abort or roll back the caller's write. Everything
+ -- below runs in an inner block whose handler downgrades any error to a WARNING.
+ begin
   -- Explicit IF branches: never reference NEW in a DELETE or OLD in an INSERT.
   if TG_OP = 'DELETE' then
     v_id := OLD.id;  old_c := OLD.cols;  new_c := null;
@@ -168,6 +172,10 @@ begin
   end if;
 
   return null;
+ exception when others then
+  raise warning 'col_prefs_audit_fn: audit skipped, caller write unaffected (%): %', sqlstate, sqlerrm;
+ end;
+ return null;
 end;
 $$;
 

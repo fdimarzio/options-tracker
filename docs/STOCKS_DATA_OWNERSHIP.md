@@ -80,11 +80,20 @@ Rules:
      AAPL, AMZN, CAT, CEG, JPM, MCD, NVDA, SPCX, TSLA, WDC. AMD (explicit false) stays off. Run the PREVIEW first; run
      verification queries (a) and (b) afterwards — both must return no rows. For strict opt-in instead, set
      `seed_legacy_eligibility := false` in 003.
+   - **Run 003 while ETrade positions are populated.** Overnight ETrade's token expires and market-refresh zeroes every
+     ETrade-held ticker's shares in the blob, so 003 cannot see ETrade-only names that have no explicit `autoSto`.
+     `003b_seed_etrade_only_symbols.sql` exists because exactly that happened on 2026-11-12 (MCD, SPCX).
 3. Optionally `004_audit_stock_user_settings.sql`.
 4. **Then** merge/deploy the code. Deploying first fails safe (no auto-STO orders, banner in the UI) but is avoidable.
 5. In the Stocks tab, switch AMD on if you want it (the DB holds `false`; the earlier UI toggle never persisted).
 
 Only P0–P3 (commits `bb4abff`…`eaff2ec`) are deployable without any SQL. P4 (`57a8b73` and later) requires 002+003 first.
+
+**Production status (2026-11-12):** `001`, `002`, `003`, `003b` and `004` are APPLIED (Supabase migrations
+`stocks_integrity_001_audit_col_prefs`, `…_002_stock_user_settings`, `…_003_seed_stock_user_settings`,
+`…_003b_seed_etrade_only_symbols`, `…_004_audit_stock_user_settings`). Each was first dry-run inside a rolled-back transaction.
+Opted-in set = AAPL, AMZN, CAT, CEG, JPM, MCD, NVDA, SPCX, TSLA, WDC (+ OKLO, explicit true, 1 share); AMD = false.
+`sql/auth/002` (RLS lockdown) and `CRON_SECRET` rotation were NOT done (declined).
 
 Rollback: `002_rollback_stock_user_settings.sql` (copies settings back into the blob, drops the table) together with reverting the code.
 

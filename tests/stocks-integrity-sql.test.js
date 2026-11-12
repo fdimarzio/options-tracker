@@ -69,6 +69,15 @@ describe("001_audit_col_prefs.sql", () => {
     expect(head).toMatch(/elsif TG_OP = 'INSERT' then\s+v_id := NEW\.id;\s+old_c := null;\s+new_c := NEW\.cols;/);
   });
 
+  it("FAIL-SAFE — an error inside the trigger is downgraded to a WARNING and can never abort the caller's col_prefs write", () => {
+    // col_prefs also holds broker tokens and the market-refresh output; a trigger bug must not block them.
+    const body = code.slice(code.indexOf("create or replace function public.col_prefs_audit_fn()"), code.indexOf("revoke all on function public.col_prefs_audit_fn()"));
+    expect(body).toMatch(/exception when others then\s+raise warning 'col_prefs_audit_fn: audit skipped, caller write unaffected/);
+    // the handler wraps the whole body: it opens before the first statement and the function still returns null after it
+    expect(body.indexOf("exception when others then\n  raise warning")).toBeGreaterThan(body.indexOf("if TG_OP = 'DELETE' then"));
+    expect(body).toMatch(/end;\s+return null;\s+end;\s+\$\$;/);
+  });
+
   it("is idempotent to re-run (create if not exists / create or replace / drop trigger if exists)", () => {
     expect(code).toContain("create table if not exists public.col_prefs_audit");
     expect(code).toContain("create or replace function public.col_prefs_audit_fn()");

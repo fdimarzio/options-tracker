@@ -463,6 +463,17 @@ describe("sql/stocks_integrity — stock_user_settings migration, backfill, roll
     expect(back.match(/drop table[^;]*;/g)).toEqual(["drop table    if exists public.stock_user_settings;"]);
   });
 
+  it("003 warns that it must run while ETrade positions are populated, and 003b seeds exactly MCD + SPCX idempotently", () => {
+    expect(fill).toMatch(/RUN THIS WHILE ETRADE POSITIONS ARE POPULATED/);
+    const b = noComments(sqlRead("003b_seed_etrade_only_symbols.sql"));
+    expect(b).toMatch(/insert into public\.stock_user_settings \(ticker, auto_sto\)\s+values \('MCD', true\), \('SPCX', true\)\s+on conflict \(ticker\) do nothing;/);
+    expect(b).not.toMatch(/\b(update|delete|truncate|drop)\b/i);
+  });
+
+  it("004 audit trigger is FAIL-SAFE: an audit error becomes a WARNING and never aborts a user's settings save", () => {
+    expect(aud).toMatch(/exception when others then\s+raise warning 'stock_user_settings_audit_fn: audit skipped, caller write unaffected/);
+  });
+
   it("004 audit trigger is optional, never logs anything but the three user columns, and is SECURITY DEFINER", () => {
     expect(aud).toContain("fields  constant text[] := array['auto_sto','earnings_date','iv_manual']");
     expect(aud).toMatch(/security definer\s+set search_path = public, pg_temp/);

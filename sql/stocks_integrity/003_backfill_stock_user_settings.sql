@@ -35,6 +35,12 @@
 --
 --   To seed ONLY explicit trues (strict opt-in, nothing inferred) set seed_legacy_eligibility := false.
 --
+-- !! RUN THIS WHILE ETRADE POSITIONS ARE POPULATED !!  Overnight, ETrade's token expires and
+-- market-refresh zeroes every ETrade-held ticker's shares in the blob. Seeding then misses
+-- ETrade-only names that have no explicit autoSto (this happened on 2026-11-12: MCD and SPCX were
+-- missed and had to be added by 003b_seed_etrade_only_symbols.sql). Before running, check that
+-- ETrade-held tickers show shares > 0 in the PREVIEW below.
+--
 -- NOTE ON AMD: the blob says false (the UI toggle never persisted — that is the original bug).
 -- If you want it on, switch it on in the Stocks tab after the new code is deployed.
 

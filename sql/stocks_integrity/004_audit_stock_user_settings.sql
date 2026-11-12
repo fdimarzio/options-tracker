@@ -23,6 +23,8 @@ declare
   fields  constant text[] := array['auto_sto','earnings_date','iv_manual'];
   v_ticker text;
 begin
+ -- FAIL-SAFE: audit logging must never be able to abort a user's settings save.
+ begin
   begin
     claims := nullif(current_setting('request.jwt.claims', true), '')::jsonb;
   exception when others then
@@ -52,6 +54,10 @@ begin
     values ('stock_user_settings', TG_OP, v_ticker, changed, ov, nv, v_role, v_sub);
   end if;
   return null;
+ exception when others then
+  raise warning 'stock_user_settings_audit_fn: audit skipped, caller write unaffected (%): %', sqlstate, sqlerrm;
+ end;
+ return null;
 end;
 $$;
 
