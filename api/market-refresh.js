@@ -1636,7 +1636,10 @@ export default async function handler(req, res) {
       }
     }
 
-    await Promise.all([
+    // The REST API answers a failed write with a 4xx/5xx RESPONSE, not an exception, so an
+    // unchecked fetch silently loses the write. Check both and surface failures through the
+    // heartbeat (watchdog alerts on any non-"ok" status) instead of ignoring them.
+    const savedBlobResponses = await Promise.all([
       fetch(`${SUPABASE_URL}/rest/v1/col_prefs`, {
         method: "POST",
         headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
@@ -1648,6 +1651,13 @@ export default async function handler(req, res) {
         body: JSON.stringify({ id: "stocks_data", cols: updatedSD, updated_at: lastRefresh }),
       }),
     ]);
+    const blobWriteFailures = [];
+    for (const [label, r] of [["last_market_refresh", savedBlobResponses[0]], ["stocks_data", savedBlobResponses[1]]]) {
+      if (r && r.ok !== false) continue;
+      const detail = r ? `${r.status} ${(await r.text().catch(() => "")).slice(0, 200)}` : "no response";
+      console.error(`[market-refresh] ${label} write FAILED: ${detail}`);
+      blobWriteFailures.push(`${label} (${r?.status ?? "no response"})`);
+    }
 
     // ── Load notification state ─────────────────────────────────────────────
     let sentData = (await notifRes.json())?.[0]?.cols || {};
@@ -3476,7 +3486,12 @@ export default async function handler(req, res) {
       await fetch(`${SUPABASE_URL}/rest/v1/ecosystem_heartbeat?on_conflict=agent_name`, {
         method: "POST",
         headers: { apikey: SUPABASE_SVC_KEY, Authorization: `Bearer ${SUPABASE_SVC_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" },
-        body: JSON.stringify({ agent_name: "market-refresh", last_run_at: lastRefresh, status: "ok", notes: `${tickers.length} tickers, ${notifications.length} signals`, updated_at: lastRefresh }),
+        body: JSON.stringify({
+          agent_name: "market-refresh", last_run_at: lastRefresh,
+          status: blobWriteFailures.length ? "error" : "ok",
+          notes: `${tickers.length} tickers, ${notifications.length} signals` + (blobWriteFailures.length ? ` · WRITE FAILED: ${blobWriteFailures.join(", ")}` : ""),
+          updated_at: lastRefresh,
+        }),
       });
     } catch(e) { console.warn("[heartbeat] write failed:", e.message); }
 
