@@ -10,7 +10,10 @@
 // those still gate whether a candidate clears the bar. This only changes which
 // tickers are considered at all.
 
-function totalShares(sd) {
+// Exported so every consumer of "how many shares do we own" (this scanner universe,
+// api/_lib/earningsSymbols.js, and — via a tested parallel copy — src/lib/ownership.js for the
+// Stocks tab) uses the SAME rule: sum(sharesByAcct) when that object is non-empty, else `shares`.
+export function totalShares(sd) {
   if (!sd) return 0;
   if (sd.sharesByAcct && Object.keys(sd.sharesByAcct).length) {
     return Object.values(sd.sharesByAcct).reduce((sum, n) => sum + (+n || 0), 0);

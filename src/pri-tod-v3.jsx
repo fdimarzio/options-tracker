@@ -8,6 +8,7 @@ import { computeOrigDte, isLeapOrigDte } from "./lib/leapGuard.js";
 import { computeAnnualizedReturn } from "./lib/annualizedReturn.js";
 import { patchStocksData, loadStocksDataChecked, setTickerFields, setCashField, describeSupabaseError } from "./lib/stocksDataStore.js";
 import { loadUserSettingsChecked, saveUserSetting, mergeUserSettings, isUserSettingField } from "./lib/stockUserSettings.js";
+import { isOwned, sharesByBroker, mergeServerHoldings } from "./lib/ownership.js";
 
 // ── camelCase <-> snake_case converters ──────────────────────────────────────
 function toApp(row) {
@@ -5561,6 +5562,11 @@ export default function App() {
           const freshQuotes = data.cols.quotes || {};
           if (Object.keys(freshQuotes).length > 0) {
             await applyQuotesToStocksData(freshQuotes);
+            // Holdings (shares / sharesByAcct) are server-authoritative and drive the Stocks tab's
+            // ownership, so keep them current too — READ-ONLY into React state, never persisted.
+            // (Without this a tab left open would show holdings as of page load.)
+            const holdings = await loadStocksDataChecked(supabase);
+            if (holdings.ok && holdings.cols) setStocksData(prev => mergeServerHoldings(prev, holdings.cols));
             const t = new Date(data.cols.lastRefresh).toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"});
             setEtradeMsg("Auto-refreshed at " + t);
           }
@@ -9339,10 +9345,9 @@ ${JSON.stringify(summary, null, 1)}`;
             const tm = tickerMap[ticker] || {ticker, totalPremium:0, totalProfit:0, contracts:[], openCount:0, closedCount:0};
             return tm;
           });
-          const ownedTickers = mergedTickers.filter(t => {
-            const sd = stocksData[t.ticker]||{};
-            return (sd.sharesSchwab||0)+(sd.sharesEtrade||0) > 0;
-          });
+          // Ownership = the server-authoritative shares / sharesByAcct (src/lib/ownership.js) — the same
+          // numbers the auto-STO scanner uses — NOT the legacy browser-owned sharesSchwab/sharesEtrade.
+          const ownedTickers = mergedTickers.filter(t => isOwned(stocksData[t.ticker]));
           const displayTickers = stocksFilter==="owned" ? ownedTickers : mergedTickers;
 
           const sortedDisplayTickers = [...displayTickers].sort((a,b)=>{
@@ -9351,8 +9356,8 @@ ${JSON.stringify(summary, null, 1)}`;
             let av, bv;
             switch(stocksSortKey) {
               case "ticker":    av=a.ticker;            bv=b.ticker;            break;
-              case "schwab":    av=sda.sharesSchwab||0; bv=sdb.sharesSchwab||0; break;
-              case "etrade":    av=sda.sharesEtrade||0; bv=sdb.sharesEtrade||0; break;
+              case "schwab":    av=sharesByBroker(sda).schwab; bv=sharesByBroker(sdb).schwab; break;
+              case "etrade":    av=sharesByBroker(sda).etrade; bv=sharesByBroker(sdb).etrade; break;
               case "price":     av=sda.currentPrice||0; bv=sdb.currentPrice||0; break;
               case "iv":        av=sda.iv||0;          bv=sdb.iv||0;          break;
               case "earnings":  av=sda.earningsDate||""; bv=sdb.earningsDate||""; break;
@@ -9407,11 +9412,8 @@ ${JSON.stringify(summary, null, 1)}`;
                 const tickerMap = Object.fromEntries(sortedDisplayTickers.map(t => [t.ticker, t]));
 
                 // Union of: live Schwab positions + any stocksData entry with shares in either broker
-                const ownedFromData = Object.keys(stocksData).filter(k => {
-                  if (k === "__cash__") return false;
-                  const sd = stocksData[k];
-                  return (sd.sharesSchwab || 0) > 0 || (sd.sharesEtrade || 0) > 0;
-                });
+                // (ownership from the server-authoritative shares / sharesByAcct, same rule as the Owned filter)
+                const ownedFromData = Object.keys(stocksData).filter(k => k !== "__cash__" && isOwned(stocksData[k]));
                 const allSymbols = [...new Set([
                   ...schwabPositions.map(p => p.symbol),
                   ...ownedFromData,
@@ -9447,8 +9449,10 @@ ${JSON.stringify(summary, null, 1)}`;
                           const pos = posMap[sym];
                           const tk  = tickerMap[sym];
                           const sd  = stocksData[sym] || {};
-                          const schwabQty = pos ? Math.floor(pos.qty) : (sd.sharesSchwab || 0);
-                          const etradeQty = sd.sharesEtrade || 0;
+                          // live Schwab position (display) wins; otherwise the server's per-broker split
+                          const split     = sharesByBroker(sd);
+                          const schwabQty = pos ? Math.floor(pos.qty) : Math.floor(split.schwab);
+                          const etradeQty = Math.floor(split.etrade);
                           return (
                             <tr key={sym} className="rh" style={{borderTop:"1px solid #0d1117",cursor:"pointer"}} onClick={()=>setSelectedTicker(sym)}>
                               <td style={{padding:"5px 8px",fontFamily:"'JetBrains Mono',monospace",fontWeight:700,color:th("#e6edf3","#0d0d0b"),fontSize:13}}>
