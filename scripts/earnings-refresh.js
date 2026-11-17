@@ -1,6 +1,9 @@
 // scripts/earnings-refresh.js
-// Nightly refresh of earnings_dates for every active symbol (open contracts +
-// watchlist), via .github/workflows/earnings-refresh.yml. Feeds the earnings-date
+// Nightly refresh of earnings_dates for every symbol the scanners can act on — auto-STO
+// opted-in tickers, holdings of >= 100 shares, tickers with an open contract, and the
+// watchlist (see api/_lib/earningsSymbols.js) — via .github/workflows/earnings-refresh.yml.
+// (It used to cover only open contracts + watchlist, so a held, opted-in ticker with no
+// contract right now silently went stale and the guard then blocked it forever.) Feeds the earnings-date
 // awareness guard in api/_lib/earningsGuard.js, used by the Skynet STO scanners
 // in api/market-refresh.js so a short call isn't left open straddling an earnings
 // surprise the way the AMZN position was.
@@ -11,6 +14,8 @@
 // STO candidate generation, so this uses a real data provider instead.
 //
 // Run manually: node --env-file=.env.local scripts/earnings-refresh.js
+
+import { deriveEarningsSymbols } from "../api/_lib/earningsSymbols.js";
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
@@ -29,18 +34,42 @@ if (!FINNHUB_API_KEY) {
 
 const HEADERS = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" };
 
+// Every source must load or the run FAILS LOUDLY. A source that quietly came back empty would
+// shrink the refresh universe — which is exactly how a stale earnings date got through before.
+async function loadJson(label, path) {
+  let res;
+  try {
+    res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { headers: HEADERS });
+  } catch (e) {
+    throw new Error(`${label} load failed: ${e.message}`);
+  }
+  if (!res.ok) throw new Error(`${label} load failed: HTTP ${res.status} ${(await res.text().catch(() => "")).slice(0, 120)}`);
+  const body = await res.json().catch(() => null);
+  if (!Array.isArray(body)) throw new Error(`${label} load failed: unexpected response shape`);
+  return body;
+}
+
 async function getActiveSymbols() {
-  const [contractsRes, watchlistRes] = await Promise.all([
-    fetch(`${SUPABASE_URL}/rest/v1/contracts?select=stock&status=eq.Open`, { headers: HEADERS }),
-    fetch(`${SUPABASE_URL}/rest/v1/col_prefs?select=cols&id=eq.watchlist`, { headers: HEADERS }),
+  const [contracts, watchlistRows, stocksRows, settingsRows] = await Promise.all([
+    loadJson("open contracts",      "contracts?select=stock&status=eq.Open"),
+    loadJson("watchlist",           "col_prefs?select=cols&id=eq.watchlist"),
+    loadJson("stocks_data holdings", "col_prefs?select=cols&id=eq.stocks_data"),
+    loadJson("stock_user_settings", "stock_user_settings?select=ticker,auto_sto"),
   ]);
-  const contracts = await contractsRes.json();
-  const watchlist = (await watchlistRes.json())?.[0]?.cols?.tickers || [];
-  const symbols = new Set([
-    ...(Array.isArray(contracts) ? contracts.map(c => c.stock?.toUpperCase()) : []),
-    ...watchlist.map(t => t.toUpperCase()),
-  ].filter(Boolean));
-  return [...symbols];
+  const userSettings = Object.fromEntries(
+    settingsRows.filter(r => r?.ticker).map(r => [String(r.ticker).toUpperCase(), { auto_sto: r.auto_sto === true }])
+  );
+  const { symbols, sources } = deriveEarningsSymbols({
+    stocksData: stocksRows?.[0]?.cols || {},
+    userSettings,
+    contracts,
+    watchlistTickers: watchlistRows?.[0]?.cols?.tickers || [],
+  });
+  // Visibility: say WHY each symbol is covered, so a ticker silently dropping out is noticeable.
+  const perSource = { auto_sto: 0, shares: 0, contract: 0, watchlist: 0 };
+  for (const s of symbols) for (const src of sources[s]) perSource[src]++;
+  console.log(`[earnings-refresh] coverage by source: ${JSON.stringify(perSource)}`);
+  return symbols;
 }
 
 // Finnhub's free bulk (all-companies) calendar returns an incomplete set, so query it
@@ -225,4 +254,9 @@ async function main() {
   await heartbeat("ok", `${updated} updated, ${notInCalendar} no-earnings, ${failed} failed`);
 }
 
-main().catch(e => { console.error("[earnings-refresh] Fatal:", e.message); process.exit(1); });
+main().catch(async e => {
+  console.error("[earnings-refresh] Fatal:", e.message);
+  // Surface it to the watchdog instead of leaving only a red workflow run.
+  await heartbeat("error", `fatal: ${e.message}`);
+  process.exit(1);
+});
