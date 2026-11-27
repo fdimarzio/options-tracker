@@ -128,27 +128,21 @@ describe("patchStocksData — no silent failures", () => {
   });
 });
 
-describe("patchStocksData — no existing row", () => {
-  it("edge — inserts when the row does not exist yet", async () => {
+describe("patchStocksData — no visible row (how row-level security looks: zero rows, no error)", () => {
+  it("negative — throws ROW_NOT_VISIBLE and performs NO write: the browser never creates this row", async () => {
     const sb = makeFakeSupabase({ read: () => ({ data: null, error: null }), insert: () => ({ error: null }), update: () => WON });
-    const written = await patchStocksData(sb, setTickerFields("NEW", { iv: 1 }), { now: fixedNow });
-    expect(written).toEqual({ NEW: { iv: 1 } });
-    expect(sb.state.inserts).toBe(1);
-  });
-
-  it("edge — row appears between read and insert (23505): retries as a CAS update instead of failing or clobbering", async () => {
-    const sb = makeFakeSupabase({
-      read: (n) => (n === 0 ? { data: null, error: null } : ROW({ OTHER: { shares: 5 } }, "T1")),
-      insert: () => ({ error: { code: "23505", message: "duplicate key" } }),
-      update: () => WON,
+    await expect(patchStocksData(sb, setTickerFields("NEW", { iv: 1 }), { now: fixedNow })).rejects.toMatchObject({
+      name: "StocksDataError", code: "ROW_NOT_VISIBLE", message: expect.stringContaining("NOT saved"),
     });
-    const written = await patchStocksData(sb, setTickerFields("NEW", { iv: 1 }), { now: fixedNow });
-    expect(written).toEqual({ OTHER: { shares: 5 }, NEW: { iv: 1 } });
+    expect(sb.state.inserts).toBe(0);
+    expect(sb.state.updates).toBe(0);
   });
 
-  it("negative — any other insert error throws", async () => {
-    const sb = makeFakeSupabase({ read: () => ({ data: null, error: null }), insert: () => ({ error: { code: "42501", message: "rls" } }), update: () => WON });
-    await expect(patchStocksData(sb, b => b)).rejects.toThrow(/could not create stocks_data: rls/);
+  it("negative — the mutator is never run against an invented empty blob", async () => {
+    const sb = makeFakeSupabase({ read: () => ({ data: null, error: null }) });
+    let ran = false;
+    await expect(patchStocksData(sb, b => { ran = true; return b; })).rejects.toThrow(/could not be read/);
+    expect(ran).toBe(false);
   });
 });
 
@@ -171,9 +165,21 @@ describe("loadStocksDataChecked — a failed load must not look like an empty da
     expect((await loadStocksDataChecked(sb))).toMatchObject({ ok: false, error: expect.stringContaining("boom") });
   });
 
-  it("edge — a legitimately missing row is ok:true with cols:null (fresh project), distinguishable from a failure", async () => {
+  it("negative — ZERO ROWS WITH NO ERROR (a read blocked by row-level security) is a failure, not an empty portfolio", async () => {
+    // This is the 2026-11-27 incident: signed-in users had no col_prefs policy, the query "succeeded"
+    // with no row, and the Stocks tab showed zero positions while the database held 15 holdings.
     const sb = makeFakeSupabase({ read: () => ({ data: null, error: null }) });
-    expect(await loadStocksDataChecked(sb)).toMatchObject({ ok: true, cols: null });
+    const r = await loadStocksDataChecked(sb);
+    expect(r.ok).toBe(false);
+    expect(r.cols).toBeNull();
+    expect(r.error).toContain("could not be read");
+    expect(r.error).toContain("permission");
+    expect(r.error).toContain("Your positions are not gone");
+  });
+
+  it("edge — a visible row with an empty blob is still a successful load", async () => {
+    const sb = makeFakeSupabase({ read: () => ROW({}, "T") });
+    expect(await loadStocksDataChecked(sb)).toMatchObject({ ok: true, cols: {} });
   });
 });
 
